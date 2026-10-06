@@ -62,6 +62,9 @@ jobs:
           fi
           BASE=http://127.0.0.1:5178 pnpm mcp-check
           BASE=http://127.0.0.1:5178 pnpm bot-check
+      # 音乐代理（ADR-0019）：脚本自己起**构建产物**与一个假边车（不出网、不需要真账号），
+      # 守白名单 / Origin / 会话 cookie / 失败收敛 / SIXTY_MUSIC=off 这五件事。
+      - run: pnpm music-check
 
   image:
     needs: verify

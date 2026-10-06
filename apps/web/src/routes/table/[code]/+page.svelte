@@ -18,6 +18,7 @@
   import InviteCode from '$lib/components/InviteCode.svelte';
   import LeaveConfirm from '$lib/components/LeaveConfirm.svelte';
   import LobbyPanel from '$lib/components/LobbyPanel.svelte';
+  import MusicDock from '$lib/music/components/MusicDock.svelte';
   import SeatCard from '$lib/components/SeatCard.svelte';
   import SoundControl from '$lib/components/SoundControl.svelte';
   import TabRail from '$lib/components/TabRail.svelte';
@@ -398,3 +399,8 @@
   name={botRemoveSeat === null ? null : (seatAt(botRemoveSeat)?.name ?? null)}
   onClose={() => (botRemoveSeat = null)}
 />
+
+<!-- 网易云音乐悬浮窗（旁挂功能，见 docs/adr/0019）：
+     牌桌页对它的全部了解就是这一行 —— 它自成一个模块（`$lib/music/`），不读 `client`、
+     不进 SSE、不落库；`SIXTY_MUSIC=off` 时它自己什么都不渲染，而 `/api/music/*` 也一并 404。 -->
+<MusicDock enabled={data.musicEnabled} level={data.musicLevel} />

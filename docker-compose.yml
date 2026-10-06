@@ -4,6 +4,9 @@
 #
 # Coolify：直接用它添加本仓库的 compose 资源即可；域名端口填容器端口 3000
 # （Domain 里的端口是“容器端口”，不是公网端口）。
+#
+# 音乐悬浮窗是可选的：下面的 ncm 边车只在 compose 网络内可达（不发布端口）。
+# 不需要音乐就在 app 里设 SIXTY_MUSIC=off（见 ncm 服务与 README 的「音乐悬浮窗」一节）。
 
 services:
   app:
@@ -23,9 +26,18 @@ services:
       # 不定义 ORIGIN 时服务端按请求头推导（反代场景正是想要的行为）；
       # 确实需要绝对地址时，取消下一行注释并填完整 URL：
       # - ORIGIN=${ORIGIN:-https://game.example.com}
+      # 音乐悬浮窗（可选，见下文 ncm 服务）：off 时悬浮窗不渲染、/api/music/* 一律 404
+      - SIXTY_MUSIC=${SIXTY_MUSIC:-on}
+      - SIXTY_MUSIC_API=${SIXTY_MUSIC_API:-http://ncm:4000}
+      - SIXTY_MUSIC_LEVEL=${SIXTY_MUSIC_LEVEL:-exhigh}
+      # SIXTY_MUSIC_TIMEOUT_MS 默认 5000（毫秒，夹在 500–30000），一般不用改
     volumes:
       # 牌局、身份、事件日志都在这里；容器重建不丢
       - sixty-data:/data
+    depends_on:
+      # 只等它启动，不等它健康：音乐连不上时牌桌照常能打（代理会把失败收敛成 503）
+      ncm:
+        condition: service_started
     ports:
       - '${PUBLIC_PORT:-3000}:${PORT:-3000}'
     healthcheck:
@@ -47,6 +59,22 @@ services:
     # Coolify 自动域名（可选）：把 <hostname> 换成你自己的域名
     # environment 里再加一行即可：
     #   - SERVICE_FQDN_APP_3000=<hostname>
+
+  # 可选：音乐边车 —— 牌桌页「音乐悬浮窗」的曲目来源。
+  # 上游是 @neteasecloudmusicapienhanced/api（MIT，原版 NeteaseCloudMusicApi 停更后的续作）的官方镜像；
+  # app 只通过自己的 /api/music/* 白名单代理访问它，浏览器永远不直连这里。
+  # 不需要音乐就在 app 里设 SIXTY_MUSIC=off（这个容器仍会起，但没人访问它；
+  # 要连容器一起省掉，就把这一节与 app 的 depends_on 一起删掉）。
+  ncm:
+    image: moefurina/ncm-api
+    restart: unless-stopped
+    # 故意**不发布端口**：只在 compose 网络内可达，app 用服务名访问（http://ncm:4000）。
+    # 它默认 CORS_ALLOW_ORIGIN=*，映射到公网就是一个谁都能用的开放代理 —— 不要把它暴露出去。
+    environment:
+      - PORT=4000
+      # 上游的「全局解灰」（绕版权解锁）：显式关掉。
+      # 本项目只做白名单转发，不参与解锁，也不希望「本无版权」的歌被解出来。
+      - ENABLE_GENERAL_UNBLOCK=false
 
   # 可选：自带 HTTPS 的反向代理，启用方式 docker compose --profile https up -d
   # Caddy 会自动申请并续期证书；SSE 路径单独设置 flush_interval -1 关闭缓冲。

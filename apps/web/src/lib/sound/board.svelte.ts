@@ -30,6 +30,16 @@ const CUE_URL: Record<SoundCue, string> = {
 
 const MUSIC_URL = '/sounds/bgm.mp3';
 
+/**
+ * 点播播放器（牌桌页的音乐悬浮窗，见 ADR-0019）在 `document` 上派发的自定义事件名，
+ * detail 是 `{ playing: boolean }`。
+ *
+ * 这里刻意**不 import** `$lib/music/`：两个模块互不认识，唯一契约就是这个字符串。
+ * 悬浮窗那边（`$lib/music/bus.ts` 的 `MUSIC_EVENT`）写的是同一个名字，
+ * `apps/web/test/sound.test.ts` 有一条守卫钉住两边不许写岔。
+ */
+const MUSIC_DOCK_EVENT = 'sixty:music';
+
 /** 「该你了」的震动花样:两下轻震,手机在兜里也分得出是「该你了」而不是普通通知 */
 const VIBRATION_PATTERN: readonly number[] = [30, 50, 30];
 
@@ -56,6 +66,8 @@ export class SoundBoard {
   /** 每次起停自增：异步解码期间被切过就作废这一次，避免连点/快拖留下两条音轨 */
   #musicToken = 0;
   #disposeUnlock: (() => void) | null = null;
+  /** 点播播放器正在出声（见 `yieldToPlayer`）：让位期间背景音乐不起播 */
+  #yieldToPlayer = false;
 
   constructor() {
     const saved = readSoundSettings();
@@ -64,7 +76,7 @@ export class SoundBoard {
     this.vibration = saved.vibration;
   }
 
-  /** 页面挂载时调用：按已存音量起播，并接管「切到别的标签页就暂停」。返回解绑函数 */
+  /** 页面挂载时调用：按已存音量起播，并接管「切到别的标签页就暂停」与「点播让位」。返回解绑函数 */
   attach(): () => void {
     this.#musicWanted = this.#musicShouldPlay();
     void this.#syncMusic();
@@ -72,9 +84,19 @@ export class SoundBoard {
       this.#musicWanted = this.#musicShouldPlay();
       void this.#syncMusic();
     };
+    /**
+     * 点播播放器（音乐悬浮窗）在 `document` 上派发 `sixty:music`，detail 是 `{ playing }`。
+     * 事件名是两边唯一的契约：本模块不 import 悬浮窗的任何东西（见 `yieldToPlayer`）。
+     */
+    const onMusicDock = (event: Event): void => {
+      const detail = (event as CustomEvent<{ playing?: unknown }>).detail;
+      this.yieldToPlayer(detail?.playing === true);
+    };
     document.addEventListener('visibilitychange', onVisibility);
+    document.addEventListener(MUSIC_DOCK_EVENT, onMusicDock);
     return () => {
       document.removeEventListener('visibilitychange', onVisibility);
+      document.removeEventListener(MUSIC_DOCK_EVENT, onMusicDock);
       this.dispose();
     };
   }
@@ -148,9 +170,26 @@ export class SoundBoard {
     }
   }
 
-  /** 音乐该不该在响：音量大于 0 且标签页可见 */
+  /** 音乐该不该在响：音量大于 0、标签页可见、且没在给点播让位 */
   #musicShouldPlay(): boolean {
-    return this.music > 0 && !hidden();
+    return this.music > 0 && !hidden() && !this.#yieldToPlayer;
+  }
+
+  /**
+   * 点播播放器（牌桌页的**音乐悬浮窗**，见 ADR-0019）开始／停止出声时调用。
+   *
+   * 为什么要让位：这是**两条独立**的音频通道（背景音乐是本地 CC0 循环，悬浮窗放的是网易云点播），
+   * 同时响会互相盖住，而用户在悬浮窗里按下播放这个动作，意思就是「我现在要听这首」。
+   * 音量**不动**（滑块还停在原处）：让位只是暂停，悬浮窗一停就按原音量接回来。
+   *
+   * 接口是 `document` 上的一个 DOM 事件（`sixty:music`，见 `$lib/music/bus.ts`），
+   * 而不是两个模块互相 import —— 悬浮窗既不知道也不关心谁在听它。
+   */
+  yieldToPlayer(yielding: boolean): void {
+    if (this.#yieldToPlayer === yielding) return;
+    this.#yieldToPlayer = yielding;
+    this.#musicWanted = this.#musicShouldPlay();
+    void this.#syncMusic();
   }
 
   /** 音轨已在响时改增益（滑块拖动走这条） */

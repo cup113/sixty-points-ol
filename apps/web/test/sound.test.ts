@@ -353,6 +353,68 @@ test('反证：把「顶层建 AudioContext」注入一个同形状的模块，�
   await assert.rejects(() => import(specifier));
 });
 
+/* ---------------- 与音乐悬浮窗（ADR-0019）的接缝 ---------------- */
+
+/**
+ * 两条音频通道（本地背景音乐 与 网易云点播悬浮窗）之间**只有一个字符串**当契约：
+ * `document` 上的自定义事件名。两边各写一份常量、谁也不 import 谁 —— 好处是彻底解耦，
+ * 代价是这个名字可能被改岔（改一端就静默失联：BGM 不再让位，但还是会响，不报任何错）。
+ * 所以这里从**两边各自的源码**里把那个名字抠出来比对，而不是从某一端 import 之后再断言。
+ */
+test('让位事件的契约：两端写的是同一个名字（写岔了就静默失联）', () => {
+  const board = read('../src/lib/sound/board.svelte.ts');
+  const bus = read('../src/lib/music/bus.ts');
+  const soundSide = /const MUSIC_DOCK_EVENT = '([^']+)'/.exec(board)?.[1] ?? '';
+  const musicSide = /export const MUSIC_EVENT = '([^']+)'/.exec(bus)?.[1] ?? '';
+  assert.equal(soundSide, 'sixty:music', '声音面板那边的常量名被改了（或没写）');
+  assert.equal(musicSide, 'sixty:music', '音乐悬浮窗那边的常量名被改了（或没写）');
+  assert.equal(soundSide, musicSide, `两端的事件名不一致：sound=${soundSide} music=${musicSide}`);
+});
+
+test('让位真的接在「音乐该不该响」的判据上：不靠音量滑块，也不靠 visibility', () => {
+  const board = read('../src/lib/sound/board.svelte.ts');
+  // 判据里必须有让位这一项 —— 少了它，悬浮窗一放歌就会和 BGM 一起响
+  assert.match(
+    board,
+    /#musicShouldPlay\(\): boolean \{\s*return this\.music > 0 && !hidden\(\) && !this\.#yieldToPlayer;/,
+    '#musicShouldPlay 没把「给点播让位」算进去'
+  );
+  // 让位只改「想不想响」，不许动音量：滑块还停在原处，悬浮窗一停就按原音量接回来
+  const yieldFn = /yieldToPlayer\(yielding: boolean\): void \{[\s\S]*?\n  \}/.exec(board)?.[0] ?? '';
+  assert.ok(yieldFn !== '', '找不到 yieldToPlayer');
+  assert.ok(!/this\.music =/.test(yieldFn), '让位里改了音量：那会把用户的滑块值吃掉');
+  assert.ok(!/writeSoundVolume/.test(yieldFn), '让位里写了存档：让位是临时状态，不该落盘');
+  // 挂载/卸载都要接上（不接 = 事件没人听；不解绑 = 页面卸载后旧实例还在被唤醒）
+  assert.match(board, /addEventListener\(MUSIC_DOCK_EVENT, onMusicDock\)/, 'attach 里没监听让位事件');
+  assert.match(board, /removeEventListener\(MUSIC_DOCK_EVENT, onMusicDock\)/, '卸载时没解绑让位事件');
+});
+
+test('反证：让位判据少一项、事件名写岔，都必须被判出来', () => {
+  const board = read('../src/lib/sound/board.svelte.ts');
+  const bus = read('../src/lib/music/bus.ts');
+  const nameOf = (source: string, pattern: RegExp): string => pattern.exec(source)?.[1] ?? '';
+
+  // ① 判据少了让位 → 上面那条正则不再匹配
+  const withoutYield = board.replace('!hidden() && !this.#yieldToPlayer', '!hidden()');
+  assert.equal(
+    /#musicShouldPlay\(\): boolean \{\s*return this\.music > 0 && !hidden\(\) && !this\.#yieldToPlayer;/.test(withoutYield),
+    false,
+    '判据少了让位却仍然匹配（守卫空转）'
+  );
+
+  // ② 事件名写岔 → 两端比对必然不等
+  const typo = nameOf(board.replace("'sixty:music'", "'sixty:bgm'"), /const MUSIC_DOCK_EVENT = '([^']+)'/);
+  assert.notEqual(typo, nameOf(bus, /export const MUSIC_EVENT = '([^']+)'/), '写岔了却还是相等（守卫空转）');
+
+  // ③ 让位里偷偷改音量 → 上面那条禁令能被触发
+  const meddling = board.replace(
+    'yieldToPlayer(yielding: boolean): void {\n    if (this.#yieldToPlayer === yielding) return;',
+    'yieldToPlayer(yielding: boolean): void {\n    this.music = 0;\n    if (this.#yieldToPlayer === yielding) return;'
+  );
+  const meddlingFn = /yieldToPlayer\(yielding: boolean\): void \{[\s\S]*?\n  \}/.exec(meddling)?.[0] ?? '';
+  assert.ok(/this\.music =/.test(meddlingFn), '让位改音量却没被判出来（守卫空转）');
+});
+
 /* ---------------- 资产与落点 ---------------- */
 
 test('五个音频文件都在，且不是空文件', () => {

@@ -14,6 +14,7 @@
     "bot-check": "pnpm --filter web bot",
     "ui-check": "pnpm --filter web ui",
     "shot": "pnpm --filter web shot",
+    "music-check": "pnpm --filter web music",
     "arena": "pnpm --filter @sixty/bot arena",
     "check": "pnpm -r check",
     "deal": "pnpm --filter web deal",

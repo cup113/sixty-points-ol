@@ -34,15 +34,19 @@ apps/web            SvelteKit 2 + Svelte 5 + Tailwind 4 + adapter-node
   src/lib/server/   SQLite（node:sqlite）、身份凭据、牌桌服务、SSE hub、MCP 进程内适配层、机器人调度、
                     机器重演存档（replays，结算时同步算好，见 ADR-0016）
   src/routes/       大厅、牌桌页、规则演示（/learn）、文字教程（/rules）、牌局编排台（/studio）、
-                    REST 动作接口（含入座/离座/加机器人）、SSE 流、MCP（/api/mcp）
+                    REST 动作接口（含入座/离座/加机器人）、SSE 流、MCP（/api/mcp）、
+                    网易云白名单代理（/api/music/<op>，可选，见 ADR-0019）
   src/hooks.server.ts  启动时补扫机器人回合（重启自愈，见 ADR-0015）
   src/lib/tutorial/ 演示页的幻灯片模型（deck.ts）与示例数据（scenarios.ts）
   src/lib/tutorial/stories/  由 docs/deals 生成的故事数据（勿手改，见 ADR-0010）
   src/lib/story/    牌局编排台的内核：种子↔牌局、回放、说明标签、导出/导入、草稿存储
+  src/lib/music/    音乐悬浮窗（可选旁挂功能：曲目来自自建的网易云 API 边车，浏览器只跟本站的
+                    /api/music/* 白名单代理说话；SIXTY_MUSIC=off 可整块下线，见 ADR-0019）
   scripts/          smoke.ts（三人 HTTP 端到端 + 机器重演存档逐副核对）、resume-check.ts（重启续局校验）
                     lobby-check.ts（开局入口回归）、ui-check.ts（版面与文案守卫）
                     spectate-check.ts（观战/离座/改名换身份的端到端回归）
                     bot-check.ts（1 人 + 2 机器人打两副 + 中途踢/补的端到端）
+                    music-check.ts（音乐代理端到端：白名单/Origin/会话 cookie/失败收敛/off 开关，含假边车）
                     build-deal-stories.ts（牌局 JSON → 演示页数据 + 复核清单）
 CONTEXT.md          领域词汇表（术语与已敲定的规则歧义）
 docs/adr/           架构决策记录
@@ -73,6 +77,8 @@ pnpm test:web         # 前端纯函数测试：扇形布局 / 邀请码解析 /
                       #                   角色与观战投影 + 在线态判定 + MCP 作弊面守卫 + 叫牌面板可达性（唯一滚动区、「不叫」钉底）
                       #                 + 机器人座位的进程内集成（延迟调零：打完一副、补位、权限与上限、
                       #                   踢出语义、身份认不出、重启自愈）+ 机器人作弊面守卫
+                      #                 + 音乐悬浮窗（纯函数：歌词/队列/播放决策/白名单与参数校验/配置/
+                      #                   客户端重试语义/本机存储）+ 与主功能的解耦守卫
 pnpm test:mcp         # MCP 工具层单测：工具语义、参数校验、等待超时、协议注册一致性、stdio 启动契约
 pnpm check            # 引擎 tsc + 机器人包 tsc + MCP 包 tsc + 应用 svelte-check
 pnpm dev              # SvelteKit 开发服务器（默认 http://localhost:5173）
@@ -86,7 +92,9 @@ pnpm deal:check       # 只校验：仓库里的生成物是否等于现场重�
 `docs/deals/notes/<slug>.json`，然后 `pnpm deal`（生成物是提交进仓库的，所以 CI 与镜像构建不需要跑脚本）。
 `pnpm deal:check` 会在「手改生成物」或「改完源文件忘了重跑」时报红。
 
-环境变量：`PORT`（默认 3000）、`HOST`、`SIXTY_DB`（默认 `<cwd>/data/sixty.db`）。
+环境变量：`PORT`（默认 3000）、`HOST`、`SIXTY_DB`（默认 `<cwd>/data/sixty.db`）；
+音乐悬浮窗的四个变量（`SIXTY_MUSIC`、`SIXTY_MUSIC_API`、`SIXTY_MUSIC_TIMEOUT_MS`、`SIXTY_MUSIC_LEVEL`）
+见下文「音乐悬浮窗（网易云，可选）」。
 
 > ⚠️ **不要设置空的 `ORIGIN`。** 留空（例如 Compose 里的 `ORIGIN=${ORIGIN:-}`、`ORIGIN=` 或 `ORIGIN=""`）会让
 > adapter-node 直接拒绝启动：
@@ -129,6 +137,69 @@ BASE=http://127.0.0.1:5178 pnpm bot-check              # 机器人端到端：1 
 
 `bot-check` 想跑快就给服务端把拟人延迟调零：`SIXTY_BOT_DELAY_MIN_MS=0 SIXTY_BOT_DELAY_MAX_MS=0`
 （CI 就是这么跑的；默认 0.5–1.5 秒是给人看的节奏）。
+
+## 音乐悬浮窗（网易云，可选）
+
+牌桌页右下角有一个可拖拽的网易云音乐播放器（来龙去脉见 [ADR-0019](docs/adr/0019-netease-music-player.md)）。
+它**不与牌局耦合**：不读牌局状态、不进 SSE、不落库、不认游戏身份，浏览器只跟本站的 `/api/music/*`
+白名单代理说话 —— 曲目由**旁挂的**网易云 API 边车提供，主仓库既不装那个包，也不内置任何音乐内容。
+
+**不需要就在 `app` 里设 `SIXTY_MUSIC=off`**：悬浮窗不渲染，`/api/music/*` 一律 404，牌局功能一个字节不变。
+
+### 本地开发：先起一台边车
+
+```bash
+npx -y @neteasecloudmusicapienhanced/api                  # 默认 3000 端口
+PORT=4000 npx -y @neteasecloudmusicapienhanced/api        # 建议固定 4000，避开本站的 3000
+# 或者用官方镜像
+docker run --rm -p 4000:3000 moefurina/ncm-api
+
+SIXTY_MUSIC_API=http://127.0.0.1:4000 pnpm dev
+```
+
+`SIXTY_MUSIC_API` 的默认值就是 `http://127.0.0.1:4000`，所以本地按上面那个端口起边车时可以只写 `pnpm dev`。
+
+端到端回归：`pnpm music-check`（先 `pnpm build`）自己起一个真服务端 + 进程内假边车，不出网、不需要账号；
+想对着真边车验一遍（会真的打网易云）就 `SIXTY_MUSIC_API=http://127.0.0.1:4000 pnpm music-check`，
+脚本会跳过假边车专用的几条断言。
+
+### 环境变量
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `SIXTY_MUSIC` | 开 | 只有字面量 `off` 才算关（大小写敏感）：悬浮窗不渲染、`/api/music/*` 404 |
+| `SIXTY_MUSIC_API` | `http://127.0.0.1:4000` | 边车地址（compose 里是 `http://ncm:4000`），尾斜杠会被归一 |
+| `SIXTY_MUSIC_TIMEOUT_MS` | `5000` | 单次上游请求超时（毫秒），夹在 500–30000 之间 |
+| `SIXTY_MUSIC_LEVEL` | `exhigh` | 登录用户的音质偏好（`standard` / `exhigh` / `lossless` / `hires`…）；匿名一律 `standard` |
+
+### docker compose
+
+`docker compose up -d --build` 会连 `ncm` 边车（`moefurina/ncm-api`）一起起，`app` 通过
+`SIXTY_MUSIC_API=http://ncm:4000` 访问它，`depends_on` 只等它启动、不等它健康。
+**`ncm` 不发布端口**，只在 compose 网络内可达：它默认 `CORS_ALLOW_ORIGIN=*`，映射到公网就是一个
+谁都能用的开放代理；边车只需要能连外网，不需要被外网连。不需要音乐就设 `SIXTY_MUSIC=off`
+（`ncm` 仍会起，但没人访问它；要连容器一起省掉，就把 compose 里的 `ncm` 服务与 `app` 的 `depends_on` 删掉）。
+
+### 能用什么
+
+- **匿名就能用**：搜索、播放、队列、歌词；个性化推荐、榜单、歌单详情与曲目这些公开读也在白名单里。
+- **扫码登录后多出来**：我的喜欢、自己的歌单、最近播放、日推、喜欢 / 取消喜欢。点悬浮窗「我的」页的
+  「生成登录二维码」，用网易云音乐 App 扫一下即可 —— 登录凭据（`MUSIC_U` 等）存在服务端的 httpOnly cookie
+  `sixty.music.session` 里，页面脚本从头到尾看不到它。**不做手机号验证码登录**（那要求把手机号交给这台自建服务器）。
+
+### 出处与已知边界
+
+- 音乐 API 由 [`@neteasecloudmusicapienhanced/api`](https://www.npmjs.com/package/@neteasecloudmusicapienhanced/api)
+  （MIT，原版 `Binaryify/NeteaseCloudMusicApi` 停更后的续作）提供；本项目只做**白名单转发**（18 个 op，
+  参数逐条校验），不内置任何音乐内容，也不参与版权解锁（compose 里的边车把 `ENABLE_GENERAL_UNBLOCK` 显式关掉）。
+- 用预构建镜像或 Coolify 的 **Docker Image** 资源（不走本仓库 compose）时**没有自带边车**：要么自己另起一个
+  `moefurina/ncm-api` 并把 `SIXTY_MUSIC_API` 指过去，要么直接设 `SIXTY_MUSIC=off`；否则悬浮窗里只会显示
+  「连不上音乐服务（边车没起来？）」。
+- 牌桌页的另一条音频通道是**本地背景音乐**（页头声音图标里的 `$lib/sound`，见 `docs/audio-sources.md`）。
+  两者由「**点播让位**」协调：音乐悬浮窗开始出声时，背景音乐暂停；悬浮窗停下（或离开牌桌）就按**原来的音量**
+  接回来。音量滑块值不会被让位改掉。
+  接法只是一个 `document` 事件：悬浮窗播 `sixty:music`（detail `{ playing }`），背景音乐那一侧监听它 ——
+  两个模块**互不 import**，谁不在都不影响对方（守卫见 `apps/web/test/sound.test.ts` 的「让位事件的契约」）。
 
 ## 界面约定
 
@@ -333,6 +404,8 @@ DOMAIN=game.example.com docker compose --profile https up -d --build   # → htt
   **这一行只对 `docker compose` 与 Coolify 的 Docker Compose 资源生效**：Coolify 用 **Docker Image** 资源时不会自动带上它，必须手动加 Persistent Storage，见下文「Coolify」的 A 路径。
 - 环境变量全部带默认值，可用 `${X:-默认}` 直接改：`PORT`（容器内端口，默认 3000）、`PUBLIC_PORT`（宿主映射，默认同 PORT）、`SIXTY_DB`、`DOMAIN`（仅 https profile）。
   **`ORIGIN` 例外：不要用 `${ORIGIN:-}` 这种写法**（宿主未设置时会注入空串导致容器起不来），需要时就写完整 URL 或整行留空不定义，见上文「本地运行」的警示。
+- 音乐悬浮窗（可选）：compose 里带一个 `ncm` 边车（官方镜像 `moefurina/ncm-api`，**不发布端口**，只在 compose 网络内可达），
+  `app` 用 `SIXTY_MUSIC_API=http://ncm:4000` 访问它；不需要音乐就在 `app` 里设 `SIXTY_MUSIC=off`，见上文「音乐悬浮窗（网易云，可选）」。
 - 健康检查：容器内 `GET /` 返回 200；`docker compose ps` 里看到 `healthy` 即就绪。
 - 升级：`git pull && docker compose up -d --build`。
 - 备份 / 恢复：

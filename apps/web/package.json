@@ -18,6 +18,7 @@
     "shot": "node scripts/shot-auction.ts",
     "lobby": "node scripts/lobby-check.ts",
     "spectate": "node scripts/spectate-check.ts",
+    "music": "node scripts/music-check.ts",
     "bot": "node scripts/bot-check.ts"
   },
   "dependencies": {
