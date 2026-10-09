@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invalidateAll } from '$app/navigation';
+  import { BOT_LIMIT } from '$lib/shared';
   import type { TableClient } from '$lib/client/table.svelte';
   import SeatActions from './SeatActions.svelte';
   import SeatCard from './SeatCard.svelte';
@@ -20,7 +21,19 @@
    * 这一页在抽屉关闭时也留在 DOM 里（`inert`），所以「改名 / 换身份」与「座位已满」两处
    * 入口在观战页的 SSR 里始终存在 —— `ui-check` 与 `spectate-check` 守的正是它们。
    */
-  let { client, onLeave }: { client: TableClient; onLeave?: () => void } = $props();
+  let {
+    client,
+    onLeave,
+    onRemoveBot
+  }: {
+    client: TableClient;
+    onLeave?: () => void;
+    /**
+     * 请离机器人：**必须由页面处理** —— 确认弹窗（`BotRemoveConfirm`）挂在页面级，
+     * 因为这个抽屉有 `transform`，会把 `fixed` 弹窗困在抽屉里（见 CONTEXT.md 的页头条目）。
+     */
+    onRemoveBot?: (seat: number) => void;
+  } = $props();
 
   let name = $state('');
   let credential = $state('');
@@ -32,6 +45,15 @@
   const seated = $derived(client.you !== null);
   const mySeat = $derived(client.you?.seat ?? null);
   const free = $derived(seats.some((seat) => seat.userId === null));
+  /**
+   * 机器人只在**这一页**加/请离（毡面座位卡上的那一行按钮已撤走，见 ADR-0020）。
+   *
+   * 为什么撤到这里：那一行按钮比对手卡高出一整行，是毡面重叠的直接原因；而机器人动作本来
+   * 就属于「这张桌现在什么样」——与入座/离座同一类，只是它改的是**空座**而不是我的座位。
+   * 上限 2（至少留一个人类座位去按「开下一副」），在座人类才能加。
+   */
+  const botCount = $derived(seats.filter((seat) => seat.bot).length);
+  const canBot = $derived(seated && botCount < BOT_LIMIT);
 
   const input =
     'min-w-0 flex-1 rounded-lg bg-black/50 px-2.5 py-1.5 text-xs outline-none ring-1 ring-white/15 transition focus:ring-gold';
@@ -69,14 +91,40 @@
 
 <div class="mt-3 space-y-1.5">
   {#each seats as seat (seat.seat)}
-    <SeatCard
-      name={seat.name}
-      level={view?.levels[seat.seat] ?? null}
-      online={seat.online}
-      bot={seat.bot}
-      isMe={mySeat === seat.seat}
-      isDeclarer={deal?.declarerSeat === seat.seat}
-    />
+    <div class="flex items-center gap-2">
+      <!-- 这一页的座位卡是**只读**的：位置在抽屉里、没有毡面的锚点语义，
+           所以一律走 `card` 形态（底栏那条 `bar` 是毡面「我」专用的） -->
+      <SeatCard
+        name={seat.name}
+        level={view?.levels[seat.seat] ?? null}
+        online={seat.online}
+        bot={seat.bot}
+        isMe={mySeat === seat.seat}
+        isDeclarer={deal?.declarerSeat === seat.seat}
+      />
+      <!-- 机器人动作就挂在这一行上：空座给「+ 机器人」、机器人座给「请离」。
+           两者都不是「牌局动作」，所以放在抽屉里不违反「动作面不进抽屉」（那一条指的是
+           叫品/埋底/出牌/结算 —— 改一次要点两步就太钝的那些）。 -->
+      {#if seat.userId === null && canBot}
+        <button
+          type="button"
+          class={ghost}
+          disabled={client.busy}
+          onclick={() => void client.addBot(seat.seat)}
+        >
+          + 机器人
+        </button>
+      {:else if seat.bot && seated}
+        <button
+          type="button"
+          class={ghost}
+          disabled={client.busy}
+          onclick={() => onRemoveBot?.(seat.seat)}
+        >
+          请离
+        </button>
+      {/if}
+    </div>
   {/each}
 </div>
 

@@ -236,6 +236,12 @@ button:disabled {
   --cw: 56px;
 }
 
+/* 已测量：间距由组件按**这一点可用的宽度预算**算出（放不下就叠起来，绝不与旁边那簇相撞 ——
+   见 `fan-layout.ts` 的 computeClusterStep）。负边距 = step - 牌宽，与手牌扇面同一套算法。 */
+.cluster[data-measured='true'] .card:not(:first-child) {
+  margin-left: calc(var(--step, 0px) - var(--cw, 56px));
+}
+
 .cluster .card:nth-child(2) {
   transform: rotate(4deg) translateY(-2px);
 }
@@ -247,6 +253,11 @@ button:disabled {
 @media (max-width: 640px) {
   .cluster .card {
     --cw: 38px;
+  }
+
+  /* 窄屏上牌宽是 38px，所以「放得下」的判据也按 38 算；未测量时的回退间距与桌面一致 */
+  .cluster[data-measured='false'] .card:not(:first-child) {
+    margin-left: 0;
   }
 }
 

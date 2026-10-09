@@ -75,3 +75,34 @@ export function computeFanLayout(input: {
   const perRow = Math.max(1, Math.ceil(count / rows));
   return { step: strip, perRow, rows, override: true };
 }
+
+/** 出牌堆里相邻两张牌之间的空隙（与 `.cluster` 的 `gap: 6px` 同源） */
+export const CLUSTER_GAP = 6;
+
+/**
+ * 一簇**出牌堆**在给定宽度预算里的步距（相邻两张牌左边缘的间距）。
+ *
+ * 与手牌扇面共用同一套宽度口径（`rowWidth` / `minStrip`），但契约不同：手牌放不下时**切行**，
+ * 而出牌堆不切行（一墩就是一排），所以它一路收到放得下为止 —— 真到了 `minStrip` 的可读下限
+ * 还放不下，就允许再挤下去。取舍是明确的：**两簇相撞比一簇略挤更糟**（相撞时「谁出了什么」
+ * 直接读不出来，而略挤只是角标变小）。
+ *
+ * 为什么不写成 CSS 的百分比边距或 `clamp()`：绝对定位盒里 `width: auto` 是 shrink-to-fit，
+ * 百分比边距会以**内容宽度**为包含块，于是标题与徽标会脱开牌堆、各处算各处的。这里由组件
+ * 量一次预算、把结果写成内联 `--step`，与手牌扇面同一套做法。
+ */
+export function computeClusterStep(input: {
+  count: number;
+  cardWidth: number;
+  /** 这一个出牌点可用的宽度（固定宽度预算，见 `TrickArea`） */
+  budget: number;
+}): number {
+  const count = Math.max(0, Math.floor(input.count));
+  const cardWidth = Math.max(0, input.cardWidth);
+  const budget = Math.max(0, input.budget);
+  // 0/1 张、或还没测量：没有「相邻间距」可言，交给 `.cluster` 的默认 gap
+  if (count <= 1 || cardWidth <= 0 || budget <= 0) return cardWidth;
+  const natural = cardWidth + CLUSTER_GAP;
+  if (fits(count, cardWidth, natural, budget)) return natural;
+  return Math.max(0, (budget - cardWidth) / (count - 1));
+}

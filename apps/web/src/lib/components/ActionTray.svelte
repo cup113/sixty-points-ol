@@ -39,55 +39,56 @@
   const count = 'whitespace-nowrap text-xs text-white/70';
 </script>
 
-<!-- 动作托盘 = 「轮到你了」的那一套控件，**独立成层、钉在操作条正上方**：
-     ① `bottom-full` 而不是居中悬在操作条上 —— 手牌在操作条**下面**，所以它结构上压不到手牌；
-        操作条右端的「距上一步」也不再被它切掉（截图里那两处就是这么来的）。
-        代价：短屏上它浮在毡面下半部，可能压住自己左下角那张座位卡 —— 手牌才是必须点得到的东西。
+<!-- 动作托盘 = 「轮到你了」的那一套控件，居**中**住在毡面与操作条之间那条常驻动作带里（ADR-0020）。
+     ① **在毡面之外**：它原先钉在操作条上沿（`bottom-full`，而那 40px 正好整根落在毡面的最后
+        40px 里）—— 手机 375px 上它与自己的座位卡竖直重叠 32px、水平重叠 84px（截图里的 #4）。
+        「把座位卡抬高」只是把同一块地方换个方式占掉，所以「毡面最后这条带归谁」必须明确：
+        **归托盘**。带子常驻（不分轮到自己还是轮空），所以切换时毡面与手牌零回流。
      ② **单行不换行**（`flex-nowrap`）：早先是 `flex-wrap`，窄屏上「清空」与红字各自挤出一行，
         托盘被撑到近 180px 高，正好盖住手牌上半截。
-     ③ `absolute` 不占流，所以轮到自己/轮空之间切换时毡面与手牌**零回流**。
-     ④ `z-30` 压过 ActionBar(z-10)；居中悬在手牌上方，桌面端从手牌中心到按钮的鼠标路程最短。
-     ⑤ `w-max` 是**宽度**修理，不是排版偏好：`absolute` + `left-1/2` + 宽度 auto 时，shrink-to-fit
-        的可用宽度只有**半个**容器（手机上约 170px），内容约 206px ⇒ flex 子项被压缩，
-        而 CJK 可以在任意字间断行，「出 牌」「清 空」于是竖排成两行（计数的 `whitespace-nowrap`
-        让它断不了，截图里「已选 0 张」安然无恙、两个按钮都竖着，正是这条的证据）。
-        宽度取 max-content 后没有负空间可分配；按钮自己再带 `whitespace-nowrap` 作第二道防线。
-        不加上限：托盘最宽态（埋底）约 250px，320px 机型放得下 —— 反过来加 `max-w-*` 会把它拽回
-        「被钳住 ⇒ 压缩 ⇒ 换行」那个形状。
+     ③ **`w-max`** 是宽度修理，不是排版偏好：居中 + 宽度 auto 时，shrink-to-fit 的可用宽度会
+        退化成内容的一半，flex 子项被压缩，而 CJK 可以在任意字间断行 ——「出 牌」「清 空」
+        于是竖排成两行（计数自带 `whitespace-nowrap` 所以它断不了：截图里「已选 0 张」安然无恙、
+        两个按钮都竖着，正是这条的证据）。宽度取 max-content 后没有负空间可分配；
+        按钮自己再带 `whitespace-nowrap` 作第二道防线。**不加** `max-w-*` —— 一旦被上限钳住
+        就退回「压缩 ⇒ 换行」。
+     ④ `z-30`：压过上浮的选中牌与操作条。
      它只出现在该你出手时，所以不会与「?」的弹层抢位置（弹层向上开、在左侧）。 -->
 {#if visible}
-  <div
-    class="absolute bottom-full left-1/2 z-30 mb-1 flex w-max -translate-x-1/2 flex-nowrap items-center gap-2 rounded-2xl bg-black/55 px-2.5 py-1 ring-1 ring-white/10 backdrop-blur-sm"
-    data-action-tray="true"
-  >
-    {#if deal?.phase === 'bury'}
-      <span class={count}>已选 <b class="tabular-nums text-gold">{selectedCount}</b> / 3</span>
-      <button
-        type="button"
-        class={gold}
-        disabled={selectedCount !== 3 || client.busy}
-        onclick={() => void client.bury()}
-      >
-        确认埋底
+  <div class="absolute inset-0 z-30 flex items-center justify-center">
+    <div
+      class="flex w-max flex-nowrap items-center gap-2 rounded-2xl bg-black/55 px-2.5 py-1 ring-1 ring-white/10 backdrop-blur-sm"
+      data-action-tray="true"
+    >
+      {#if deal?.phase === 'bury'}
+        <span class={count}>已选 <b class="tabular-nums text-gold">{selectedCount}</b> / 3</span>
+        <button
+          type="button"
+          class={gold}
+          disabled={selectedCount !== 3 || client.busy}
+          onclick={() => void client.bury()}
+        >
+          确认埋底
+        </button>
+      {:else}
+        <span class={count}>已选 <b class="tabular-nums text-gold">{selectedCount}</b> 张</span>
+        <button
+          type="button"
+          class={play}
+          disabled={selectedCount === 0 || client.playError !== null || client.busy}
+          onclick={() => void client.play()}
+        >
+          出 牌
+        </button>
+      {/if}
+      <button type="button" class={ghost} disabled={selectedCount === 0} onclick={() => client.clearSelection()}>
+        清空
       </button>
-    {:else}
-      <span class={count}>已选 <b class="tabular-nums text-gold">{selectedCount}</b> 张</span>
-      <button
-        type="button"
-        class={play}
-        disabled={selectedCount === 0 || client.playError !== null || client.busy}
-        onclick={() => void client.play()}
-      >
-        出 牌
-      </button>
-    {/if}
-    <button type="button" class={ghost} disabled={selectedCount === 0} onclick={() => client.clearSelection()}>
-      清空
-    </button>
+    </div>
 
-    <!-- 不合法的选牌原因：**绝对定位浮在托盘上方**，不进托盘的流 ——
-         `playError` 是实时推导的（选到不合法的一组就立刻出现），若让它占一行，托盘的高度就会
-         随选择来回变，窄屏上正好把手牌压掉。长句自己折行、向上长（毡面那边有空）。 -->
+    <!-- 不合法的选牌原因：**绝对定位浮在带子之上**，不进带子的流 ——
+         `playError` 是实时推导的（选到不合法的一组就立刻出现），若让它占一行，带子的高度就会
+         随选择来回变，窄屏上正好把手牌压掉。长句自己折行、向上长（那里是毡面的下缘）。 -->
     {#if client.playError}
       <span
         class="absolute bottom-full left-1/2 mb-1 w-max max-w-[min(92vw,22rem)] -translate-x-1/2 rounded-lg bg-black/70 px-2 py-1 text-center text-[11px] text-red-300 ring-1 ring-red-400/20"

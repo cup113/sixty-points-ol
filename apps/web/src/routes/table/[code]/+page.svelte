@@ -2,7 +2,6 @@
   import { onMount, untrack } from 'svelte';
   import { cardKey, START_LEVEL, type Level } from '@sixty/engine';
   import { TableClient } from '$lib/client/table.svelte';
-  import { BOT_LIMIT } from '$lib/shared';
   import { anchorSeatOf, labelSeatOf } from '$lib/role';
   import { fetchReplays, type ReplayResult } from '$lib/replays';
   import type { DrawerTabKey, ReportMode } from '$lib/drawer-tabs';
@@ -69,7 +68,12 @@
    */
   let reviewOpen = $state(false);
   let leaveOpen = $state(false);
-  /** 要请离的机器人座位（null = 弹窗关着）；弹窗必须挂在页面级，见 BotRemoveConfirm */
+  /**
+   * 要请离的机器人座位（null = 弹窗关着）。
+   * 入口在抽屉「牌桌」页那一行（ADR-0020），而弹窗**必须挂在页面级** —— 抽屉有 `transform`，
+   * 会把 `fixed` 弹窗困在抽屉里（见 `BotRemoveConfirm`）。所以状态由页面持有，
+   * 抽屉只把「点了哪一行」透传上来。
+   */
   let botRemoveSeat = $state<number | null>(null);
   let openedFor = -1; // 非响应式：仅用于「每副只自动弹出一次结算」
 
@@ -115,12 +119,6 @@
 
   const leftSeat = $derived((anchor + 1) % 3);
   const rightSeat = $derived((anchor + 2) % 3);
-  /** 三个座位卡的绝对定位类：必须只来自这里，别与自身的 position 类混用（见 ui-check） */
-  const SPOTS = [
-    'left-3 top-3 sm:left-5 sm:top-5',
-    'right-3 top-3 sm:right-5 sm:top-5',
-    'bottom-3 left-3 sm:bottom-5 sm:left-5'
-  ] as const;
 
   const selectable = $derived(
     you !== null &&
@@ -131,19 +129,41 @@
   );
 
   /**
+   * **拟选**（ADR-0021）：在座玩家在出牌阶段随时可以点牌，不必等到轮到自己。
+   *
+   * 为什么值得改：轮到别人时手牌是完全冻结的，玩家最自然的动作（「我先看看要出哪两张」）
+   * 会被无声地忽略 —— 出牌是个需要提前想的事，临到出手那一刻才开始点是现实里的常态。
+   *
+   * 条件与本墩已有领出 **同一个**（`deal.trick.plays.length > 0`），所以：
+   * - 领出者的那一张还没落地时，任何人在手上都没有「该跟的那一门」，标记自然为空；
+   * - 一旦有人领出，三家（在座者）都立刻看得到「该跟哪一门」的蓝框 —— 这正是要提前想的事。
+   *
+   * 合法性不在这一层判：轮到你时托盘会用引擎的 `checkPlay` 说明这组牌为什么不行（`playError`），
+   * 拟选期间不做提前校验（那会在选到一半时就开始报错）。
+   */
+  const planning = $derived(
+    you !== null &&
+      deal !== null &&
+      deal.phase === 'play' &&
+      deal.trick !== null &&
+      deal.trick.plays.length > 0
+  );
+
+  /**
    * 手牌蓝框标记（`data-marked`）：两个阶段各有一个「这几张现在最要紧」的集合。
    *
    * - **埋底（庄家）**：拿上来的底牌 —— `you.originalKitty` 是权威来源；
-   * - **出牌（轮到自己跟牌）**：领出那一门的手牌 —— 跟牌必须先跟同门，缺门时集合自然为空。
+   * - **出牌（有人领出之后）**：领出那一门的全部手牌 —— 跟牌必须先跟同门，缺门时自然为空。
+   *   拟选把这一份从「正轮到我的那个人」放宽到「在座的每个人」：能提前想的正是这件事。
    *
-   * 其余阶段、其余人（含观战者）一律空集：标记是给正要出手的那个人看的。
+   * 其余阶段、其余人（含观战者）一律空集。
    */
   const markedKeys = $derived.by(() => {
     if (deal === null || you === null) return [];
     if (deal.phase === 'bury' && you.isDeclarer) {
       return kittyHandDelta(you.hand, you.originalKitty).map(cardKey);
     }
-    if (deal.phase === 'play' && deal.playTurn === you.seat) {
+    if (planning) {
       return followSuitCards(you.hand, trump, deal.trick).map(cardKey);
     }
     return [];
@@ -187,21 +207,6 @@
 
   function seatAt(index: number) {
     return client.table?.seats[index] ?? null;
-  }
-
-  /**
-   * 机器人动作只在**自己坐在这一桌**时出现（观战者不改变桌面构成，服务端也会拒）。
-   * 上限 2：至少留一个人类座位去按「开下一副」（机器人从不发起桌面级动作，见 ADR-0015）。
-   */
-  const botCount = $derived((client.table?.seats ?? []).filter((seat) => seat.bot).length);
-  const canAddBot = $derived(seated && botCount < BOT_LIMIT);
-
-  /**
-   * 加机器人：**点哪张空座卡就坐哪张**（补位进哪个座位是有差别的：那个座位可能正好轮得到、
-   * 或者手牌更好）。结果随 SSE 广播回来，不做乐观更新。
-   */
-  async function addBot(seat: number): Promise<void> {
-    await client.addBot(seat);
   }
 
   function levelAt(index: number): Level {
@@ -292,52 +297,69 @@
     </div>
   {/if}
 
-  <div class="felt relative min-h-0 flex-1 rounded-[1.75rem] sm:rounded-[2.5rem]">
-    <!-- 三家座位：左＝下家、右＝上家、我＝左下；观战者没有「我」，三张卡都显示玩家名 -->
-    {#each [leftSeat, rightSeat, anchor] as seat, index (seat)}
-      <SeatCard
-        name={seatAt(seat)?.name ?? null}
-        level={levelAt(seat)}
-        online={seatAt(seat)?.online ?? false}
-        bot={seatAt(seat)?.bot ?? false}
-        canAddBot={canAddBot && (seatAt(seat)?.name ?? null) === null}
-        onAddBot={() => void addBot(seat)}
-        canRemoveBot={seated}
-        onRemoveBot={() => (botRemoveSeat = seat)}
-        busy={client.busy}
-        isMe={seated && seat === (you?.seat ?? -1)}
-        isTurn={isTurnAt(seat)}
-        isDeclarer={deal?.declarerSeat === seat}
-        class={`absolute w-36 sm:w-44 ${SPOTS[index]}`}
-      />
-    {/each}
+  <div class="felt relative grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)_auto] gap-2 p-3 sm:gap-3 sm:p-5">
+    <!-- 毡面 = **三行格**（见 ADR-0020）：`[顶行：两张对手卡][内容槽 1fr][底栏：我]`。
+         为什么要结构化的三行、而不是各处自己写 `top-[4.5rem]` / `top-[5.5rem]` / `top-[22%]`：
+         那些魔数各自算各自的偏移，谁也管不了谁 —— 手机短屏上「定约 / 庄已抓」会压到埋底槽位上、
+         叫牌面板会压住座位卡、托盘会压住我的座位卡（截图里的 #3 #4 #5 就是这么来的）。
+         三行格让「非座位层只能住在内容槽里」成为**结构**保证，而不是靠调数维持。
+         钩子 `data-felt-row` 供 `scripts/shot-auction.ts` 的实测断言定位（源码守卫看不见几何）。 -->
+    <div data-felt-row="seats" class="flex items-start justify-between gap-2">
+      <!-- 左＝下家、右＝上家；观战者没有「我」，两张卡都显示玩家名。
+           这两张是**纯展示**：卡片上的「+ 机器人 / 请离」已撤到抽屉的「牌桌」页（ADR-0020）。 -->
+      {#each [leftSeat, rightSeat] as seat, index (seat)}
+        <SeatCard
+          name={seatAt(seat)?.name ?? null}
+          level={levelAt(seat)}
+          online={seatAt(seat)?.online ?? false}
+          bot={seatAt(seat)?.bot ?? false}
+          isMe={seated && seat === (you?.seat ?? -1)}
+          isTurn={isTurnAt(seat)}
+          isDeclarer={deal?.declarerSeat === seat}
+          class={['w-36 shrink-0 sm:w-44', index === 1 && 'ml-auto'].filter(Boolean).join(' ')}
+        />
+      {/each}
+    </div>
 
-    {#if deal === null}
-      <LobbyPanel {client} code={data.code} />
-    {:else if view !== null}
-      {#if deal.phase === 'bury'}
-        <!-- 阶段状态条与埋底面板同属**一个**绝对定位的列容器：槽位永远排在状态条下面。
-             早先两者各自绝对定位（状态条 top-[5.5rem]、面板 top-[12%]），手机短屏上
-             「定约 / 庄已抓」会压到暗底槽位上 —— 两处各算各的位置，谁也管不了谁。
-             这一层横跨整幅毡面，所以要**让开点击**（`pointer-events-none`）：它会在座位卡的
-             「+ 机器人」/「请离」按钮上吃掉点击。里面只有埋底面板那行底牌是可点的，
-             由 BuryPanel 自己 `pointer-events-auto` 接回来（见 `BuryPanel.svelte` 与
-             `test/table-chrome.test.ts` 的「横跨毡面的覆盖层必须让开点击」）。 -->
-        <div class="pointer-events-none absolute inset-x-0 top-[4.5rem] flex flex-col items-center gap-3 px-2 sm:top-6">
-          <!-- 埋底阶段不接回看入口：那时 `trickHistory` 必然是空的（还没有人出过牌），
-               接了也永远不渲染 —— 顺带让这一条在埋底阶段仍然是纯信息条。 -->
-          <TableStatus {view} />
-          <BuryPanel {client} />
-        </div>
-      {:else if deal.phase === 'auction'}
-        <BidPanel {client} />
-      {:else}
-        <div class="pointer-events-none absolute inset-x-0 top-[5.5rem] flex justify-center px-2 sm:top-6">
-          <TableStatus {view} onReviewTrick={() => (reviewOpen = true)} />
-        </div>
-        <TrickArea {view} seat={anchor} mySeat={label} {names} />
+    <div data-felt-row="slot" class="relative min-h-0">
+      {#if deal === null}
+        <LobbyPanel {client} code={data.code} />
+      {:else if view !== null}
+        {#if deal.phase === 'bury'}
+          <!-- 阶段状态条与埋底面板同属**一个**列容器：槽位永远排在状态条下面。
+               这一层只住在内容槽里，所以不再需要横跨整幅毡面、也不必再让开点击
+               （它盖不到座位卡上的任何东西了 —— 那些按钮已经不在卡片上，见 SeatCard）。 -->
+          <div class="flex flex-col items-center gap-3 px-2 pt-1">
+            <TableStatus {view} />
+            <BuryPanel {client} />
+          </div>
+        {:else if deal.phase === 'auction'}
+          <BidPanel {client} />
+        {:else}
+          <div class="flex justify-center px-2 pt-1">
+            <TableStatus {view} onReviewTrick={() => (reviewOpen = true)} />
+          </div>
+          <TrickArea {view} seat={anchor} mySeat={label} {names} />
+        {/if}
       {/if}
-    {/if}
+    </div>
+
+    <!-- 第三行：「我」那一条底栏（一行装完身份）。观战者没有座位，这一行整行消失。 -->
+    <div data-felt-row="me" class="flex">
+      {#if you !== null}
+        <SeatCard
+          variant="bar"
+          name={seatAt(anchor)?.name ?? null}
+          level={levelAt(anchor)}
+          online={seatAt(anchor)?.online ?? false}
+          bot={seatAt(anchor)?.bot ?? false}
+          isMe={seated}
+          isTurn={isTurnAt(anchor)}
+          isDeclarer={deal?.declarerSeat === anchor}
+          class="w-full"
+        />
+      {/if}
+    </div>
 
     <!-- 「上一轮」回看：**住在毡面里**（`absolute inset-0`）而不是整屏 ——
          手牌因此始终可见、可继续选牌；bot 出手再快，收掉的那一墩也还找得回来。
@@ -345,15 +367,26 @@
     <TrickReview {client} open={reviewOpen} onClose={() => (reviewOpen = false)} />
   </div>
 
-  <!-- 操作条与动作托盘是**同一块版面**：托盘绝对定位悬在这一条上、再居中于手牌正上方。
-       它不占流，所以「轮到自己 / 轮空」之间切换时毡面与手牌不会上下跳；z-30 压过上浮的选中牌。
-       早先出牌/埋底控件就在这一条的行内 —— 窄屏一晚换行就把整页高度顶动，按钮还落在最左侧。 -->
-  <div class="relative">
-    <ActionBar {client} {summaryOpen} onToggleSummary={() => (summaryOpen = !summaryOpen)} />
+  <!-- 动作带：**毡面之外**、操作条之上的一条常驻空带，动作托盘住在这里（见 ADR-0020）。
+       为什么要把托盘移出毡面：它原先钉在操作条上沿，而那条 40px 正好整根落在毡面的最后 40px 里 ——
+       手机 375px 上它与自己的座位卡竖直重叠 32px、水平重叠 84px（截图里的 #4）。抬高座位卡
+       只是把同一块地方换个方式占掉，所以这一带要有个**明确归属**：归托盘。
+       它常驻（不分轮到自己还是轮空），所以「轮到我 / 轮空」之间切换时毡面与手牌零回流。
+       高度 = 托盘高（约 36px）+ 4px 余量；托盘自己的 `mb-1` 由这里消化。 -->
+  <div data-action-band="true" class="relative h-11 shrink-0">
     <ActionTray {client} />
   </div>
 
-  <!-- 观战者没有手牌：手牌区整块消失，牌桌更大 -->
+  <!-- 操作条：「?」、状态句、右端的计时，以及结算阶段的那几个按钮。
+       它不再包着动作托盘 —— 托盘的落点由上面那条动作带决定（见 ADR-0020）。 -->
+  <div class="relative">
+    <ActionBar {client} {summaryOpen} onToggleSummary={() => (summaryOpen = !summaryOpen)} />
+  </div>
+
+  <!-- 观战者没有手牌：手牌区整块消失，牌桌更大。
+       `selectable` 只在「这一手归你动」时为真（托盘也在那时才出现），
+       而 `planning` 让**没轮到的在座玩家**也能点牌（拟选，见 ADR-0021）——
+       HandFan 的 `selectable` 同时决定光标与点击，两者都按这个或的关系给。 -->
   {#if you !== null}
     <HandFan
       hand={you.hand}
@@ -361,7 +394,7 @@
       {candidateRanks}
       selected={client.selected}
       marked={markedKeys}
-      {selectable}
+      selectable={selectable || planning}
       onToggle={(card) => client.toggle(card)}
     />
   {/if}
@@ -380,6 +413,7 @@
   onOpenReplay={openReplay}
   onClose={() => (active = null)}
   onLeave={() => (leaveOpen = true)}
+  onRemoveBot={(seat) => (botRemoveSeat = seat)}
 />
 
 {#if view !== null}

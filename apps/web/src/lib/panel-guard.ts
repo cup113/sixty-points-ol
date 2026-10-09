@@ -71,8 +71,10 @@ export function checkBidPanelReachability(markup: string, options: PanelCheckOpt
   }
 
   const panelClass = classOf(tag);
-  if (!panelClass.includes('max-h-')) {
-    return fail('叫牌面板没有高度上限（缺 max-h-*）：叫牌可以一直抬价，面板会往毡面外长');
+  if (!panelClass.includes('max-h-') && !panelClass.includes('inset-0')) {
+    return fail(
+      '叫牌面板没有高度约束（缺 max-h-* 或 inset-0）：叫牌可以一直抬价，面板会往毡面外长'
+    );
   }
   if (panelClass.includes('overflow-hidden')) {
     return fail(
@@ -134,26 +136,32 @@ export function checkBidPanelReachability(markup: string, options: PanelCheckOpt
 }
 
 /**
- * 叫牌候选区的**固定五槽 + 跳叫触发**守卫：每档五个槽（不可叫的花色留隐形占位）、
- * 候选区容器带 `data-bid-trigger="row-end|full-row|none"`、且隐形占位**绝不是按钮**。
+ * 叫牌候选区的**固定五槽 + 跳叫独立成行**守卫：每档五个槽（不可叫的花色留隐形占位）、
+ * 候选区容器带 `data-bid-trigger="line|none"`、且隐形占位**绝不是按钮**。
  *
  * 为什么钉在标记与类上：「有没有补位」渲染完就看不出差别了 —— 补位后的四格与占位后的五格
  * 静态标签长得一样，只差一个 `invisible` 类，而字形的**横向位置**正是误触的来源。
  * 源码守卫（`test/bid-panel.test.ts`）与 ui-check 的出货 HTML 用同一份判据；
  * 档位与触发形态的取值由 `labels.ts` 的 `bidTiers` 负责（四场景表与反证在 labels.test.ts）。
+ *
+ * 两条几何不变式在**源码**这一层能守住的部分（真正的几何在 `scripts/shot-auction.ts` 实测）：
+ * 1. **触发钮不许出现在档位行里** —— 它一旦挤进行内，那一行就比别的行宽，flex 会把该行的
+ *    五个槽一起压窄（实测 360px 视口上两行的 NT 右缘相差 18.3px）。所以触发器必须自成一行。
+ * 2. **五个槽都要 `shrink-0`** —— 这是第二道防线：即便将来又有什么东西挤进了档位行，
+ *    槽位也不会被压缩（宁可撑破容器，也不要「两行的 NT 不在同一条竖线上」）。
  */
 export function checkBidSlots(markup: string): PanelCheck {
   const source = markup.replace(/<!--[\s\S]*?-->/g, '');
-  // 源码里它绑的是 `layout.trigger`（Svelte 表达式），出货 HTML 里是三个枚举值之一的字面量
+  // 源码里它绑的是 `layout.trigger`（Svelte 表达式），出货 HTML 里是枚举值之一的字面量
   const trigger = /data-bid-trigger=(?:"([^"]*)"|\{([^}]*)\})/.exec(source);
   if (trigger === null) {
-    return fail('候选区缺 data-bid-trigger：面板必须暴露触发钮形态（row-end / full-row / none）');
+    return fail('候选区缺 data-bid-trigger：面板必须暴露触发钮形态（line / none）');
   }
   const literal = trigger[1];
   const expression = trigger[2];
   if (literal !== undefined) {
-    if (literal !== 'row-end' && literal !== 'full-row' && literal !== 'none') {
-      return fail(`data-bid-trigger 的值不是 row-end / full-row / none：${literal}`);
+    if (literal !== 'line' && literal !== 'none') {
+      return fail(`data-bid-trigger 的值不是 line / none：${literal}`);
     }
   } else if (!/layout\.trigger/.test(expression ?? '')) {
     return fail(
@@ -180,6 +188,40 @@ export function checkBidSlots(markup: string): PanelCheck {
   // 旧形状：按「合法花色」逐档摆 —— 后面的花色会往前补位
   if (/each\s+row\.strains/.test(source)) {
     return fail('候选区又按「合法花色」摆（each row.strains）：后面会往前补位，同一横向位置换了花色');
+  }
+
+  // 以下两条是**几何**不变式（真正的像素在 `scripts/shot-auction.ts` 实测）。
+  // 放在既有检查之后：既有那几条各自有专门的反证 fixture，先撞上新规则会让那些反证失去意义。
+
+  // 不变式 1：触发钮必须自成一行，不许挤在档位行（`data-bid-row` 那一层）里。
+  const rowStarts = [...source.matchAll(/<div[^>]*data-bid-row=[^>]*>/g)];
+  for (const row of rowStarts) {
+    const from = (row.index ?? 0) + row[0].length;
+    // 档位行里只有槽位（button / span），所以第一个 `</div>` 就是它自己那个
+    const to = source.indexOf('</div>', from);
+    const body = to < 0 ? source.slice(from) : source.slice(from, to);
+    if (body.includes('data-bid-jump')) {
+      return fail(
+        '跳叫触发钮挤进了档位行（data-bid-jump 出现在 data-bid-row 里）：那一行会比别的行宽，' +
+          'flex 会把该行的五个槽一起压窄 —— 两行的 NT 就不在同一条竖线上了（实测差 18.3px）'
+      );
+    }
+  }
+
+  // 不变式 2：每个槽都要 shrink-0（不可叫的隐形占位也一样，它同样占宽）
+  let slotIndex = 0;
+  for (const match of source.matchAll(/data-bid-slot="(?:legal|invisible)"/g)) {
+    slotIndex += 1;
+    const tag = tagAt(source, match.index ?? 0);
+    // 看**整个标签**而不是 `class="…"`：可叫的槽用的是数组形式的 class
+    // （`class={['bidbtn w-9 shrink-0 …', …]}`），只读引号形式会把它当成「没有 shrink-0」，
+    // 于是这条守卫对着正确的源码报假红。
+    if (!tag.includes('shrink-0')) {
+      return fail(
+        `第 ${slotIndex} 个候选槽没有 shrink-0：flex 会在这一行内容偏宽时把它压窄 —— ` +
+          '同一横向位置在不同档之间就会错开（这正是「两行 NT 不齐」的根因）'
+      );
+    }
   }
   return { ok: true, reason: '' };
 }

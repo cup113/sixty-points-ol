@@ -295,16 +295,23 @@ test('查阅面进抽屉，动作面留桌面', () => {
 });
 
 
-test('横跨毡面的覆盖层必须让开点击（否则座位卡上的动作按钮看得见、点不到）', () => {
+test('横跨一层的覆盖层必须让开点击（否则它盖住的东西看得见、点不到）', () => {
   // 起因是一个实测 bug：`LobbyPanel` 的 `absolute inset-0` 铺满毡面、在 DOM 里又排在座位卡**之后**，
   // 于是刚开桌（还没发牌、两个空座）时「+ 机器人」按钮被它整层盖住 —— 看得见、点下去命中大厅层。
-  // 规则：毡面级的覆盖层根节点一律 `pointer-events-none`，需要点的控件自己 `pointer-events-auto`；
-  // 例外必须写进 EXEMPT 并说明理由（挡住座位卡动作的层不许例外）。
+  // 规则：铺满一层的覆盖层根节点一律 `pointer-events-none`，需要点的控件自己 `pointer-events-auto`；
+  // 例外必须写进 EXEMPT 并说明理由。
+  //
+  // ADR-0020 之后毡面里已经没有动作按钮了（座位卡上的「+ 机器人 / 请离」搬进了抽屉的「牌桌」页），
+  // 所以这条规则的**受害者**变成了毡面里剩下的可点元素：状态条上那枚「上一轮」回看入口、
+  // 埋底面板里那行底牌。规则本身照旧 —— 将来谁又铺一层，它照样会盖住那些控件。
   const EXEMPT: Record<string, string> = {
     'BidPanel.svelte':
-      '它自己就是滚动容器（max-h + overflow-y-auto）：让开点击会把滚轮一起让掉，反而点不到「不叫」',
+      '它自己就是滚动容器（inset-0 + overflow-y-auto）：让开点击会把滚轮一起让掉，反而点不到「不叫」',
     'TrickArea.svelte':
-      '只在各家的出牌点上画牌（不是整面覆盖）；那条 bottom 横带只压到「我」的座位卡与观战锚点，两者都没有动作按钮'
+      '只在各家的出牌点上画牌（盒子各占 38% 的宽度预算，不是整面覆盖），且它住在内容槽里',
+    'ActionTray.svelte':
+      '它铺满的是**动作带**（毡面之外那条常驻空带），带里没有别的控件；毡面一侧由带子自己的边界隔开，' +
+      '所以它不需要让开点击 —— 它是这一层里**唯一**的可点内容'
   };
 
   /** 取根元素的 class（剥注释后第一个 section/div 的 class 属性） */
@@ -326,20 +333,38 @@ test('横跨毡面的覆盖层必须让开点击（否则座位卡上的动作�
     if (EXEMPT[file] !== undefined) continue;
     assert.ok(
       rootClass(read(`../src/lib/components/${file}`)).includes('pointer-events-none'),
-      `${file} 横跨整幅毡面却没让开点击：它会在座位卡的「+ 机器人」/「请离」按钮上吃掉点击`
+      `${file} 铺满了一层却没让开点击：它会在那一层里可点的东西上吃掉点击（毡面里就有「上一轮」与底牌行）`
     );
   }
   // 断言不能空转：实测踩过的那个大厅层必须真的被扫进来
   assert.ok(wide.includes('LobbyPanel.svelte'), 'LobbyPanel.svelte 没被这条守卫扫到 —— 扫描规则可能失效了');
-  // 这一版把两条信息条的定位搬进了牌桌页的列容器（`TableStatus` / `BuryPanel` 自己不再 absolute），
-  // 所以「横跨整幅」的那一层现在是页面里的那两个 wrapper —— 同一条规则照它们扫：
-  // 少了这一半，让开点击的保护就跟着组件一起搬走了，而座位卡上的按钮又会变得点不到。
-  const layers = [...code(page).matchAll(/<div[^>]*class="([^"]*)"[^>]*>\s*<TableStatus/g)].map((m) => m[1]!);
-  assert.ok(layers.length >= 2, `牌桌页里包着状态条的毡面层少于 2 个（实际 ${layers.length}）：扫描规则可能失效了`);
-  for (const cls of layers) {
+
+  /**
+   * **层不出内容槽**（ADR-0020）。
+   *
+   * 早先这一节守的是「横跨整幅毡面的层必须让开点击」—— 那时候状态条 / 大厅面板 / 回看浮层
+   * 各自绝对定位、横跨整幅，所以会在座位卡的动作按钮上吃掉点击。现在毡面是**三行格**
+   * （`[顶卡][内容槽][我的底栏]`），除座位行与那张有意做成模态的回看浮层之外，所有层都必须
+   * 住在**内容槽里**：槽自己 `relative min-h-0` 把它们的上下界框死，于是「两个层各算各的
+   * 偏移而互相压住」在结构上不可能（截图里的 #3 #5 正是那样来的）。
+   *
+   * 判据用**顺序**表达：毡面三个行钩子按 seats → slot → me 出现，且每个层组件都出现在
+   * slot 与 me 之间（即都住在内容槽里）。真正的像素由 `scripts/shot-auction.ts` 实测。
+   */
+  const feltRowIndex = (name: string): number => code(page).indexOf(`data-felt-row="${name}"`);
+  assert.deepEqual(
+    ['seats', 'slot', 'me'].map(feltRowIndex).every((at, index, all) => at > 0 && (index === 0 || at > all[index - 1]!)),
+    true,
+    `毡面不是「顶卡 / 内容槽 / 我的底栏」三行格（钩子位置：${['seats', 'slot', 'me'].map(feltRowIndex).join(', ')}）`
+  );
+  const slotAt = feltRowIndex('slot');
+  const meAt = feltRowIndex('me');
+  for (const layer of ['LobbyPanel', 'TableStatus', 'BuryPanel', 'BidPanel', 'TrickArea'] as const) {
+    const at = code(page).indexOf(`<${layer}`);
     assert.ok(
-      cls.includes('pointer-events-none'),
-      `牌桌页有横跨整幅的毡面层没让开点击：它会在座位卡的「+ 机器人」/「请离」按钮上吃掉点击 —— ${cls}`
+      at > slotAt && at < meAt,
+      `${layer} 不在内容槽里（位置 ${at}，内容槽 ${slotAt}–${meAt}）：它又成了各算各的偏移层，` +
+        '会与别的层压在一起 —— 必须住在 data-felt-row="slot" 里'
     );
   }
 
@@ -369,44 +394,64 @@ test('动作按钮都要在有请求在飞时禁用（慢网下防双击），�
     code(seatActions).includes('disabled={client.busy}'),
     '「入座」按钮不再禁用 busy —— 参照物变了，请检查这条守卫是不是在空转'
   );
+  // 机器人动作的**唯一**落点是抽屉「牌桌」页（`TablePanel`），见 ADR-0020：
+  // 它们曾挂在毡面的座位卡底下，比对手卡高出一整行，正是毡面重叠的直接原因。
   // 不用正则拼标签（标签里有 `+`，正则里是量词）——按 <button 切块找，读起来也直白
-  const buttons = code(seatCard).split('<button').slice(1);
+  const buttons = code(tablePanel).split('<button').slice(1);
   for (const label of ['+ 机器人', '请离']) {
     const block = buttons.find((piece) => piece.includes(label));
-    assert.ok(block !== undefined, `座位卡里找不到「${label}」按钮`);
+    assert.ok(block !== undefined, `「牌桌」页里找不到「${label}」按钮`);
     assert.ok(
-      block.includes('disabled={busy}'),
-      `「${label}」按钮没有 disabled={busy}：慢网下会被人连点两次`
+      block.includes('disabled={client.busy}'),
+      `「${label}」按钮没有 disabled={client.busy}：慢网下会被人连点两次`
     );
   }
+  // 按钮位置必须带语义：点哪个空座就加进哪个座位（曾经过：无论点哪个都加进第一个空座）
   assert.ok(
-    pageCode.includes('busy={client.busy}'),
-    '同桌页没有把 client.busy 传给座位卡 —— 上面那条 disabled={busy} 就会永远是 false'
+    code(tablePanel).includes('client.addBot(seat.seat)'),
+    '空座那一行的「+ 机器人」没有把自己的座位传出去 —— 又会变成「点第二个、坐到第一个」'
   );
-  // 按钮位置必须带语义：点哪张空座卡就加进哪张（曾经过：无论点哪个都加进第一个空座）
+  // 反向：这两个动作不许回到毡面的座位卡上（那正是它偏高的原因）
+  for (const label of ['+ 机器人', '请离']) {
+    assert.equal(
+      code(seatCard).includes(label),
+      false,
+      `座位卡上又长出了「${label}」：它会让卡片高出整整一行，再次压住状态条与叫牌面板`
+    );
+  }
+  // 请离的确认弹窗必须挂在页面级：抽屉有 transform，会把它困在抽屉里（fixed 会失效）
   assert.ok(
-    pageCode.includes('onAddBot={() => void addBot(seat)}'),
-    '空座卡的「+ 机器人」没有把自己的座位传出去 —— 又会变成「点第二个、坐到第一个」'
+    code(page).includes('<BotRemoveConfirm') && code(page).includes('onRemoveBot={'),
+    '请离的确认弹窗没挂在页面级：抽屉的 transform 会把 fixed 弹窗困住'
   );
 });
 
 /* ---------- 埋底阶段：状态条与暗底槽位同列流 + 字号不许回潮 ---------- */
 
 /**
- * 阶段状态条（定约 / 庄已抓）与埋底面板必须同属**一个**绝对定位的列容器，两者自己都不许定位。
- * 早先两者各定各的（状态条 `top-[5.5rem]`、埋底面板 `top-[12%]`），手机短屏上「定约 / 庄已抓」
- * 正好压在暗底槽位上 —— 两处各算各的位置，谁也管不了谁。这条在无浏览器的环境里只能落到源头上。
+ * 阶段状态条（定约 / 庄已抓）与埋底面板必须同属**一个**列容器，两者自己都不许定位。
  *
- * 判据认的是「这个 class 里同时有 `absolute` 与 `inset-x-0`」，**不是字符串前缀**：
- * `pointer-events-none` 这类修饰就排在 `absolute` 前面（横跨整幅的层要让开点击）。
+ * 早先两者各定各的（状态条 `top-[5.5rem]`、埋底面板 `top-[12%]`），手机短屏上「定约 / 庄已抓」
+ * 正好压在暗底槽位上 —— 两处各算各的位置，谁也管不了谁。ADR-0020 之后更进一层：这个列容器
+ * 住在毡面的**内容槽**里（`data-felt-row="slot"`），所以它连 `absolute` 都不该有 ——
+ * 上下界由内容槽给，偏移量一个都不需要。这条在无浏览器的环境里只能落到源头上。
  */
 function phaseStatusFlow(pageSource: string, statusSource: string, burySource: string): string | null {
+  const src = code(pageSource);
   const flow =
-    /<div class="[^"]*\babsolute\b[^"]*\binset-x-0\b[^"]*flex flex-col items-center[^"]*"[\s\S]*?<TableStatus \{view\} \/>[\s\S]*?<BuryPanel \{client\} \/>/.test(
-      code(pageSource)
-    );
-  if (!flow) {
-    return '牌桌页没有把状态条与埋底面板放进同一个绝对定位的列容器（各定各的位置，短屏上就会重叠）';
+    /<div class="([^"]*)"[^>]*>\s*<TableStatus \{view\} \/>\s*<BuryPanel \{client\} \/>/.exec(src);
+  if (flow === null) {
+    return '牌桌页没有把状态条与埋底面板放进同一个列容器（各定各的位置，短屏上就会重叠）';
+  }
+  const cls = flow[1] ?? '';
+  if (/\babsolute\b/.test(cls)) {
+    return '状态条/埋底面板的列容器又绝对定位了：它住在内容槽里，上下界由槽给，不需要任何偏移';
+  }
+  if (/\btop-\[|\bbottom-\[/.test(cls)) {
+    return `列容器又自己写了偏移（${cls}）：内容槽已经框定了上下界，魔数偏移正是「两处各算各的」的来源`;
+  }
+  if (/\bpointer-events-none\b/.test(cls)) {
+    return '列容器还在让开点击：它不再横跨毡面（只在内容槽里），让开点击会让底牌行点不动';
   }
   if (/\babsolute\b/.test(code(statusSource))) return 'TableStatus 自己绝对定位：它和埋底面板会各算各的位置';
   if (/\babsolute\b/.test(code(burySource))) return 'BuryPanel 自己绝对定位：它和状态条会各算各的位置';
@@ -435,6 +480,16 @@ test('反证：各自绝对定位的旧版面必须被判出来', () => {
   assert.ok(
     phaseStatusFlow(page, '<div class="absolute top-[5.5rem]">状态条</div>', buryPanel) !== null,
     '状态条自己绝对定位被判为合规'
+  );
+  // 列容器自己又写上偏移（或又让开点击）—— 两者都说明它没有「住进内容槽」
+  const offset = code(page).replace(
+    '<div class="flex flex-col items-center gap-3 px-2 pt-1">',
+    '<div class="pointer-events-none absolute inset-x-0 top-[4.5rem] flex flex-col items-center gap-3 px-2">'
+  );
+  assert.match(
+    phaseStatusFlow(offset, tableStatus, buryPanel) ?? '',
+    /绝对定位|偏移/,
+    '列容器回到「自己算偏移」的旧形状没有被判出来'
   );
 });
 
@@ -469,28 +524,54 @@ test('埋底面板不再写标题行，也不写底牌说明句（钩子留着�
 /* ---------- 出牌阶段：动作托盘、赢墩徽标、跟牌蓝框 ---------- */
 
 /**
- * 动作控件（已选张数 / 出牌 / 清空 / 确认埋底）必须活在**独立的浮层**里，不许回到操作条那一行，
- * 而且那一层的形状有硬要求（每一条都对应一次真实返工）：
- * ① 页面必须把 `ActionBar` 与 `ActionTray` 放进同一个 `relative` 容器 —— 托盘是相对那一行定位的；
- * ② `absolute bottom-full`：钉在操作条**正上方**。居中悬在操作条上（`top-1/2 -translate-y-1/2`）
- *    时托盘会垂到操作条下面，而手牌就在那里 —— 截图里被盖住的就是手牌上半截；
- * ③ `flex-nowrap`：早先是 `flex-wrap`，窄屏上「清空」与红字各自挤出一行，托盘被撑到近 180px 高；
- * ④ `left-1/2 -translate-x-1/2`（居中，鼠标路程最短）+ `z-30`（压过 ActionBar 与毡面）；
- * ⑤ 不占流：轮到自己/轮空之间切换时毡面与手牌零回流；
- * ⑥ `w-max` + 每个 class 常量的 `whitespace-nowrap`：`left-1/2` 的绝对定位盒在 shrink-to-fit 下
- *    只有半个容器宽，子项被压缩后 CJK 会竖排（「出 牌」写成两行 —— 截图里那一次返工）。
+ * 动作控件（已选张数 / 出牌 / 清空 / 确认埋底）必须活在**独立的一层**里，而且那一层住在
+ * 毡面**之外**的那条常驻动作带上（ADR-0020）。每条要求都对应一次真实返工：
+ *
+ * ① 页面必须有一条 `data-action-band` 的常驻带，且 `ActionTray` 在它**里面** ——
+ *    托盘原先钉在操作条上沿（`bottom-full`），而那 40px 整根落在毡面的最后 40px 里：
+ *    手机 375px 上与自己的座位卡竖直重叠 32px、水平重叠 84px（截图里的 #4）。
+ *    「抬高座位卡」只是把同一块地方换个方式占掉，所以这一带必须明确归属：**归托盘**。
+ * ② 带子排在 `<ActionBar` **之前** —— 带在操作条之上、毡面之下；顺序反了托盘会跑到操作条下面。
+ * ③ 托盘铺满带子并居中（`absolute inset-0` + `items-center justify-center`）；带子自己有高度，
+ *    所以「轮到我 / 轮空」之间切换时毡面与手牌**零回流**。
+ * ④ `flex-nowrap`：早先是 `flex-wrap`，窄屏上「清空」与红字各自挤出一行，托盘被撑到近 180px 高。
+ * ⑤ `z-30`：压过上浮的选中牌。
+ * ⑥ `w-max` + 每个 class 常量的 `whitespace-nowrap`：居中 + 宽度 auto 时 shrink-to-fit 的可用
+ *    宽度会退化成内容的一半，子项被压缩后 CJK 会竖排（「出 牌」写成两行 —— 截图里那一次返工）。
+ * ⑦ 旧锚不许回来：`bottom-full` / `-translate-y-1/2`（那就又是「悬在毡面最后 40px 里」）。
  */
 function trayCoupling(pageSource: string, barSource: string, traySource: string): string | null {
   const pageSrc = code(pageSource);
-  if (!/<div class="relative">[\s\S]*?<ActionBar\b[\s\S]*?<ActionTray\b/.test(pageSrc)) {
-    return '牌桌页没有把 ActionBar 与 ActionTray 放进同一个 relative 容器（托盘就无从相对那一行定位）';
+  if (!/<div[^>]*data-action-band="true"[^>]*>[\s\S]*?<ActionTray\b/.test(pageSrc)) {
+    return '牌桌页没有把 ActionTray 放进那条常驻动作带（缺 data-action-band，或托盘不在它里面）：托盘会回到毡面里压住「我」那条底栏';
+  }
+  const bandAt = pageSrc.indexOf('data-action-band');
+  const barAt = pageSrc.indexOf('<ActionBar');
+  if (barAt < 0 || bandAt > barAt) {
+    return '动作带没有排在操作条之前：带子在操作条之上、毡面之下，顺序反了托盘会跑到操作条下面';
   }
   const tray = code(traySource);
-  for (const cls of ['absolute', 'bottom-full', 'left-1/2', '-translate-x-1/2', 'z-30', 'flex-nowrap']) {
-    if (!tray.includes(cls)) return `ActionTray 缺少 ${cls}：单行浮层会走形（要么压住手牌，要么被撑成两行）`;
+  /**
+   * 两层：外层是**铺满动作带**的那一层（`absolute inset-0` + 居中 + z-30），内层是带
+   * `data-action-tray` 的内容盒（`w-max` + 不换行）。分开查是因为每一条判据只属于其中一层 ——
+   * 混在一起查会让「根节点丢掉 w-max」与「外层回到旧锚」互相蒙混过去。
+   */
+  const layer = /<div[^>]*class="([^"]*)"[^>]*>\s*<div[^>]*data-action-tray/.exec(tray)?.[1] ?? '';
+  const root = /<div[^>]*data-action-tray="true"[^>]*>/.exec(tray)?.[0] ?? '';
+  // 旧锚先查：它是这一版要修的东西，报出来的就该是它（而不是被下一条「缺少 inset-0」遮住）
+  if (layer.includes('bottom-full')) {
+    return 'ActionTray 外层又用 bottom-full 钉在操作条上了：那 40px 整根落在毡面里，会盖住「我」那条底栏';
   }
-  if (tray.includes('-translate-y-1/2')) {
-    return 'ActionTray 又用 -translate-y-1/2 垂直居中了：托盘会垂到操作条下面盖住手牌，应当 bottom-full 钉在它上方';
+  if (layer.includes('-translate-y-1/2') || layer.includes('top-1/2')) {
+    return 'ActionTray 外层又垂直居中悬在操作条上了：应当铺满「毡面之外那条动作带」';
+  }
+  for (const cls of ['absolute', 'inset-0', 'items-center', 'justify-center', 'z-30']) {
+    if (!layer.includes(cls)) {
+      return `ActionTray 外层缺少 ${cls}：它不再铺满动作带（要么回毡面，要么不再居中）`;
+    }
+  }
+  if (!tray.includes('flex-nowrap')) {
+    return 'ActionTray 缺少 flex-nowrap：窄屏上「清空」与红字会各自挤出一行，把托盘撑高压住手牌';
   }
   if (/\bflex-wrap\b/.test(tray)) {
     return 'ActionTray 又允许换行（flex-wrap）：窄屏上「清空」与红字会各自挤出一行，把托盘撑高压住手牌';
@@ -498,11 +579,9 @@ function trayCoupling(pageSource: string, barSource: string, traySource: string)
   if (/(^|[\s"'])w-full\b/.test(tray)) {
     return 'ActionTray 里出现了 w-full：错误提示一旦占满一行就会把托盘撑成两行（它必须绝对定位浮在上方）';
   }
-  // ⑥ 宽度：`absolute` + `left-1/2` + 宽度 auto 时，shrink-to-fit 的可用宽度只有**半个**容器
-  //    （手机上约 170px），flex 子项于是被压缩，而 CJK 可以在任意字间断行 ——「出 牌」「清 空」
-  //    就竖排成两行了（计数带 nowrap 所以它没事，这正是截图里那条证据）。取**根开标签**判断：
+  // ⑥ 宽度：居中 + 宽度 auto 时 shrink-to-fit 的可用宽度会退化成内容的一半，flex 子项于是被压缩，
+  //    而 CJK 可以在任意字间断行 ——「出 牌」「清 空」就竖排成两行了。取**根开标签**判断：
   //    只扫全文会被错误气泡那枚 w-max 蒙混过去。
-  const root = /<div[^>]*data-action-tray="true"[^>]*>/.exec(tray)?.[0] ?? '';
   if (!root.includes('w-max')) {
     return 'ActionTray 的根节点缺少 w-max：宽度会被压成半个容器，子项被压缩后「出 牌」会竖排';
   }
@@ -552,12 +631,12 @@ function followMarkCheck(pageSource: string, fanSource: string): string | null {
   return null;
 }
 
-test('出牌阶段：动作控件是钉在操作条上方的单行浮层，操作条只剩信息', () => {
+test('出牌阶段：动作控件住在毡面之外那条常驻动作带里，操作条只剩信息', () => {
   const problem = trayCoupling(page, actionBar, actionTray);
   assert.equal(problem, null, problem ?? '');
 });
 
-test('反证：托盘回到操作条行内、垂直居中、允许换行、错误提示占整行，都必须被判出来', () => {
+test('反证：托盘回毡面、丢掉动作带、垂直居中、允许换行、错误提示占整行，都必须被判出来', () => {
   assert.ok(
     trayCoupling(page, actionBar, '<div class="flex gap-2">出 牌</div>') !== null,
     '流内托盘被判为合规：这条守卫是空转的'
@@ -572,17 +651,28 @@ test('反证：托盘回到操作条行内、垂直居中、允许换行、错�
   );
   assert.ok(
     trayCoupling('<ActionBar {client} />\n<ActionTray {client} />', actionBar, actionTray) !== null,
-    '没有 relative 包裹（托盘无从定位）被判为合规'
+    '没有动作带（托盘会回毡面）被判为合规'
   );
-  // 截图里那一次：居中悬在操作条上 → 垂到手牌上。从**真实托盘**改一个字，
-  // 这样它只会踩中这一条规则（用极简字面量当反例时，先撞上的往往是别的检查）。
-  const CENTERED = actionTray.replace('absolute bottom-full', 'absolute top-1/2 -translate-y-1/2');
-  assert.match(trayCoupling(page, actionBar, CENTERED) ?? '', /translate-y-1\/2/, '垂直居中的旧锚没有被判出来');
+  // 带子排在操作条之后：托盘会跑到操作条下面
+  const BAND_BELOW = '<ActionBar {client} />\n<div data-action-band="true"></div>\n<ActionTray {client} />';
+  assert.match(
+    trayCoupling(BAND_BELOW, actionBar, actionTray) ?? '',
+    /动作带/,
+    '动作带排到操作条之后没有被判出来'
+  );
+  // 截图里那一次：悬在操作条上方 → 整根落在毡面最后 40px 里，压住「我」那条底栏。
+  // 从**真实托盘**改一个字，这样它只会踩中这一条规则（用极简字面量当反例时，先撞上的往往是别的检查）。
+  const OLD_ANCHOR = actionTray.replace('absolute inset-0', 'absolute bottom-full');
+  assert.match(
+    trayCoupling(page, actionBar, OLD_ANCHOR) ?? '',
+    /bottom-full/,
+    '回到旧锚（bottom-full）的托盘没有被判出来'
+  );
   // 换行 + 红字各占一行 → 撑高压住手牌
-  const WRAPPING = actionTray.replace('flex w-max -translate-x-1/2 flex-nowrap', 'flex w-max -translate-x-1/2 flex-wrap');
+  const WRAPPING = actionTray.replace('flex w-max flex-nowrap', 'flex w-max flex-wrap');
   assert.match(trayCoupling(page, actionBar, WRAPPING) ?? '', /flex-nowrap/, '允许换行的托盘没有被判出来');
   // 精确性：`max-w-full` 这类「以 w-full 结尾的另一个类名」不该被误判成整行宽度
-  const MAX_W = actionTray.replace('-translate-x-1/2 flex-nowrap', '-translate-x-1/2 max-w-full flex-nowrap');
+  const MAX_W = actionTray.replace('flex-nowrap items-center', 'flex-nowrap max-w-full items-center');
   assert.equal(trayCoupling(page, actionBar, MAX_W), null, 'max-w-full 被误判成了 w-full（守卫过宽）');
   // 截图里那一次：根节点宽度只剩半个容器 ⇒ flex 子项被压缩 ⇒「出 牌」竖排
   assert.match(
@@ -1321,20 +1411,30 @@ test('座位卡上的名字不许被裁剪：机器人名字曾在卡上只剩�
     source.includes('flex items-center gap-2">'),
     '座位卡的头行不见了 —— 判据变了，请重看这条守卫'
   );
-  const nameNode = /<p class="([^"]*)">\{name \?\? '空座'\}<\/p>/.exec(source);
-  assert.ok(nameNode !== null, '座位卡里找不到名字节点（<p>{name ?? 空座}</p>），判据变了');
-  const classes = nameNode[1] ?? '';
-  // 名字与头像/徽标/级别同处一行时，只有名字是 flex-1：实测 176px 的卡只剩 23.6px、
-  // `w-36` 的手机卡只剩 0px，而「机器人·小六」需要 76px —— 卡上于是只画出「机…」。
+  // 卡形态与底栏形态各有一个名字节点，**只对卡形态**要求不裁剪：
+  // 卡是 144px 宽、名字与头像/级别同处一行（实测 176px 的卡只剩 23.6px、`w-36` 的手机卡只剩 0px，
+  // 而「机器人·小六」需要 76px —— 卡上于是只画出「机…」），所以那里宁可折行也不许裁。
+  // 底栏是**跨宽**的一行，`truncate` 在那里是对的（名字再长也只是省略号，不会挤掉级别徽标）。
+  const nameNodes = [...source.matchAll(/<p class="([^"]*)">\{name \?\? '空座'\}<\/p>/g)].map(
+    (match) => match[1] ?? ''
+  );
+  assert.equal(
+    nameNodes.length,
+    2,
+    `座位卡应当恰好有两个名字节点（卡形态的「折行」+ 底栏形态的「跨宽截断」），实际 ${nameNodes.length} 个`
+  );
+  const cardClasses = nameNodes.find((cls) => cls.includes('break-words'));
+  assert.ok(cardClasses !== undefined, '两个名字节点里找不到卡形态那个（缺 break-words）—— 判据变了，重看这条守卫');
   for (const forbidden of ['truncate', 'line-clamp', 'whitespace-nowrap', 'overflow-hidden']) {
     assert.ok(
-      !classes.includes(forbidden),
-      `名字节点带上了 ${forbidden}：窄卡上会被裁掉（实测「机器人·小六」需要 76px）`
+      !cardClasses.includes(forbidden),
+      `卡形态的名字节点带上了 ${forbidden}：窄卡上会被裁掉（实测「机器人·小六」需要 76px）`
     );
   }
+  const barClasses = nameNodes.find((cls) => cls !== cardClasses) ?? '';
   assert.ok(
-    classes.includes('break-words'),
-    '名字节点不再折行（缺 break-words）：长名字会溢出卡片而不是换行'
+    barClasses.includes('truncate') && barClasses.includes('min-w-0'),
+    '底栏形态的名字节点没有 min-w-0 + truncate：跨宽一行上长名字会把级别徽标挤出可视区'
   );
   // 名字不许自己当那个 flex item —— 那正是被装饰吃干净的原因；它必须住在 flex-1 的列里
   assert.ok(
@@ -1345,10 +1445,18 @@ test('座位卡上的名字不许被裁剪：机器人名字曾在卡上只剩�
     source.includes('<div class="min-w-0 flex-1">'),
     '座位卡里没有包住名字的 min-w-0 flex-1 列：名字失去了独占的那一行'
   );
-  // 文档化的两样东西不许被顺手删掉（CONTEXT.md：机器人照旧是一张普通座位卡，
-  // 只多一枚「机器人」徽标与一个「请离」入口）
-  assert.ok(source.includes('>机器人</span'), '座位卡上少了「机器人」徽标');
-  assert.ok(source.includes('请离'), '座位卡上少了「请离」入口');
+  // 机器人的身份标记：**头像自己就是标记**（内联 SVG），早先另有一行「机器人」徽标 ——
+  // 那一行正是卡片偏高的原因（ADR-0020）。判据落在 SVG 与名字前缀上，不是那句徽标文案。
+  assert.ok(
+    source.includes('<svg') && /aria-label="机器人"/.test(source),
+    '机器人头像不再是那枚内联 SVG（机器人身份就没有标记了）'
+  );
+  assert.ok(
+    !source.includes('>机器人</span'),
+    '座位卡又长出了「机器人」徽标行：它让卡片高出一整行，正是毡面重叠的原因'
+  );
+  // 机器人那两个动作必须不在座位卡上（搬进了抽屉的「牌桌」页）
+  assert.ok(!source.includes('请离'), '座位卡上又出现了「请离」入口：它会让卡片高出一整行');
   assert.ok(source.includes('<LevelBadge'), '座位卡上少了级别徽标');
 });
 

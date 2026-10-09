@@ -4,6 +4,8 @@
  * 三类断言：
  * 1. Tailwind 的 position 工具类不可叠加 —— 产物里 .relative 排在 .absolute 之后，
  *    同一元素同时带两者时 relative 胜出，座位卡会塌回文档流、三张叠在毡面左上角。
+ *    （ADR-0020 之后毡面是三行格、顶行两张对手卡走正常文档流，所以「座位卡定位类唯一为
+ *    absolute」那条判据改成了「顶行的对手卡**自己不许定位**」+「三个行钩子齐备且有序」。）
  * 2. 说明文案只允许活在「?」弹层里：页面上不得再出现已删除的常驻提示，
  *    并且每一阶段都必须有那个「?」入口（title 随阶段变化）。
  * 3. 邀请码必须是一个可点的按钮（点它复制邀请链接），且界面上一律用玩家名，
@@ -31,16 +33,17 @@
  *    的同一页不能出现它。这一条同时守着引擎 personalView 的规则（拿上来的底牌只给庄家）。
  *    埋底页也不再写「埋底 · 选 3 张扣入暗底 / 庄家埋底中」与底牌说明句（说明归「?」、动作提示归
  *    操作条），并且定约/庄已抓必须是大号数字 —— 这两条一起抓「文案与字号又回潮」。
- * 7b. **出牌阶段**（真的把牌打出去）：动作控件活在一条**钉在操作条正上方**的单行浮层里
- *    （`data-action-tray`：`absolute bottom-full` + `left-1/2` + `z-30` + `flex-nowrap` + `w-max`；
- *    垂直居中悬在操作条上、或允许换行，都会垂下来盖住手牌 —— 截图里返工过；
- *    `left-1/2` 的绝对定位盒在 shrink-to-fit 下只有半个容器宽，没有 `w-max` 时子项被压缩、
- *    中文按钮会竖排，所以每个按钮还要自带 `whitespace-nowrap`），操作条只剩
- *    「?」、状态句与右端的计时；跟牌时手牌把**领出那一门**标成蓝框（数量必须等于该门在手里
- *    的张数，期望值从 `/view` 现算，不写死花色）；收墩后的徽标只说「庄 +N 分 / 闲 +N 分」，
+ * 7b. **出牌阶段**（真的把牌打出去）：动作控件活在**毡面之外**那条常驻动作带（`data-action-band`）里 ——
+ *    外层铺满带子并居中（`absolute inset-0` + `items-center justify-center` + `z-30`），
+ *    内层是 `w-max` + `flex-nowrap` 的内容盒（`data-action-tray`）。旧锚（`bottom-full` / 垂直居中）
+ *    是这一版要修的东西：它让托盘整根落在毡面的最后 40px 里，压住「我」那条底栏（截图里的 #4）；
+ *    丢掉 `w-max` 则宽度被压成半个容器、子项被压缩，中文按钮会竖排（每个按钮还要自带 nowrap）。
+ *    操作条只剩「?」、状态句与右端的计时。
+ *    跟牌时手牌把**领出那一门**标成蓝框（数量必须等于该门在手里的张数，期望值从 `/view` 现算，
+ *    不写死花色）；**没轮到的人也照样有蓝框**（拟选，ADR-0021），但他没有托盘 ——
+ *    这正是「拟选」在出货页面上的证据。收墩后的徽标只说「庄 +N 分 / 闲 +N 分」，
  *    并且收墩那一刻状态条上多出一枚「上一轮」回看入口（bot 出手太快时靠它把上一墩三家出的牌
  *    找回来；浮层默认关着，所以这里同时断言 SSR 首帧里没有 `data-trick-review`）。
- *    轮空的人与观战者既没有托盘、也没有任何蓝框。
  * 7c. **「距上一步」计时**：未发牌的大厅页没有它（还没有牌局动作）；发牌后玩家页与观战页都有，
  *    并且**真的在走** —— 取两次（中间等 1.2 秒）秒数必须变大、且增幅合理（抓「冻住的时钟」与单位错）。
  * 8. 观战页面：满座第 4 个人看到的是公共信息 —— 不得出现开局/叫牌/埋底按钮，也不得渲染任何牌面。
@@ -300,13 +303,13 @@ function thCount(html: string): number {
 }
 
 /**
- * 动作托盘的开标签切片：它是**钉在操作条正上方的一条单行浮层**（见 ActionTray 的注释），
- * 所以守卫照这里抓：`absolute bottom-full` + `left-1/2 -translate-x-1/2` + `z-30` + `flex-nowrap`
- * + `w-max` 少一个都会在真机上出问题（垂直居中或换行 → 垂下来压住手牌；宽度被压成半个容器
- * → 子项被压缩、中文按钮竖排；不绝对定位 → 轮到自己时整页高度跳）。
+ * 动作托盘**外层**的开标签切片：它铺满毡面之外那条常驻动作带（见 ActionTray 的注释），
+ * 所以守卫照这里抓：`absolute inset-0` + 居中（`items-center justify-center`）+ `z-30`。
+ * 少了任何一条，那一层就会走形 —— 而**旧锚**（`bottom-full` / `top-1/2 -translate-y-1/2`）
+ * 是这一版要修的东西：它让托盘整根落在毡面的最后 40px 里，压住「我」那条底栏（截图里的 #4）。
  */
 function actionTrayMarkup(html: string): string | null {
-  return /<div[^>]*data-action-tray="true"[^>]*>/.exec(html)?.[0] ?? null;
+  return /<div[^>]*class="[^"]*absolute[^"]*inset-0[^"]*"[^>]*>\s*<div[^>]*data-action-tray="true"/.exec(html)?.[0] ?? null;
 }
 
 /**
@@ -392,28 +395,47 @@ async function main(): Promise<void> {
     '未开局页面：常驻的「牌桌」页不见了（改名入口应当始终在页面上）'
   );
 
-  // 4) 座位卡必须钉在毡面四角（absolute），不能被自身 relative 覆盖
-  const seatCards = classAttrs(lobby).filter(
-    (value) =>
-      value.includes('rounded-2xl') &&
-      (value.includes('left-3 top-3') || value.includes('right-3 top-3') || value.includes('bottom-3 left-3'))
+  // 4) 毡面必须是**三行格**：
+  //    ① 顶行两张对手卡（`.felt` 的第一行，`flex justify-between`，卡宽 w-36 / sm:w-44）；
+  //    ② 内容槽（`data-felt-row="slot"`，`min-h-0`，非座位层只能住在它里面）；
+  //    ③ 底行的「我」那条底栏（`data-seat-bar="true"`，跨宽一行）。
+  //
+  //    为什么不再断言「三张卡钉在四角且类是 absolute」：那是旧形状，三个 `top-*` 各算各的偏移，
+  //    于是手机短屏上状态条压住埋底槽位、叫牌面板压住座位卡、托盘压住我的卡（ADR-0020）。
+  //    现在「非座位层不会与座位行重叠」由三行格**结构**保证，几何由 shot 脚本实测。
+  const feltRows = [...lobby.matchAll(/data-felt-row="([a-z]+)"/g)].map((match) => match[1]);
+  assert(
+    JSON.stringify(feltRows) === JSON.stringify(['seats', 'slot', 'me']),
+    `毡面不是「顶卡 / 内容槽 / 我的底栏」三行格，实际 [${feltRows.join(', ')}]`
   );
-  assert(seatCards.length === 3, `应找到 3 张座位卡，实际 ${seatCards.length} 张`);
-  for (const value of seatCards) {
+  const topRow = /<div[^>]*data-felt-row="seats"[\s\S]*?(?=<div[^>]*data-felt-row="slot")/.exec(lobby)?.[0] ?? '';
+  const topCards = classAttrs(topRow).filter((value) => value.includes('rounded-2xl'));
+  assert(
+    topCards.length === 2,
+    `毡面顶行应是两张对手卡，实际 ${topCards.length} 张：${topCards.map((c) => c.slice(0, 80)).join(' | ')}`
+  );
+  for (const value of topCards) {
     const found = positionClasses(value);
     assert(
-      found.length === 1 && found[0] === 'absolute',
-      `座位卡定位类应为唯一的 absolute，实际 [${found.join(' + ')}]：${value.slice(0, 120)}`
+      found.length === 0,
+      `顶行的对手卡又自己定位了（[${found.join(' + ')}]）：它们是三行格的第一行，走正常文档流` +
+        `（旧形状的三个 top-* 正是 #3 #5 那些重叠的来源）—— ${value.slice(0, 120)}`
     );
+    assert(value.includes('w-36'), `顶行的对手卡没了固定宽度（缺 w-36）：${value.slice(0, 120)}`);
   }
+  assert(
+    (lobby.match(/data-seat-bar="true"/g) ?? []).length === 1,
+    '毡面里应当恰好有一条「我」的底栏（data-seat-bar）'
+  );
   assertNoPositionMix(lobby, '未开局页面');
 
-  // 4b) 座位卡上的名字不许被裁剪。实测：名字与 36px 头像 +「机器人」徽标 + 级别徽标同处一行时，
+  // 4b) 座位卡上的名字不许被裁剪。实测：名字与 36px 头像 + 级别徽标同处一行时，
   //     176px 的卡只剩 23.6px、`w-36` 的手机卡只剩 0px，而「机器人·小六」需要 76px ——
   //     卡上于是只画出「机…」，手机上干脆什么都看不到。这里只有 fetch、量不到几何（几何由浏览器
-  //     走查量），所以守渲染出来的**形状**：名字节点是 `<p class="text-sm font-semibold leading-tight">`，
-  //     它的 class 里不许出现裁切类。这个类名组合在全仓只出现在 SeatCard.svelte（见该文件注释）。
-  //     整页会有 6 个这样的节点：毡面 3 张 + 抽屉「牌桌」页里同款组件的 3 张（那一页常驻 DOM）。
+  //     走查量），所以守渲染出来的**形状**：**卡形态**的名字节点是
+  //     `<p class="break-words text-sm font-semibold leading-tight">`，它的 class 里不许出现裁切类。
+  //     （底栏形态是跨宽一行，用的是 `min-w-0 truncate` —— 那里截断是对的，所以不在这条判据里。）
+  //     整页有 5 个卡形态的名字节点：毡面顶行 2 张 + 抽屉「牌桌」页里同款组件的 3 张（那一页常驻 DOM）。
   //     两边是同一份组件、同一条判据，所以一起断言；计数只做下限——判据一变就没人可查，守卫会空转。
   const nameNodesOf = (html: string): string[][] =>
     [...html.matchAll(/<p class="([^"]*)">([^<]{1,24})<\/p>/g)]
@@ -421,8 +443,9 @@ async function main(): Promise<void> {
       .filter(([cls]) => /\btext-sm font-semibold leading-tight\b/.test(cls));
   const nameNodes = nameNodesOf(lobby);
   assert(
-    nameNodes.length >= 3,
-    `座位卡名字节点应至少有 3 个（毡面三张），实际 ${nameNodes.length} 个：判据（类名组合）变了，这条守卫会空转`
+    nameNodes.length >= 2,
+    `卡形态的座位名字节点应至少有 2 个（毡面顶行两张对手卡），实际 ${nameNodes.length} 个：` +
+      '判据（类名组合）变了，这条守卫会空转'
   );
   for (const [cls, text] of nameNodes) {
     for (const forbidden of ['truncate', 'line-clamp', 'whitespace-nowrap', 'overflow-hidden']) {
@@ -433,9 +456,10 @@ async function main(): Promise<void> {
     }
   }
 
-  // 4c) 机器人座位：名字节点里必须是**全名**（带「机器人·」前缀），徽标与「请离」入口都还在。
+  // 4c) 机器人座位：名字节点里必须是**全名**（带「机器人·」前缀），头像上是那枚内联 SVG。
   //     HTML 里一直是全名（当年被裁掉的是 CSS），所以这条抓的是**显示名被改短**，
-  //     4b 抓的是**被裁**（CONTEXT.md：机器人照旧是一张普通座位卡，只多一枚徽标与一个「请离」入口）。
+  //     4b 抓的是**被裁**。机器人的那两个动作用不着在这一页断言 —— 它们搬进了抽屉的「牌桌」页
+  //     （ADR-0020），由 `table-chrome.test.ts` 的源码守卫钉住。
   const botTable = (await fetch(`${BASE}/api/tables`, {
     method: 'POST',
     headers: { authorization: `Bearer ${players[0]!.credential}` }
@@ -452,10 +476,25 @@ async function main(): Promise<void> {
     botName?.startsWith('机器人·') === true,
     `机器人卡上的名字不是全名（座位卡不许把「机器人·」前缀吃掉）：${JSON.stringify(botNames)}`
   );
-  assert(botLobby.includes('>机器人</span'), '机器人卡上少了「机器人」徽标');
-  assert(botLobby.includes('请离'), '机器人卡上少了「请离」入口');
+  // 机器人的身份标记现在是**头像上那枚内联 SVG**（早先另有一行「机器人」徽标，那一行正是
+  // 卡片偏高、进而压住状态条的原因，见 ADR-0020）。判据落在 SVG 与它的 aria-label 上。
+  assert(
+    botLobby.includes('aria-label="机器人"'),
+    '机器人头像里没有那枚内联 SVG（aria-label="机器人"）：机器人身份就没有标记了'
+  );
+  assert(
+    !botLobby.includes('>机器人</span>'),
+    '座位卡又长出了「机器人」徽标行：它让卡片高出一整行（毡面重叠的来源）'
+  );
+  // 「请离」只该出现在抽屉「牌桌」页那一份里（常量 DOM），不该在毡面的座位卡上
+  // —— 毡面里 2 张对手卡 + 1 条底栏共 3 处座位卡，抽屉里另有 3 处。
+  assert(
+    botLobby.includes('请离'),
+    '整页里都找不到「请离」了：机器人没法请离（它应当只在抽屉「牌桌」页那一份里）'
+  );
   console.log(
-    `界面结构：${nameNodes.length} 个座位卡名字节点都不裁剪，机器人卡上是全名「${botName}」且徽标与「请离」入口都在`
+    `界面结构：毡面是「顶卡 / 内容槽 / 我的底栏」三行格，${nameNodes.length} 个卡形态名字节点都不裁剪，` +
+      `机器人卡上是全名「${botName}」且头像是那枚内联 SVG`
   );
 
   // 5) 发牌后：仍是同一个「?」入口，但内容换成叫牌阶段；等待类提示与方位称谓都不该出现
@@ -546,8 +585,8 @@ async function main(): Promise<void> {
   }
   assert(!panelMine.includes('>50<'), '候选区出现了 >50<：跳叫档位不该在点开触发钮之前出现');
   assert(
-    panelMine.includes('data-bid-trigger="row-end"'),
-    '最高叫品是花色时，触发钮应在第二档行末（data-bid-trigger="row-end"）'
+    panelMine.includes('data-bid-trigger="line"'),
+    '候选区的触发形态不是 line（跳叫必须独立成行：挤在档位行里会把那一行的五个槽压窄）'
   );
   assert(panelMine.includes('▶ 跳叫'), '候选区没有跳叫触发钮（「▶ 跳叫」）');
   assert(panelMine.includes('>NT<'), '候选区第 5 槽不是 NT 字形（无主必须写成 NT）');
@@ -639,17 +678,25 @@ async function main(): Promise<void> {
   assertNoRemovedHints(watching, '观战页面');
   assertNoCompassLabels(watching, '观战页面');
   assertNoPositionMix(watching, '观战页面');
-  const watchSeatCards = classAttrs(watching).filter(
-    (value) =>
-      value.includes('rounded-2xl') &&
-      (value.includes('left-3 top-3') || value.includes('right-3 top-3') || value.includes('bottom-3 left-3'))
+  // 观战者：毡面同样只有**两张对手卡 + 一条「我」的底栏**吗？不 —— 观战者没有座位，
+  // 所以底栏整行消失，只剩顶行那两张对手卡（见 `+page.svelte` 的第三行注释）。
+  const watchFeltRows = [...watching.matchAll(/data-felt-row="([a-z]+)"/g)].map((match) => match[1]);
+  assert(
+    JSON.stringify(watchFeltRows) === JSON.stringify(['seats', 'slot', 'me']),
+    `观战页面的毡面不是三行格（实际 [${watchFeltRows.join(', ')}]）：毡面的结构对谁都不该变`
   );
-  assert(watchSeatCards.length === 3, `观战页面应找到 3 张座位卡，实际 ${watchSeatCards.length} 张`);
-  for (const value of watchSeatCards) {
-    const found = positionClasses(value);
-    assert(found.length === 1 && found[0] === 'absolute', `观战座位卡定位类应唯一为 absolute：${value.slice(0, 120)}`);
-  }
-  console.log('观战页面：无操作按钮、无牌面、无底牌标记，三张座位卡仍钉在毡面上，「?」给的是观战说明');
+  const watchTopRow =
+    /<div[^>]*data-felt-row="seats"[\s\S]*?(?=<div[^>]*data-felt-row="slot")/.exec(watching)?.[0] ?? '';
+  const watchCards = classAttrs(watchTopRow).filter((value) => value.includes('rounded-2xl'));
+  assert(
+    watchCards.length === 2,
+    `观战页面顶行应是两张对手卡，实际 ${watchCards.length} 张：观战者没有座位，不该有「我」那张卡`
+  );
+  assert(
+    (watching.match(/data-seat-bar="true"/g) ?? []).length === 0,
+    '观战页面出现了「我」的底栏：观战者没有座位'
+  );
+  console.log('观战页面：无操作按钮、无牌面、无底牌标记，毡面仍是三行格但没有「我」那条底栏，「?」给的是观战说明');
 
   // 7b) 出牌阶段：动作托盘 / 跟牌蓝框 / 赢墩徽标 ---------------------------------
   //     埋底后由庄家领出、下家跟牌。牌面是随机发的，所以期望值一律从 `/view` 现算 ——
@@ -696,24 +743,32 @@ async function main(): Promise<void> {
 
   const follower = await page(`/table/${code}`, players[nextIndex]!.credential);
   const tray = actionTrayMarkup(follower);
-  assert(tray !== null, '跟牌者页面没有动作托盘（data-action-tray）：出牌控件还挤在操作条那一行？');
-  // 形状守卫：钉在操作条**上方**（bottom-full）的一行（flex-nowrap）。截图里那次返工就是
-  // 居中悬在操作条上（-translate-y-1/2）→ 垂到手牌上；外加 flex-wrap 让「清空」与红字各占一行。
-  for (const cls of ['absolute', 'bottom-full', 'left-1/2', '-translate-x-1/2', 'z-30', 'flex-nowrap']) {
+  assert(
+    tray !== null,
+    '跟牌者页面没有**在动作带里**的动作托盘：托盘要么丢了，要么回到「钉在操作条上方」的旧锚'
+  );
+  // 形状守卫：外层铺满**毡面之外**那条动作带（absolute inset-0 + 居中 + z-30）。旧锚（bottom-full /
+  // 垂直居中）是这一版要修的东西 —— 那 40px 整根落在毡面的最后 40px 里，压住「我」那条底栏。
+  for (const cls of ['absolute', 'inset-0', 'items-center', 'justify-center', 'z-30']) {
     assert(
       tray.includes(cls),
-      `动作托盘缺少 ${cls}：单行浮层会走形（要么垂下来压住手牌，要么被撑成两行）——${tray.slice(0, 160)}`
+      `动作托盘外层缺少 ${cls}：它不再铺满动作带（要么回毡面压住底栏，要么不再居中）——${tray.slice(0, 160)}`
     );
   }
   assert(
-    !tray.includes('-translate-y-1/2') && !tray.includes('flex-wrap'),
-    `动作托盘又垂直居中或允许换行了：它会垂到操作条下面盖住手牌 ——${tray.slice(0, 160)}`
+    !tray.includes('bottom-full') && !tray.includes('-translate-y-1/2'),
+    `动作托盘又回到旧锚（bottom-full / 垂直居中）了：它会压在毡面的最后 40px 里盖住「我」那条底栏 ——${tray.slice(0, 160)}`
   );
-  // 宽度：`absolute` + `left-1/2` + 宽度 auto 时 shrink-to-fit 只有半个容器可用，flex 子项被压缩，
+  // 宽度：居中 + 宽度 auto 时 shrink-to-fit 只有半个容器可用，flex 子项被压缩，
   // 而 CJK 可以在任意字间断行 ——「出 牌」「清 空」于是竖排（截图里那次返工）。
   assert(
-    tray.includes('w-max'),
+    follower.includes('w-max'),
     `动作托盘的根节点缺少 w-max：宽度会被压成半个容器，子项被压缩后「出 牌」会竖排 ——${tray.slice(0, 160)}`
+  );
+  // 带子本身必须是常驻的一行：它不分轮到自己还是轮空，所以「轮到我 / 轮空」之间零回流
+  assert(
+    /data-action-band="true"/.test(follower),
+    '页面里没有那条常驻动作带（data-action-band）：托盘会回到毡面里'
   );
   const trayBlock = actionTrayBlock(follower);
   assert(trayBlock !== null, '取不到动作托盘的整块 HTML（data-action-tray 那一层）');
@@ -743,11 +798,26 @@ async function main(): Promise<void> {
     `跟牌蓝框数不对：页面 ${marks} 处，下家手里领出门 ${ledClass} 实为 ${expectedMarks} 张`
   );
 
-  // 不是自己回合的人：既没有托盘，也没有任何蓝框（标记只给正要出手的那个人）
-  const idle = await page(`/table/${code}`, players[(nextIndex + 1) % 3]!.credential);
-  assert(!idle.includes('data-action-tray="true"'), '没轮到的人页面上出现了动作托盘');
-  assert(!idle.includes('data-marked="true"'), '没轮到的人手上出现了蓝框标记');
+  // 不是自己回合的人：没有托盘，但**照样有该跟那一门的蓝框** —— 这是**拟选**（ADR-0021）：
+  // 有人领出之后，在座的每个人都能提前点牌想好要出什么，而「该跟哪一门」正是要提前看的事。
+  // 第三家手里的领出门张数从 `/view` 现算（与上面那条同一套算法，不写死花色）。
+  const idleCred = players[(nextIndex + 1) % 3]!.credential;
+  const idleHand = (await viewOf(code, idleCred)).you?.hand ?? [];
+  const idleMarks = (await page(`/table/${code}`, idleCred)).match(/data-marked="true"/g) ?? [];
+  const idle = await page(`/table/${code}`, idleCred);
+  assert(!idle.includes('data-action-tray="true"'), '没轮到的人页面上出现了动作托盘（托盘只该在该你出手时出现）');
+  const idleExpected = expectedMarks === 0 ? 0 : idleHand.filter((card) => cardClass(card, trump) === ledClass).length;
+  assert(
+    idleMarks.length === idleExpected,
+    `没轮到的人（第三家）手上的蓝框数不对：页面 ${idleMarks.length} 处，他手里领出门 ${ledClass} 实为 ${idleExpected} 张` +
+      '（拟选要求「有人领出后，在座的人都能看到该跟哪一门」）'
+  );
   assert(idle.includes('出牌中'), '没轮到的人页面上没有「X 出牌中」的状态句');
+  // 拟选还要能**点得动**：手牌容器必须带 selectable（否则点了没有任何反应）
+  assert(
+    idle.includes('fan selectable'),
+    '没轮到的人的手牌不是可点的（缺 `.fan.selectable`）：拟选点了没反应'
+  );
 
   // 观战者在出牌阶段也拿不到蓝框（那是手牌信息），但「距上一步」是公开的，观战者照样看得到
   const watchPlay = await page(`/table/${code}`, guest.credential);
@@ -773,8 +843,8 @@ async function main(): Promise<void> {
     '回看浮层出现在 SSR 首帧：它默认应当是关闭的（否则每次进桌都盖住毡面）'
   );
   console.log(
-    '出牌阶段：动作托盘是**钉在操作条正上方**的一条单行浮层（bottom-full、不占流、w-max 宽度、'
-      + `按钮各自 nowrap）；跟牌蓝框 ${marks} 处 = 下家领出门张数；收墩徽标「${badge[0]}」；`
+    '出牌阶段：动作托盘住在**毡面之外**那条常驻动作带里（铺满带子、居中、z-30）；'
+      + `跟牌蓝框 ${marks} 处 = 下家领出门张数；收墩徽标「${badge[0]}」；`
       + '收墩后状态条上出现「上一轮」回看入口（浮层默认关着）'
   );
 
@@ -936,7 +1006,7 @@ async function main(): Promise<void> {
   assert(home.includes('href="/learn"'), '大厅没有指向规则演示的入口');
   assert(rules.includes('href="/learn"'), '文字教程页没有指向规则演示的入口');
 
-  console.log('界面结构：position 工具类无混用，三张座位卡均为 absolute');
+  console.log('界面结构：position 工具类无混用，毡面是「顶卡 / 内容槽 / 我的底栏」三行格（顶行两张对手卡，不再各自绝对定位）');
   console.log('文案：邀请码可点复制，常驻提示已清空，? 按阶段给说明，界面无方位称谓');
   console.log(`教程：9 个小节齐备（含观战与离座），渲染 ${ruleCards} 张真实牌面；大小王牌面自洽（名字只在角落，正中是 ☀/☾）`);
   console.log(`牌面：出货样式表 ${cssHref} 已无角点（.card.pt / .card.trump::after），主牌走浅金底、级牌候选更浅一档`);

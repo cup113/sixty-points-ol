@@ -30,7 +30,8 @@
     replays = {},
     onOpenReplay,
     onClose,
-    onLeave
+    onLeave,
+    onRemoveBot
   }: {
     client: TableClient;
     active?: DrawerTabKey | null;
@@ -40,6 +41,8 @@
     onOpenReplay?: (dealNo: number) => void;
     onClose?: () => void;
     onLeave?: () => void;
+    /** 请离机器人：透传给「牌桌」页，确认弹窗挂在页面级（抽屉的 transform 会困住 fixed 弹窗） */
+    onRemoveBot?: (seat: number) => void;
   } = $props();
 
   const open = $derived(active !== null);
@@ -94,7 +97,7 @@
       hidden={active !== 'table'}
       inert={active !== 'table'}
     >
-      <TablePanel {client} {onLeave} />
+      <TablePanel {client} {onLeave} {onRemoveBot} />
     </div>
 
     {#if active === 'report'}

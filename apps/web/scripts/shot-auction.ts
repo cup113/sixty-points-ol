@@ -25,6 +25,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkPlay, type Card, type TrumpModel } from '@sixty/engine';
 
 const here = dirname(fileURLToPath(import.meta.url)); // apps/web/scripts
 const webRoot = resolve(here, '..'); // apps/web
@@ -103,6 +104,11 @@ async function waitFor(check: () => Promise<boolean>, label: string, timeoutMs =
     if (Date.now() > deadline) throw new Error(`等待「${label}」超时（${timeoutMs}ms）`);
     await new Promise((r) => setTimeout(r, 250));
   }
+}
+
+/** 断言：失败就把这一条版面判据连同实测数字一起报出来 */
+function assert(condition: boolean, message: string): void {
+  if (!condition) throw new Error(message);
 }
 
 /** 起服务端：脚本自己拉一个 vite dev（SSR 与产物同源），不依赖外部先把服务跑起来 */
@@ -262,8 +268,16 @@ async function act(code: string, credential: string, action: unknown): Promise<v
 }
 
 interface SeatView {
-  readonly view: { readonly deal: { readonly dealerSeat: number } | null };
-  readonly you: { readonly seat: number } | null;
+  readonly view: {
+    readonly deal: {
+      readonly dealerSeat: number;
+      readonly phase: string;
+      readonly trump: TrumpModel | null;
+      readonly playTurn: number | null;
+      readonly trick: { readonly plays: readonly { readonly seat: number; readonly cards: readonly Card[] }[] } | null;
+    } | null;
+  };
+  readonly you: { readonly seat: number; readonly hand: readonly Card[] } | null;
 }
 
 async function viewOf(code: string, credential: string): Promise<SeatView> {
@@ -287,6 +301,14 @@ interface Shot {
   readonly captureIndex: 0 | 1 | 2;
   /** 点开之后才有的形态（如展开「▶ 跳叫」） */
   readonly clicks?: readonly string[];
+  /**
+   * 把局面推到「一墩已经打了几张」再拍（见 driveTrick，用来量出牌点与托盘）。
+   *
+   * - `'three-clusters'`：三家都出过牌 ⇒ 引擎已收墩、`trick` 复位，出牌区改显示上一墩，
+   *   于是毡面上留着**三个出牌点**（量预算与相交）；
+   * - `'two-played'`：只出了两张 ⇒ 第三位正好轮到他出牌，**托盘在**（量它是否落在毡面之外）。
+   */
+  readonly trick?: 'three-clusters' | 'two-played';
   /** panel = 只拍叫牌面板那一块；viewport = 整屏（给上下文） */
   readonly mode: 'panel' | 'viewport';
   readonly size: { readonly width: number; readonly height: number };
@@ -294,6 +316,15 @@ interface Shot {
 
 const MOBILE = { width: 390, height: 844 };
 const DESKTOP = { width: 1280, height: 900 };
+/**
+ * 窄屏（360×780）：**不是可有可无的第二档**。
+ *
+ * 候选区那一排「数字 + 五格 + 触发钮」在 390px 上刚好放得下，所以档位被 flex 压窄那个缺陷
+ * 在 390 的截图里**量不出来**（实测最大差 0.00px）。它只在更窄的视口上出现 ——
+ * 360px 上内宽比内容少约 15px，五个槽位各被压掉约 3px，于是两行的 NT 就不再同宽。
+ * 因此「档位对齐」这条判据必须有一屏跑在 360px 上，否则它会安静地空转。
+ */
+const MOBILE_NARROW = { width: 360, height: 780 };
 
 function sceneFor(captureIndex: 0 | 1 | 2, bids: Shot['bids']): Pick<Shot, 'captureIndex' | 'bids'> {
   return { captureIndex, bids };
@@ -313,6 +344,13 @@ const SHOTS: readonly Shot[] = [
     ...sceneFor(1, [{ points: 40, strain: 'H' }]),
     mode: 'panel',
     size: MOBILE
+  },
+  {
+    file: '02b-narrow-highest-40h',
+    label: '同上但窄屏 360px：档位行放不下，五格被 flex 压窄（两行 NT 不再同宽）',
+    ...sceneFor(1, [{ points: 40, strain: 'H' }]),
+    mode: 'panel',
+    size: MOBILE_NARROW
   },
   {
     file: '03-highest-40s',
@@ -361,15 +399,24 @@ const SHOTS: readonly Shot[] = [
     ]),
     mode: 'viewport',
     size: MOBILE
+  },
+  {
+    file: '09-trick-three-clusters',
+    label: '出牌阶段：一墩打完、毡面上留着三家三堆（桌面宽度，量三个出牌点的预算与相交）',
+    ...sceneFor(0, [{ points: 40, strain: 'C' }, 'pass', 'pass']),
+    trick: 'three-clusters',
+    mode: 'viewport',
+    size: DESKTOP
+  },
+  {
+    file: '10-narrow-play-turn',
+    label: '窄屏 360px、轮到我出牌：托盘与动作带（量托盘是否整个落在毡面之外）',
+    ...sceneFor(2, [{ points: 40, strain: 'C' }, 'pass', 'pass']),
+    trick: 'two-played',
+    mode: 'viewport',
+    size: MOBILE_NARROW
   }
 ];
-
-interface Rect {
-  readonly x: number;
-  readonly y: number;
-  readonly width: number;
-  readonly height: number;
-}
 
 async function joinTarget(port: number): Promise<{ id: string; wsUrl: string }> {
   const response = await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' });
@@ -387,7 +434,284 @@ async function evaluate<T>(cdp: Cdp, expression: string): Promise<T | null> {
   return result.result?.value ?? null;
 }
 
-async function shoot(shot: Shot, port: number, cookie: { code: string; credential: string }): Promise<string> {
+/* ---------- 版面几何：量出来再断言 ---------- */
+/**
+ * 源码守卫看不见几何 —— 这一节补的就是那一段。
+ *
+ * 起因是一处**真实缺陷**：叫牌候选区里第 2 档多一枚「▶ 跳叫」，整行内容超过面板内宽，
+ * 而五个槽位没写 `shrink-0`（`w-9` 只是基准宽），于是 flex 把它们一起压窄 ——
+ * 实测第 1 档的 NT 右边缘 272.5px、第 2 档 269.0px，**差 3.5px**，宽 36.0 vs 33.5。
+ * 这种量级只能靠测量抓住，所以它在这里被钉成断言，而不是写在注释里。
+ */
+interface Rect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  readonly right: number;
+  readonly bottom: number;
+}
+
+interface MeasuredSlot extends Rect {
+  /** legal | invisible（隐形占位也占宽，所以它同样进对齐比较） */
+  readonly kind: string;
+}
+
+interface MeasuredRow {
+  readonly points: number;
+  readonly slots: readonly MeasuredSlot[];
+}
+
+interface MeasuredSpot {
+  readonly seat: number;
+  readonly rect: Rect;
+  readonly cards: readonly Rect[];
+}
+
+interface Measurement {
+  readonly panel: Rect | null;
+  readonly rows: readonly MeasuredRow[];
+  readonly spots: readonly MeasuredSpot[];
+  readonly history: {
+    /** 已经渲染出来的记录条数 */
+    readonly total: number;
+    /** 一条记录的高度（没有记录时为 0） */
+    readonly rowHeight: number;
+    readonly box: Rect | null;
+  };
+  readonly feltRows: readonly { readonly name: string; readonly rect: Rect }[];
+  readonly felt: Rect | null;
+  /** 毡面的**直接子元素**（行与行外的层都算）：用来抓「有层跑到内容槽外面去了」 */
+  readonly feltChildren: readonly {
+    readonly tag: string;
+    readonly row: string | null;
+    readonly review: boolean;
+    readonly rect: Rect;
+  }[];
+  /** 毡面与操作条之间那条**常驻动作带**（托盘住在里面，所以它必须落在毡面之外） */
+  readonly band: Rect | null;
+  /** 动作托盘：只在「这一手归你动」时存在 */
+  readonly tray: Rect | null;
+}
+
+const MEASURE = `(() => {
+  const rect = (el) => { const b = el.getBoundingClientRect();
+    return { x: b.x, y: b.y, width: b.width, height: b.height, right: b.right, bottom: b.bottom }; };
+  const one = (sel) => { const el = document.querySelector(sel); return el === null ? null : rect(el); };
+  const rows = [...document.querySelectorAll('[data-bid-row]')].map((row) => ({
+    points: Number(row.getAttribute('data-bid-row') ?? 0),
+    slots: [...row.querySelectorAll('[data-bid-slot]')].map((s) => ({ kind: s.getAttribute('data-bid-slot') ?? '', ...rect(s) }))
+  }));
+  const spots = [...document.querySelectorAll('[data-trick-spot]')].map((el) => ({
+    seat: Number(el.getAttribute('data-trick-spot') ?? -1),
+    rect: rect(el),
+    cards: [...el.querySelectorAll('.card')].map(rect)
+  }));
+  const hbox = document.querySelector('[data-bid-history]');
+  const history = { total: 0, rowHeight: 0, box: hbox === null ? null : rect(hbox) };
+  if (hbox !== null) {
+    const trs = [...hbox.querySelectorAll('tbody tr')];
+    history.total = trs.length;
+    history.rowHeight = trs.length === 0 ? 0 : trs[0].getBoundingClientRect().height;
+  }
+  return {
+    panel: one('[data-bid-panel]'),
+    rows,
+    spots,
+    history,
+    feltRows: [...document.querySelectorAll('[data-felt-row]')].map((el) => ({
+      name: el.getAttribute('data-felt-row') ?? '', rect: rect(el)
+    })),
+    felt: one('.felt'),
+    feltChildren: [...document.querySelectorAll('.felt > *')].map((el) => ({
+      tag: el.tagName.toLowerCase(),
+      row: el.getAttribute('data-felt-row'),
+      review: el.hasAttribute('data-trick-review'),
+      rect: rect(el)
+    })),
+    band: one('[data-action-band]'),
+    tray: one('[data-action-tray]')
+  };
+})()`;
+
+/** 相交面积；相邻但不重叠的盒子之间会有亚像素接触，所以 1px 以内不算相交 */
+function overlapArea(a: Rect, b: Rect): number {
+  const width = Math.min(a.right, b.right) - Math.max(a.x, b.x);
+  const height = Math.min(a.bottom, b.bottom) - Math.max(a.y, b.y);
+  return width > 1 && height > 1 ? width * height : 0;
+}
+
+function boxOf(r: Rect): string {
+  return `x ${r.x.toFixed(1)}–${r.right.toFixed(1)}, y ${r.y.toFixed(1)}–${r.bottom.toFixed(1)}`;
+}
+
+/** 一个盒子是否被另一个包住（留 0.5px 的亚像素余量） */
+function contains(outer: Rect, inner: Rect): boolean {
+  return (
+    inner.x >= outer.x - 0.5 &&
+    inner.right <= outer.right + 0.5 &&
+    inner.y >= outer.y - 0.5 &&
+    inner.bottom <= outer.bottom + 0.5
+  );
+}
+
+/**
+ * 一次收齐这一屏里所有不过的判据（不抛，返回给调用方）。
+ *
+ * 为什么不在这里直接抛：这个脚本一次跑 9 个场景，而每条判据要看的场景不同
+ * （档位对齐要有两行、出牌点要有三家出牌）。第一处失败就抛的话，
+ * 一次只能看见一个红点、修一条才发现下一条 —— 于是改成「每个场景各自收齐、
+ * 截完图继续跑下一个场景，最后由 main 把全部问题一起报出来」。
+ */
+function assertLayout(m: Measurement, file: string): { readonly summary: string; readonly problems: readonly string[] } {
+  const problems: string[] = [];
+  const fail = (message: string): void => {
+    problems.push(message);
+  };
+
+  // ① 档位行的槽逐列对齐：按**列号**比（隐形占位也占宽，所以列号可对齐）
+  const head = m.rows[0];
+  let worstDelta = 0;
+  if (head !== undefined) {
+    for (const row of m.rows.slice(1)) {
+      const cols = Math.min(head.slots.length, row.slots.length);
+      for (let i = 0; i < cols; i += 1) {
+        const a = head.slots[i]!;
+        const b = row.slots[i]!;
+        const delta = Math.max(Math.abs(a.right - b.right), Math.abs(a.x - b.x), Math.abs(a.width - b.width));
+        worstDelta = Math.max(worstDelta, delta);
+        if (delta > 0.5) {
+          fail(
+            `候选区第 ${head.points} 档第 ${i + 1} 格与第 ${row.points} 档第 ${i + 1} 格没对齐` +
+              `（左 ${a.x.toFixed(1)} / ${b.x.toFixed(1)}，宽 ${a.width.toFixed(1)} / ${b.width.toFixed(1)}，` +
+              `右 ${a.right.toFixed(1)} / ${b.right.toFixed(1)}，最大差 ${delta.toFixed(1)}px）：` +
+              '槽位又被这一行的内容压窄了（缺 shrink-0，或触发器又挤回了档位行）'
+          );
+        }
+      }
+    }
+  }
+
+  // ② 叫牌历史的**容量**：不滚动至少读得到 3 行。
+  //
+  //    判据写成「容量 ≥ 3 行」而不是「可见行数 ≥ 3」：叫牌刚开始时历史里只有 1 条记录，
+  //    那时没有任何页面能满足「可见 3 行」—— 那种断言是**做不成**的（第一版就写成那样，
+  //    于是它对着一个 275px 高的历史区报「只能读到 1/1 行」，把「容量充足」误报成失败）。
+  //    行高取渲染出来的第一条记录；一条记录都没有时按 24px 估（约等于一行 12px 字 + 内边距）。
+  if (m.history.box !== null) {
+    const rowHeight = m.history.rowHeight > 0 ? m.history.rowHeight : 24;
+    const capacity = Math.floor(m.history.box.height / rowHeight);
+    if (capacity < 3) {
+      fail(
+        `叫牌历史区只装得下约 ${capacity} 行（至少 3 行）：固定块把历史挤没了` +
+          `（历史区高 ${m.history.box.height.toFixed(1)}px，行高 ${rowHeight.toFixed(1)}px）`
+      );
+    }
+  }
+
+  // ③ 毡面必须是三行格 —— 非座位层只能住在内容槽里
+  const names = m.feltRows.map((row) => row.name);
+  if (JSON.stringify(names) !== JSON.stringify(['seats', 'slot', 'me'])) {
+    fail(`毡面不是「顶卡 / 内容槽 / 我的底栏」三行格（实际 [${names.join(', ')}]）`);
+  }
+  const slot = m.feltRows[1]?.rect;
+  if (slot === undefined) fail('毡面里找不到内容槽那一行（缺 [data-felt-row="slot"]）');
+
+  // ④ 三行互不相交
+  for (let i = 0; i < m.feltRows.length; i += 1) {
+    for (let j = i + 1; j < m.feltRows.length; j += 1) {
+      const a = m.feltRows[i]!;
+      const b = m.feltRows[j]!;
+      const area = overlapArea(a.rect, b.rect);
+      if (area > 0) fail(`毡面的「${a.name}」与「${b.name}」两行相交 ${area.toFixed(0)}px²`);
+    }
+  }
+
+  // ⑤ 非座位层必须在内容槽里（叫牌面板与三个出牌点）
+  if (slot !== undefined) {
+    const layers: { readonly label: string; readonly rect: Rect | null }[] = [
+      { label: '叫牌面板', rect: m.panel },
+      ...m.spots.map((spot) => ({ label: `座位 ${spot.seat} 的出牌点`, rect: spot.rect }))
+    ];
+    for (const layer of layers) {
+      if (layer.rect === null) continue;
+      if (!contains(slot, layer.rect)) {
+        fail(`${layer.label}越出了内容槽（${boxOf(layer.rect)} 不在 ${boxOf(slot)} 里）`);
+      }
+    }
+
+    // ⑤b 逐个子元素穷举：毡面的直接子元素只许是**三行**与那张有意做成模态的回看浮层。
+    //     上面 ⑤ 只查「我点名的那几个层」，于是「又有人往毡面上放了一层」会漏过去 ——
+    //     这正是注入实验 C 抓出来的：把一个状态条塞回毡面最后一行，上面几条全绿。
+    for (const child of m.feltChildren) {
+      if (child.row !== null || child.review) continue;
+      if (!contains(slot, child.rect)) {
+        fail(
+          `毡面里有一个「不属于任何一行」的 ${child.tag} 越出了内容槽` +
+            `（${boxOf(child.rect)} 不在 ${boxOf(slot)} 里）：非座位层只能住在 data-felt-row="slot" 里，` +
+            '否则它又会自己算偏移、与别的层压在一起（截图里的 #3 #5 就是这么来的）'
+        );
+      }
+    }
+  }
+
+  // ⑥ 动作带必须在毡面**之外**（托盘进毡面就是 #4：压住「我」那条底栏）
+  if (m.band === null) {
+    fail('毡面与操作条之间没有常驻动作带（缺 [data-action-band]）');
+  } else if (m.felt !== null) {
+    const area = overlapArea(m.band, m.felt);
+    if (area > 0) fail(`动作带压在毡面上 ${area.toFixed(0)}px²（托盘会盖住「我」那条底栏）`);
+  }
+
+  // ⑦ 出牌区的各点互不相交；每张牌都在自己那一点的预算里，且不同点的牌互相不叠
+  for (let i = 0; i < m.spots.length; i += 1) {
+    const spot = m.spots[i]!;
+    for (const card of spot.cards) {
+      if (!contains(spot.rect, card)) {
+        fail(`座位 ${spot.seat} 的出牌点里有牌越出预算（牌 ${boxOf(card)} 不在 ${boxOf(spot.rect)} 里）`);
+      }
+    }
+    for (let j = i + 1; j < m.spots.length; j += 1) {
+      const other = m.spots[j]!;
+      const area = overlapArea(spot.rect, other.rect);
+      if (area > 0) fail(`座位 ${spot.seat} 与座位 ${other.seat} 的出牌点相交 ${area.toFixed(0)}px²`);
+      for (const card of spot.cards) {
+        for (const otherCard of other.cards) {
+          const crossed = overlapArea(card, otherCard);
+          if (crossed > 0) {
+            fail(
+              `座位 ${spot.seat} 与座位 ${other.seat} 出的牌互相叠了 ${crossed.toFixed(0)}px²` +
+                `（${boxOf(card)} 与 ${boxOf(otherCard)}）：出牌点必须有各自的宽度预算，不能靠错位碰运气`
+            );
+          }
+        }
+      }
+    }
+  }
+
+  // ⑧ 托盘必须整个落在动作带里 —— 这是 #4（托盘压住「我」那条底栏）的结构化判据：
+  //    托盘 ⊆ 动作带，且动作带 ∩ 毡面 = ∅ ⇒ 托盘 ∩ 毡面 = ∅。
+  if (m.tray !== null) {
+    if (m.band === null) {
+      fail('动作托盘出现了，但没有动作带可容纳它（托盘又会压在毡面上）');
+    } else if (!contains(m.band, m.tray)) {
+      fail(`动作托盘越出了动作带（托盘 ${boxOf(m.tray)} 不在带 ${boxOf(m.band)} 里）`);
+    }
+  }
+
+  const rowHeight = m.history.rowHeight > 0 ? m.history.rowHeight : 24;
+  const capacity = m.history.box === null ? 0 : Math.floor(m.history.box.height / rowHeight);
+  const summary =
+    `档位对齐最大差 ${worstDelta.toFixed(2)}px；历史容量 ${capacity} 行（已录 ${m.history.total} 条）；` +
+    `内容槽 ${slot?.height.toFixed(0) ?? '—'}px；出牌点张数 ${m.spots.map((spot) => `${spot.seat}:${spot.cards.length}`).join(' ') || '（本场景无出牌）'}`;
+  return { summary, problems };
+}
+
+async function shoot(
+  shot: Shot,
+  port: number,
+  cookie: { code: string; credential: string }
+): Promise<{ readonly path: string; readonly summary: string; readonly problems: readonly string[] }> {
   const target = await joinTarget(port);
   const cdp = await connectCdp(target.wsUrl);
   const outPath = join(outDir, `${shot.file}.png`);
@@ -453,13 +777,24 @@ async function shoot(shot: Shot, port: number, cookie: { code: string; credentia
             height: Math.round(box.height + pad * 2),
             scale: 1
           };
+    // 版面几何：**先量再拍**（量的是视口坐标，与截图无关）。不过判据也照拍 ——
+    // 那张 PNG 正是「哪里不对」的证据，最后与文字一起报出来。
+    const measurement = await evaluate<Measurement>(cdp, MEASURE);
+    if (measurement === null) throw new Error(`${shot.file}：取不到版面测量结果（页面还没渲染完？）`);
+    const layout = assertLayout(measurement, shot.file);
+
     const capture = (await cdp.send('Page.captureScreenshot', {
       format: 'png',
       captureBeyondViewport: box !== null,
       ...(clip === undefined ? {} : { clip })
     })) as { data: string };
     writeFileSync(outPath, Buffer.from(capture.data, 'base64'));
-    return outPath;
+    console.log(`    ↳ ${layout.summary}`);
+    if (layout.problems.length > 0) {
+      console.log(`    ✗ ${layout.problems.length} 条版面判据不过：`);
+      for (const problem of layout.problems) console.log(`      - ${problem}`);
+    }
+    return { path: outPath, summary: layout.summary, problems: layout.problems };
   } finally {
     cdp.close();
     await fetch(`http://127.0.0.1:${port}/json/close/${target.id}`).catch(() => undefined);
@@ -468,7 +803,51 @@ async function shoot(shot: Shot, port: number, cookie: { code: string; credentia
 
 /* ---------- 每个场景：新开一桌，把叫牌推到那一步，再拍 ---------- */
 
-async function runShot(shot: Shot, port: number, stamp: number, index: number): Promise<string> {
+/**
+ * 把局面推到「这一墩已经出了几张牌」：埋底 → 领出 → 跟牌。
+ *
+ * 牌面是随机发的，所以每一步都从 `/view` 现算一张合法牌（写死花色只在某一种发牌下通过 = 空转），
+ * 判据用的是引擎的 `checkPlay`，与界面同一份规则。
+ *
+ * 出三张之后赢家要领出下一轮，而那需要它自己出手 —— 这三个座位都是脚本驱动的身份（不是机器人），
+ * 所以画面会停在「三家都出过、等赢家领出」这一帧。
+ */
+async function driveTrick(
+  code: string,
+  seats: readonly Credential[],
+  declarerSeat: number,
+  plays: number
+): Promise<void> {
+  // 本脚本的场景都是「一叫两 pass」，所以庄家 = 第一个叫牌的那位（= 发牌人，不一定是座位 0）
+  const declarer = seats[declarerSeat]!;
+  const opening = await viewOf(code, declarer.credential);
+  const hand = opening.you?.hand ?? [];
+  if (opening.view.deal === null || hand.length === 0) throw new Error('出牌场景：庄家还没有手牌视图');
+  await act(code, declarer.credential, { type: 'bury', cards: hand.slice(0, 3) });
+
+  for (let step = 0; step < plays; step += 1) {
+    const turn = (await viewOf(code, declarer.credential)).view.deal?.playTurn ?? null;
+    if (turn === null) throw new Error(`出牌场景：该出第 ${step + 1} 张牌时没有人轮得到`);
+    const state = await viewOf(code, seats[turn]!.credential);
+    const deal = state.view.deal;
+    const own = state.you?.hand ?? [];
+    if (deal === null || deal.trump === null || own.length === 0) {
+      throw new Error(`出牌场景：座位 ${turn} 看不到自己该出的牌`);
+    }
+    const plays = deal.trick?.plays ?? [];
+    const lead = plays.length > 0 ? plays[0]!.cards : null;
+    const card = own.find((candidate) => checkPlay(own, [candidate], deal.trump, lead) === null);
+    if (card === undefined) throw new Error(`出牌场景：座位 ${turn} 手里找不到一张合法出牌`);
+    await act(code, seats[turn]!.credential, { type: 'play', cards: [card] });
+  }
+}
+
+async function runShot(
+  shot: Shot,
+  port: number,
+  stamp: number,
+  index: number
+): Promise<{ readonly path: string; readonly summary: string; readonly problems: readonly string[] }> {
   const seats = await Promise.all(
     [0, 1, 2].map((i) => claim(`验收${index}${i}-${stamp}`))
   );
@@ -495,6 +874,9 @@ async function runShot(shot: Shot, port: number, stamp: number, index: number): 
     // 叫牌严格按座位轮转，超过三个人就绕回第一位（成交前那一轮 pass 会绕回来）
     await act(code, order[i % 3]!.credential, { type: 'bid', call });
   }
+  if (shot.trick !== undefined) {
+    await driveTrick(code, seats, dealer, shot.trick === 'two-played' ? 2 : 3);
+  }
   const actor = order[shot.captureIndex]!;
   return await shoot(shot, port, { code, credential: actor.credential });
 }
@@ -506,19 +888,25 @@ async function main(): Promise<void> {
   const server = await startServer();
   const chrome = await startChrome();
   const stamp = Date.now() % 100000;
-  const written: { file: string; label: string }[] = [];
+  const written: { file: string; label: string; summary: string }[] = [];
+  /** 全部场景的问题攒到最后一起报：第一处失败就退出的话，一次只能看见一个红点 */
+  const failures: string[] = [];
   try {
     for (const [index, shot] of SHOTS.entries()) {
-      const path = await runShot(shot, chrome.port, stamp, index);
-      written.push({ file: path, label: shot.label });
+      const result = await runShot(shot, chrome.port, stamp, index);
+      written.push({ file: result.path, label: shot.label, summary: result.summary });
       console.log(`✔ ${shot.file}.png  ${shot.label}`);
+      for (const problem of result.problems) failures.push(`${shot.file}：${problem}`);
     }
   } finally {
     chrome.process.kill();
     server.process?.kill();
   }
   console.log(`\n共 ${written.length} 张，写在 ${outDir}`);
-  for (const item of written) console.log(` - ${item.file}`);
+  for (const item of written) console.log(` - ${item.file}\n   ${item.summary}`);
+  if (failures.length > 0) {
+    throw new Error(`版面判据不过 ${failures.length} 条：\n  - ${failures.join('\n  - ')}`);
+  }
 }
 
 await main();

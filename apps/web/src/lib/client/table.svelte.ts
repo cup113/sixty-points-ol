@@ -58,7 +58,7 @@ export class TableClient {
   }
 
   #snapshot(): SelectionContext {
-    return { role: this.role, view: this.view, you: this.you };
+    return { role: this.role, you: this.you };
   }
 
   disconnect(): void {

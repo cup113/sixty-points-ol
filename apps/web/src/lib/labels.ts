@@ -409,11 +409,17 @@ export interface BidTier {
 
 /**
  * 跳叫触发钮的形态：
- * - `row-end`：最便宜档不满五格（最高叫品是花色），第二档行末一枚窄钮；
- * - `full-row`：最便宜档已满五格（NT / 没人叫），整个第二行是一枚宽钮；
+ * - `line`：档位区**下面**右对齐的一枚细钮（跳叫独立成行）；
  * - `none`：已经展开，不再有触发钮。
+ *
+ * 为什么把早先的 `row-end`（第二档行末）退休掉：触发器一旦挤进档位行，那一行就比其它行宽，
+ * 而槽位（`w-9`）没有 `shrink-0`，flex 于是**只把这一行的五个槽一起压窄**。实测 360px 视口上
+ * 第 5 格的宽 36.0 vs 32.3、右缘相差 18.3px —— 两行的 NT 明显不在同一条竖线上（368px 的
+ * 真实机型上是 3.5px，肉眼也看得出来）。跳叫独立成行之后，**档位行恒为「数字 + 五格」**，
+ * 对齐就是结构保证，而不是「这次刚好放得下」。判据在 `scripts/shot-auction.ts` 的实测断言
+ * （源码守卫看不见几何）。
  */
-export type BidTrigger = 'row-end' | 'full-row' | 'none';
+export type BidTrigger = 'line' | 'none';
 
 export interface BidLayout {
   readonly tiers: readonly BidTier[];
@@ -428,11 +434,12 @@ export function bidTiers(view: PublicView, expanded: boolean): BidLayout {
   }));
   if (expanded) return { tiers, trigger: 'none' };
   const first = tiers[0];
-  // 最便宜档满五格 = 同分没有可压的花色，再上一档就已经是跳叫 —— 第二行整行让给触发钮
+  // 最便宜档满五格 = 同分没有可压的花色，再上一档就已经是跳叫 —— 于是只摆这一档，
+  // 剩下的位置让给下面那行触发钮（这是既有判据，与「扳手放哪儿」无关，所以照旧）。
   if (first !== undefined && first.slots.every((slot) => slot.legal)) {
-    return { tiers: [first], trigger: 'full-row' };
+    return { tiers: [first], trigger: 'line' };
   }
-  return { tiers, trigger: 'row-end' };
+  return { tiers, trigger: 'line' };
 }
 
 /**

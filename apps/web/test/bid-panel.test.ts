@@ -99,11 +99,11 @@ test('反证：旧的补位形状必须被判出来（它连固定槽标记都�
 });
 
 /** 近似形状：槽标记齐全，却仍按「合法花色」摆 —— 必须被单列的那条规则抓住 */
-const PADDED_SLOTS = `<div data-bid-trigger="row-end">
+const PADDED_SLOTS = `<div data-bid-trigger="line">
   {#each rows as row (row.points)}
     {#each row.strains as strain (strain)}
-      <span data-bid-slot="legal">{BID_GLYPH[strain]}</span>
-      <span data-bid-slot="invisible" class="invisible">·</span>
+      <span data-bid-slot="legal" class="w-9 shrink-0">{BID_GLYPH[strain]}</span>
+      <span data-bid-slot="invisible" class="invisible w-9 shrink-0">·</span>
     {/each}
   {/each}
 </div>`;
@@ -115,9 +115,9 @@ test('反证：标记齐全但仍按合法花色摆放（补位）必须被判�
 });
 
 test('反证：不可叫的花色渲染成 <button>（隐形但可点）必须被判出来', () => {
-  const clickablePlaceholder = `<div data-bid-trigger="row-end">
-  <button data-bid-slot="legal">♣</button>
-  <button data-bid-slot="invisible" class="invisible">♦</button>
+  const clickablePlaceholder = `<div data-bid-trigger="line">
+  <button data-bid-slot="legal" class="w-9 shrink-0">♣</button>
+  <button data-bid-slot="invisible" class="invisible w-9 shrink-0">♦</button>
 </div>`;
   const result = checkBidSlots(clickablePlaceholder);
   assert.equal(result.ok, false, '可点的隐形占位被判为通过：那正是误触的来源');
@@ -126,12 +126,42 @@ test('反证：不可叫的花色渲染成 <button>（隐形但可点）必须�
 
 test('反证：缺 data-bid-trigger、或取值不在枚举里，都必须被判出来', () => {
   assert.match(
-    checkBidSlots('<div><span data-bid-slot="legal">♣</span></div>').reason,
+    checkBidSlots('<div><span data-bid-slot="legal" class="w-9 shrink-0">♣</span></div>').reason,
     /data-bid-trigger/
   );
   assert.match(
-    checkBidSlots('<div data-bid-trigger="maybe"><span data-bid-slot="legal">♣</span></div>').reason,
-    /row-end/
+    checkBidSlots(
+      '<div data-bid-trigger="maybe"><span data-bid-slot="legal" class="w-9 shrink-0">♣</span></div>'
+    ).reason,
+    /line/
+  );
+});
+
+/**
+ * 几何不变式的反证：**跳叫触发钮挤回档位行**、**槽位丢掉 shrink-0** —— 两者都会让
+ * 「同一横向位置在不同档之间换了位置」，而它们在渲染完的 HTML 上根本看不出来
+ * （隐形占位与可叫槽长得一样）。真正的像素证据在 `scripts/shot-auction.ts` 的实测断言。
+ */
+test('反证：触发钮挤进档位行、或槽位丢掉 shrink-0，都必须被判出来', () => {
+  const noShrink = `<div data-bid-trigger="line">
+  <div data-bid-row="40">
+    <span class="w-7 shrink-0">40</span>
+    <button data-bid-slot="legal" class="w-9">♣</button>
+  </div>
+</div>`;
+  assert.match(checkBidSlots(noShrink).reason, /shrink-0/, '槽位丢掉 shrink-0 没有被判出来');
+
+  const triggerInsideRow = `<div data-bid-trigger="line">
+  <div data-bid-row="40">
+    <span class="w-7 shrink-0">40</span>
+    <button data-bid-slot="legal" class="w-9 shrink-0">♣</button>
+    <button data-bid-jump="line">▶ 跳叫</button>
+  </div>
+</div>`;
+  assert.match(
+    checkBidSlots(triggerInsideRow).reason,
+    /档位行/,
+    '触发钮挤进档位行没有被判出来（那一行会被压窄，两行的槽就错开了）'
   );
 });
 

@@ -178,20 +178,20 @@ test('bidTiers：四场景的档位与触发形态（判定基准 = 当前最高
     readonly trigger: BidTrigger;
     readonly tiers: readonly string[];
   }[] = [
-    { name: '没人叫', highest: null, trigger: 'full-row', tiers: ['40: ♣ ♦ ♥ ♠ NT'] },
+    { name: '没人叫', highest: null, trigger: 'line', tiers: ['40: ♣ ♦ ♥ ♠ NT'] },
     {
       name: '最高 40♣',
       highest: { points: 40, strain: 'C' },
-      trigger: 'row-end',
+      trigger: 'line',
       tiers: ['40: · ♦ ♥ ♠ NT', '45: ♣ ♦ ♥ ♠ NT']
     },
     {
       name: '最高 40♠',
       highest: { points: 40, strain: 'S' },
-      trigger: 'row-end',
+      trigger: 'line',
       tiers: ['40: · · · · NT', '45: ♣ ♦ ♥ ♠ NT']
     },
-    { name: '最高 40NT', highest: { points: 40, strain: 'NT' }, trigger: 'full-row', tiers: ['45: ♣ ♦ ♥ ♠ NT'] }
+    { name: '最高 40NT', highest: { points: 40, strain: 'NT' }, trigger: 'line', tiers: ['45: ♣ ♦ ♥ ♠ NT'] }
   ];
   for (const item of cases) {
     const layout = bidTiers(viewWithHighest(item.highest), false);
@@ -202,6 +202,25 @@ test('bidTiers：四场景的档位与触发形态（判定基准 = 当前最高
       `${item.name} 的档位不对`
     );
   }
+});
+
+/**
+ * 触发形态**只有两种取值**，而且未展开时恒为 `line`（跳叫独立成行）。
+ *
+ * 为什么单列一条：`row-end`（触发钮吊在第二档行末）看起来只是「少占一行」，但它会让那一行
+ * 比别的行宽 —— 槽位没有 shrink-0 时 flex 把该行五个槽一起压窄，两行的 NT 就不在同一条
+ * 竖线上（360px 视口实测右缘相差 18.3px）。所以「触发器不进档位行」是**形状**判据，
+ * 不是排版偏好：这条测试钉住枚举，源码守卫钉住它不在行内，`shot-auction.ts` 钉住真实像素。
+ */
+test('bidTiers：未展开时触发形态恒为 line（触发钮不进档位行），展开后没有触发钮', () => {
+  for (const highest of [null, { points: 40, strain: 'C' } as const, { points: 40, strain: 'NT' } as const]) {
+    assert.equal(
+      bidTiers(viewWithHighest(highest), false).trigger,
+      'line',
+      `最高叫品 ${JSON.stringify(highest)}：未展开时触发形态必须是 line（跳叫独立成行）`
+    );
+  }
+  assert.equal(bidTiers(viewWithHighest(null), true).trigger, 'none', '展开后不该再有触发钮');
 });
 
 test('bidTiers：最便宜档满五格（NT / 没人叫）时只给这一档 —— 再上一档就已经是跳叫', () => {
