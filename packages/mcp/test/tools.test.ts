@@ -167,15 +167,15 @@ test('get_state：紧凑投影 + you 分开给，并说清现在轮到谁', asyn
   assert.equal(state.you?.seat, 0);
   assert.equal(typeof state.you?.hand[0], 'string', '默认出参是紧凑投影：牌是字符串，不是对象');
   assert.equal(state.view?.deal?.phase, 'auction');
-  assert.equal(state.turn.phase, 'auction');
-  assert.equal(state.turn.isYourTurn, true);
   assert.equal(state.turn.canAct, true);
+  // turn 不再重复 phase / isYourTurn（前者看 view.deal.phase，后者与 canAct 同值）——见 turnOf 的注释
+  assert.equal('phase' in state.turn, false, 'turn 不该重复 deal.phase');
+  assert.equal('isYourTurn' in state.turn, false, 'turn 不该重复 canAct 的同值字段');
 });
 
 test('get_state：不是自己的回合时 canAct 为假，也不给合法集', async () => {
   const api = new FakeApi({ seat: 1 }); // 首副由座位 0 先叫
   const state = await call<TableState>('get_state', api);
-  assert.equal(state.turn.isYourTurn, false);
   assert.equal(state.turn.canAct, false);
   assert.equal(state.turn.legalBids, undefined);
   assert.match(state.turn.hint, /wait_for_turn/);
@@ -445,7 +445,7 @@ test('动作自带等待：成功之后直接给「下一次轮到你能动」�
   );
 
   assert.equal(out.timedOut, false);
-  assert.equal(out.turn.phase, 'bury', '另外两家 pass 之后应当已经成交、进入埋底，而且庄家是我');
+  assert.equal(out.view?.deal?.phase, 'bury', '另外两家 pass 之后应当已经成交、进入埋底，而且庄家是我');
   assert.equal(out.turn.canAct, true);
   assert.equal(api.actions.length, 1, '只该发生我自己那一个动作');
   assert.ok(api.reads >= 2, `等待期间应当至少读两次局面，实际 ${api.reads}`);
@@ -569,7 +569,6 @@ test('还没发牌时 get_state 可用，deal 之后进入叫牌', async () => {
   const before = await call<TableState>('get_state', api);
   assert.equal(before.view, null);
   assert.equal(before.you, null, '还没发牌时没有手牌可给');
-  assert.equal(before.turn.phase, 'lobby');
   assert.equal(before.turn.canAct, true);
   assert.match(before.turn.hint, /deal/);
 

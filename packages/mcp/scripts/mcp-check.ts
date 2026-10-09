@@ -70,7 +70,9 @@ const STDIO_ENTRY = fileURLToPath(new URL('../src/stdio.ts', import.meta.url));
  *
  * **调用数才是真正的探测器**：逐张 `check_play` 会让它从 20 出头涨到 40 以上，
  * 而每次探测还要把整段会话再投喂一遍 —— 那才是这条工具面要避免的浪费。
- * 字节数是粗线条的第二道：它随副数缓慢增长（`history` 每副多一行），所以留得宽松些。
+ * 字节数是粗线条的第二道，**故意留得宽松**（精确的那一道是
+ * `test/payload-budget.test.ts`：一副实收 18,453 / 结算单帧 1,355，见 ADR-0019）。
+ * 自 ADR-0019 起默认负载不再随副数累积，所以这里的字节数不再有「每副多一行」的漂移。
  */
 const CALLS_PER_DEAL = 26;
 const BYTES_PER_DEAL = 60_000;
@@ -462,7 +464,8 @@ async function playOneDeal(session: Session): Promise<CompactView> {
           const opening = state.turn.legalBids?.[0];
           assert.ok(opening !== undefined, '轮到叫牌却没给 turn.legalBids');
           // 叫品入参与出参同形（紧凑串）：把第一个候选原样抄回去即可（它是最低叫品）
-          const call = deal.auction.length === 0 ? opening : 'pass';
+          // `auction` 是阶段门控字段（ADR-0019）：只有叫牌阶段才在负载里，这里正处在那个分支
+          const call = (deal.auction ?? []).length === 0 ? opening : 'pass';
           if (!waitedOnce) {
             // 顺手钉住「等待有界」：先不等待地叫一口（此刻就不是自己的回合了），
             // 再从一个「轮不到自己」的位置等一次 —— 必须超时返回，而不是挂住会话
@@ -1042,7 +1045,7 @@ async function runTransport(
     // 同一个调用在两条传输上必须同一个答案（这次的真实缺陷就在这条线上）
     await assertClaimRejectsOwnName(client, session0.name, title);
 
-    // 上一副结算后 history 会多一行，所以每副单独算预算
+    // 每副单独算预算（ADR-0019 之后默认负载不再随副数累积，所以两副的账应当基本一样）
     for (let index = 0; index < DEALS; index++) {
       const before = { calls: toolCalls, bytes: delivered };
       const scored = await playOneDeal(session);

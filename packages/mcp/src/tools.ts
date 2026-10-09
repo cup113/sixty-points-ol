@@ -103,18 +103,81 @@ const VERBOSE_FIELD = z.boolean().optional().describe('true＝原样负载');
 /** 只在需要 6 位码的动作里带上 code 字段 */
 const codeField = { code: CODE_FIELD };
 
-type ToolPhase = 'lobby' | 'auction' | 'bury' | 'play' | 'scored' | 'finished';
-
 export interface TurnSummary {
-  readonly phase: ToolPhase;
-  readonly isYourTurn: boolean;
   /** 现在你能做点事吗（发牌/叫牌/埋底/出牌/开下一副都算） */
   readonly canAct: boolean;
+  /** 一句话：此刻该干什么。规则细节归 read_rules，这里不复述（每帧都重发的字段要短） */
   readonly hint: string;
   /** 轮到你在叫牌：合法叫品集，紧凑叫品串（与牌桌叫牌面板同一份 `bidCandidates` 派生） */
   readonly legalBids?: readonly string[] | undefined;
   /** 轮到你在出牌：跟牌/领出的**约束**（不复述手牌，模型自己手上有 you.hand） */
   readonly legalPlay?: PlayHint | undefined;
+}
+
+/**
+ * 「现在轮到谁、我能做什么」—— 工具面自己的摘要，不新增任何视图类型：
+ * 事实全部来自服务器的负载（公共视图 + `you`），这里只是翻译成 agent 一眼能读懂的判断。
+ *
+ * **不重复**（每帧都重发，重复的字段是纯税）：
+ *   - `phase`：`view.deal.phase` 已经有了，大厅时 `view === null` 本身就说明了；
+ *   - `isYourTurn`：它的值与 `canAct` 在**每一个分支**里都相同 —— 留一个就够。
+ */
+export function turnOf(role: Role, view: StreamPayload['view'], you: PlayerSeat | null): TurnSummary {
+  // 角色只认 `role`：`you` 为 null 有第二种含义（在座、但这副还没发牌），不能拿来判断观战
+  if (role !== 'player') {
+    return {
+      canAct: false,
+      hint: '你在观战：能读局面与说明，动作要求先入座（take_seat；有邀请码才用 join_table）。'
+    };
+  }
+
+  if (view === null || view.deal === null) {
+    return { canAct: true, hint: '还没发牌：人齐后用 deal 开第一副。' };
+  }
+  if (view.status === 'finished') {
+    return { canAct: true, hint: '对局已结束（见 view.result）：用 new_game 开新局。' };
+  }
+  if (you === null) {
+    // 有牌局却拿不到自己那一份：服务端的角色判定异常，如实说出来而不是瞎猜
+    return {
+      canAct: false,
+      hint: '服务端判你在座却没给手牌（you 为 null）：重新 get_state，或检查这个凭据的身份。'
+    };
+  }
+
+  const deal = view.deal;
+  switch (deal.phase) {
+    case 'auction': {
+      const mine = deal.auctionTurn === you.seat;
+      return {
+        canAct: mine,
+        hint: mine
+          ? '轮到你叫牌：turn.legalBids 里挑一个原样喂给 bid.call（也可 "pass"）。'
+          : `等座位 ${deal.auctionTurn} 叫牌（要等用 wait_for_turn）。`
+      };
+    }
+    case 'bury': {
+      const mine = you.isDeclarer;
+      return {
+        canAct: mine,
+        hint: mine ? '你是庄家：用 bury 恰好扣 3 张进底。' : '等庄家埋底。'
+      };
+    }
+    case 'play': {
+      const mine = deal.playTurn === you.seat;
+      const leading = deal.trick === null || deal.trick.plays.length === 0;
+      return {
+        canAct: mine,
+        hint: mine
+          ? leading
+            ? '轮到你领出：单张，或同门顺子。'
+            : '轮到你跟牌：按 turn.legalPlay 出（同门同张数、结构优先）。'
+          : `等座位 ${deal.playTurn ?? '?'} 出牌（要等用 wait_for_turn）。`
+      };
+    }
+    case 'scored':
+      return { canAct: true, hint: '本副已结算（见 view.deal.summary）：用 deal 开下一副。' };
+  }
 }
 
 /** 紧凑投影 + turn：默认出参 */
@@ -132,103 +195,6 @@ export type AnyTableState = TableState | RawTableState;
 
 /** 动作与等待在局面之外多说的两句：`timedOut` 只表示「等了但没等到」 */
 export type ActionResult = AnyTableState & { readonly timedOut?: boolean; readonly note?: string };
-
-function phaseOf(view: StreamPayload['view']): ToolPhase {
-  if (view === null) return 'lobby';
-  if (view.status === 'finished') return 'finished';
-  const deal = view.deal;
-  if (deal === null) return 'lobby';
-  return deal.phase;
-}
-
-/**
- * 「现在轮到谁、我能做什么」—— 工具面自己的摘要，不新增任何视图类型：
- * 事实全部来自服务器的负载（公共视图 + `you`），这里只是翻译成 agent 一眼能读懂的判断。
- */
-export function turnOf(role: Role, view: StreamPayload['view'], you: PlayerSeat | null): TurnSummary {
-  const phase = phaseOf(view);
-
-  // 角色只认 `role`：`you` 为 null 有第二种含义（在座、但这副还没发牌），不能拿来判断观战
-  if (role !== 'player') {
-    return {
-      phase,
-      isYourTurn: false,
-      canAct: false,
-      hint: '你在观战（没有座位）：能读局面与说明，动作要求先入座 —— 用 take_seat 坐上空座（另有邀请码时才用 join_table 进桌）。'
-    };
-  }
-
-  if (view === null || view.deal === null) {
-    return {
-      phase,
-      isYourTurn: true,
-      canAct: true,
-      hint: '还没发牌：三人到齐后任意一人用 deal 开始第一副。'
-    };
-  }
-  if (view.status === 'finished') {
-    return {
-      phase: 'finished',
-      isYourTurn: true,
-      canAct: true,
-      hint: '对局已结束（见 view.result）：用 new_game 开新对局，级别重置。'
-    };
-  }
-  if (you === null) {
-    // 有牌局却拿不到自己那一份：服务端的角色判定异常，如实说出来而不是瞎猜
-    return {
-      phase,
-      isYourTurn: false,
-      canAct: false,
-      hint: '服务端判你在座却没给手牌（you 为 null）：重新 get_state，或检查这个凭据的身份。'
-    };
-  }
-
-  const deal = view.deal;
-  switch (deal.phase) {
-    case 'auction': {
-      const mine = deal.auctionTurn === you.seat;
-      return {
-        phase: 'auction',
-        isYourTurn: mine,
-        canAct: mine,
-        hint: mine
-          ? '轮到你叫牌：turn.legalBids 就是全部合法叫品，挑一个原样喂给 bid 的 call（也可以 "pass"）。'
-          : `等座位 ${deal.auctionTurn} 叫牌（要等就 wait_for_turn）。`
-      };
-    }
-    case 'bury': {
-      const mine = you.isDeclarer;
-      return {
-        phase: 'bury',
-        isYourTurn: mine,
-        canAct: mine,
-        hint: mine ? '你是庄家：用 bury 恰好扣 3 张进底。' : '等庄家埋底。'
-      };
-    }
-    case 'play': {
-      const mine = deal.playTurn === you.seat;
-      const leading = deal.trick === null || deal.trick.plays.length === 0;
-      return {
-        phase: 'play',
-        isYourTurn: mine,
-        canAct: mine,
-        hint: mine
-          ? leading
-            ? '轮到你领出：单张，或同门顺子（多张必须同门且严格相邻）。'
-            : '轮到你跟牌：按 turn.legalPlay 的约束出（同门同张数，结构优先）。'
-          : `等座位 ${deal.playTurn ?? '?'} 出牌（要等就 wait_for_turn）。`
-      };
-    }
-    case 'scored':
-      return {
-        phase: 'scored',
-        isYourTurn: true,
-        canAct: true,
-        hint: '本副已结算（见 view.deal.summary）：用 deal 开下一副。'
-      };
-  }
-}
 
 /**
  * 合法叫品集拍平成紧凑串（`["40C","40D",…,"55NT"]`，分数升序、同分按 C<D<H<S<NT）。

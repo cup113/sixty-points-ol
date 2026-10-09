@@ -14,7 +14,14 @@ import test from 'node:test';
 
 import { HELP_KEYS, helpKeyOf, phaseHelp, type HelpContext, type HelpKey } from '@sixty/engine';
 
-const ALL_KEYS: readonly HelpKey[] = [
+/**
+ * 与阶段无关的**参考键**：`helpKeyOf` 永不返回它们（网页「?」弹层因此看不到），
+ * 但它们是 `HELP_KEYS` 的成员 —— MCP 的 `read_rules` 全量读法会给出。
+ */
+const REFERENCE_KEYS: readonly HelpKey[] = ['trump-order', 'runs'];
+
+/** `helpKeyOf` 能落到的**阶段键**：弹层与阶段一一对应 */
+const CONTEXT_KEYS: readonly HelpKey[] = [
   'lobby',
   'auction',
   'bury-declarer',
@@ -26,8 +33,12 @@ const ALL_KEYS: readonly HelpKey[] = [
   'spectate'
 ];
 
-/** 每个阶段必须讲到的关键词：漏了就是「说不完整」 */
+const ALL_KEYS: readonly HelpKey[] = [...REFERENCE_KEYS, ...CONTEXT_KEYS];
+
+/** 每条说明必须讲到的关键词：漏了就是「说不完整」 */
 const REQUIRED: Record<HelpKey, readonly string[]> = {
+  'trump-order': ['大王', '小王', '主级', '副级', '跳过级牌', '先出为大'],
+  runs: ['顺子', '跳过级牌', '主牌', '至多含一张副级', '杀牌', '字典序'],
   lobby: ['三人', '开始第一副', '邀请', '17', '暗底'],
   auction: ['40', '加 5 分', '♣ < ♦ < ♥ < ♠ < 无主', '两家不叫', '庄家', '级牌', '认领责任'],
   'bury-declarer': ['3 张', '保底', '抠底', '末轮张数'],
@@ -108,7 +119,7 @@ test('阶段条的四步都连着真实小节', () => {
 });
 
 test('测试里的阶段清单与引擎导出的 HELP_KEYS 一致', () => {
-  // HELP_KEYS 是 MCP 工具面 read_rules 的遍历顺序；新增一个阶段必须两边都改，
+  // HELP_KEYS 是 MCP 工具面 read_rules 的遍历顺序；新增一段必须两边都改，
   // 否则工具面会漏掉一整段说明，而这里的守卫会直接红。
   assert.deepEqual([...ALL_KEYS].sort(), [...HELP_KEYS].sort(), 'HELP_KEYS 与本文件的 ALL_KEYS 不一致');
 });
@@ -149,7 +160,35 @@ test('helpKeyOf 覆盖全部九种状态且都能落到具体某段', () => {
     assert.equal(key, expected, `${JSON.stringify(context)} 应为 ${expected}`);
     reached.add(key);
   }
-  assert.deepEqual([...reached].sort(), [...ALL_KEYS].sort(), 'helpKeyOf 没能覆盖全部阶段');
+  assert.deepEqual([...reached].sort(), [...CONTEXT_KEYS].sort(), 'helpKeyOf 没能覆盖全部阶段');
+});
+
+test('参考键只进全量读法：helpKeyOf 永不返回它们（否则弹层会多出一整段规则底料）', () => {
+  // 这条守卫钉住「两类键」的分工：把参考键塞进 helpKeyOf 会让牌桌上的「?」弹层
+  // 在某个阶段整段变成规则底料 —— 那是另一处（/rules）的职责。
+  const contexts: readonly HelpContext[] = [
+    { phase: 'lobby' },
+    { phase: 'auction' },
+    { phase: 'bury', isDeclarer: true },
+    { phase: 'bury', isDeclarer: false },
+    { phase: 'play', myTurn: false },
+    { phase: 'play', myTurn: true, leading: true },
+    { phase: 'play', myTurn: true, leading: false },
+    { phase: 'scored' },
+    { phase: 'play', myTurn: true, spectating: true }
+  ];
+  for (const context of contexts) {
+    const key = helpKeyOf(context);
+    assert.equal(
+      REFERENCE_KEYS.includes(key),
+      false,
+      `${JSON.stringify(context)} 落到了参考键 ${key}：参考键不该出现在阶段映射里`
+    );
+  }
+  // 反向：参考键必须真的在 HELP_KEYS 里（read_rules 全量读法要给出它们）
+  for (const key of REFERENCE_KEYS) {
+    assert.ok(HELP_KEYS.includes(key), `${key} 不在 HELP_KEYS 里 —— read_rules 不会给出它`);
+  }
 });
 
 test('教程：每个依赖级牌的示例都点明了将牌环境', () => {

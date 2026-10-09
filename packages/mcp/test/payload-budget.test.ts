@@ -4,13 +4,20 @@
  * 为什么这件事需要一个测试：工具面的出参是每个回合都要重发一遍的（宿主每个请求都带着整段会话
  * 与工具面 schema），所以一次多余往返、一个多余的字段都是乘在回合数上的。实测（座位 0 打完一副）：
  *
- *   - 现状（逐字负载 + 每回合 wait/act 两次调用）累计读入 **1,845,222** 字符；
- *   - 每回合多探 3 次 `check_play` → 2.85 倍，多探 17 次 → 16.2 倍（探测才是最大的出血点）。
+ *   - 逐字负载 + 每回合 wait/act 两次调用：累计读入 **1,845,222**；
+ *   - 每回合多探 3 次 `check_play` → 2.85 倍，多探 17 次 → 16.2 倍（探测才是最大的出血点）；
+ *   - 紧凑投影（ADR-0011）：一副实收 **35,636**、累计 **401,156**、结算单帧约 **2,760**；
+ *   - **行动投影（ADR-0019，现状）**：一副实收 **18,453**、累计 **288,904**、结算单帧 **1,355**；
+ *     整局实收 **139,207**、整局累计 **11,333,093**，而整局最大单帧只有 **1,393** ——
+ *     跨副不再累积（战报与旧墩都不再每帧重发），这是这一版最要紧的形状。
  *
  * 这里模拟的就是「每回合一次调用」的那条路：动作自带等待（`wait` 默认 true），
  * 注入的 sleep 让另外两个座位往前走 —— 于是每一回合恰好只有一份局面被投喂。
  *
- * 预算是**上界**而不是等号：改了文案、加了个别字段不该立刻红，但多一份负载或多一轮探测必须红。
+ * 预算是**上界**而不是等号：改了文案、加了个别字段不该立刻红，但多一份负载、多一轮探测、
+ * 或者负载又开始随副数涨，必须红。上限贴着实测值留一点余量（约 5-10%），
+ * 而「多一次调用」由 `CALLS_LIMIT` 单独把守 —— 那一条才是往返数的守卫。
+ *
  * 「非空转」由最后一个用例证明：同一条路上 `verbose: true` 的那份逐字负载必然超预算 ——
  * 也就是说预算真正卡住的是投影，而不是别的什么。
  */
@@ -31,24 +38,26 @@ import { advanceUntilMyTurn, FakeApi, scoredState } from './fake-api.ts';
 const FRAME = 160;
 
 /**
- * schema 上限：13 → 16 个工具（claim / leave_seat / take_seat）后实测 5,511，留的余量仍小于
- * 一个最便宜的工具（零参数约 211）—— 也就是「再加一个工具」仍然必须先想清楚这笔账（见 ADR-0011/0014）。
+ * schema 上限：16 个工具实测 5,418（ADR-0011 记录的 5,511 是同一批工具的旧读数），留的余量
+ * 仍**小于**一个最便宜的工具（零参数约 211）—— 也就是「再加一个工具」照样必须先算这笔账
+ * （工具数是**永久税**：它乘在每一次调用上，见 ADR-0011/0014）。
  */
 const SCHEMA_LIMIT = 5_650;
-const DELIVERED_LIMIT = 38_000;
-/**
- * 累计读入的上限同步抬高了 **18,000**：那是 16 个工具比 13 个工具多出来的 schema 在整副牌上的账
- * （约 +855 字符 × 21 次调用）。这不是放宽标准 —— 一次多余的往返仍要 +8,000 左右，照样会红。
- */
-const CUMULATIVE_LIMIT = 438_000;
-const END_STATE_LIMIT = 3_100;
+/** 一副牌的实收上界（实测 18,453）；「多一次调用」由 CALLS_LIMIT 把守，这里管的是每帧的大小 */
+const DELIVERED_LIMIT = 19_500;
+/** 累计读入的上界（实测 288,904）：它随回合数二次增长，一个多余的字段也会被放大 */
+const CUMULATIVE_LIMIT = 300_000;
+/** 结算单帧（实测 1,355）：整副牌里最大的一份 */
+const END_STATE_LIMIT = 1_500;
 const CALLS_LIMIT = 22;
-/** 第二副的负载会长一点（`history` 多一行），但不该长出一截 */
-const GROWTH_LIMIT = 3_400;
-const GAME_MESSAGE_LIMIT = 5_200;
-const GAME_DELIVERED_LIMIT = 430_000;
+/** 第二副的最大单帧（实测 1,359）：跨副**不再**累积，所以它只该比第一副多几个字符 */
+const GROWTH_LIMIT = 1_500;
+/** 整局里最大的一份负载（实测 1,393）：它曾随副数线性上涨（4,402），现在必须基本不动 */
+const GAME_MESSAGE_LIMIT = 1_500;
+/** 一整局的实收（实测 139,207） */
+const GAME_DELIVERED_LIMIT = 150_000;
 /** 一整局的累计读入：它是二次的（每个请求重发全文），这条卡住的是**回合数** */
-const GAME_CUMULATIVE_LIMIT = 30_000_000;
+const GAME_CUMULATIVE_LIMIT = 12_000_000;
 
 async function schemaSize(): Promise<number> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -144,7 +153,8 @@ async function measureDeals(schema: number, deals: number): Promise<DealBudget> 
       continue;
     }
     if (deal.phase === 'auction') {
-      state = await send('bid', { call: deal.auction.length === 0 ? '40C' : 'pass' });
+      // `auction` 只在叫牌阶段给（阶段门控，ADR-0019）
+      state = await send('bid', { call: (deal.auction ?? []).length === 0 ? '40C' : 'pass' });
       continue;
     }
     if (deal.phase === 'bury') {
@@ -204,21 +214,21 @@ test('一副牌只需「每回合一次调用」（动作自带等待，不靠�
 test('一副牌的实收负载在预算内', () => {
   assert.ok(
     BUDGET.delivered <= DELIVERED_LIMIT,
-    `一副牌投喂了 ${BUDGET.delivered} 字符，超过预算 ${DELIVERED_LIMIT}（现状约 116,000）`
+    `一副牌投喂了 ${BUDGET.delivered} 字符，超过预算 ${DELIVERED_LIMIT}（行动投影实测 18,453）`
   );
 });
 
 test('模型累计读入在预算内（这才是真正的账：每个请求都重发全文）', () => {
   assert.ok(
     BUDGET.cumulative <= CUMULATIVE_LIMIT,
-    `累计读入 ${BUDGET.cumulative} 字符，超过预算 ${CUMULATIVE_LIMIT}（现状约 1,845,000）`
+    `累计读入 ${BUDGET.cumulative} 字符，超过预算 ${CUMULATIVE_LIMIT}（行动投影实测 288,904）`
   );
 });
 
 test('结算那一刻的单份局面也在预算内（它是整副牌里最大的一份）', () => {
   assert.ok(
     BUDGET.endState <= END_STATE_LIMIT,
-    `结算时单份局面 ${BUDGET.endState} 字符，超过预算 ${END_STATE_LIMIT}（现状约 6,200）`
+    `结算时单份局面 ${BUDGET.endState} 字符，超过预算 ${END_STATE_LIMIT}（行动投影实测 1,355）`
   );
 });
 
@@ -246,15 +256,21 @@ test('账目本身自洽：实收 = 各份之和，最大一份出现在结算',
   assert.equal(BUDGET.schema, SCHEMA);
 });
 
-test('第二副只因为 history 多一行而略长，不该长出一截', () => {
+test('跨副不再累积：第二副只多一次发牌调用，单帧大小基本不变', () => {
   assert.equal(TWO_DEALS.calls % BUDGET.calls, 1, '第二副只多一次发牌调用');
   assert.ok(
     TWO_DEALS.maxMessage <= GROWTH_LIMIT,
-    `第二副的最大负载 ${TWO_DEALS.maxMessage} 超过 ${GROWTH_LIMIT}：跨副历史涨得太快`
+    `第二副的最大负载 ${TWO_DEALS.maxMessage} 超过 ${GROWTH_LIMIT}`
+  );
+  // 这是 ADR-0019 最要紧的形状：战报与旧墩都不再每帧重发，所以「第几副」不影响单帧大小。
+  // 相对断言比绝对上限更能说明这件事 —— 文案改了不该红，随副数涨起来必须红。
+  assert.ok(
+    TWO_DEALS.maxMessage <= BUDGET.maxMessage + 60,
+    `第二副的最大负载 ${TWO_DEALS.maxMessage} 比第一副的 ${BUDGET.maxMessage} 大出一截：跨副又开始累积了`
   );
   assert.ok(
-    TWO_DEALS.endState - BUDGET.endState < 500,
-    `第二副的结算负载比第一副多了 ${TWO_DEALS.endState - BUDGET.endState} 字符 —— history 一行不该这么贵`
+    TWO_DEALS.endState - BUDGET.endState < 100,
+    `第二副的结算负载比第一副多了 ${TWO_DEALS.endState - BUDGET.endState} 字符 —— 跨副不该再涨`
   );
 });
 
@@ -265,7 +281,8 @@ test('一整局（打到结束）也不失控：调用数、最大负载、整�
   );
   assert.ok(
     FULL_GAME.maxMessage <= GAME_MESSAGE_LIMIT,
-    `整局里最大的一份负载 ${FULL_GAME.maxMessage} 超过 ${GAME_MESSAGE_LIMIT}（history 随副数增长）`
+    `整局里最大的一份负载 ${FULL_GAME.maxMessage} 超过 ${GAME_MESSAGE_LIMIT}：` +
+      '它曾经随副数涨到 4,402（战报与旧墩每帧重发），行动投影下必须基本不动'
   );
   assert.ok(
     FULL_GAME.delivered <= GAME_DELIVERED_LIMIT,

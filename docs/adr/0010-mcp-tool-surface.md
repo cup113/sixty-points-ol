@@ -34,7 +34,8 @@ POST 回一整段 JSON，不开 GET 流、不发会话 id，中间层（Caddy / 
 直接喂给 `play`，省掉一整类"重新编码花色字形"的低级错误。
 （**这一条后来被 ADR-0011 收窄**：默认出参改为紧凑投影以省投喂量，`verbose: true` 时仍是这里的原样；
 浏览器那份负载不受影响。）顺带把三处"只能有一个来源"的规则纯函数搬进引擎包：
-`help.ts`（说明文本，web 的「?」弹层、`/rules` 与 `read_rules` 共用）、`bidCandidates`（合法叫品集，叫牌面板与
+`help.ts`（说明文本，web 的「?」弹层与 `read_rules` 共用；`/rules` 是**另一份**长文，靠 `anchor`
+对应 —— 见 ADR-0019 的更正）、`bidCandidates`（合法叫品集，叫牌面板与
 `legal_bids` 共用）、`checkPlay`（本地合法性预判，界面与 `check_play` 共用）。合法的叫品集若有两份实现，
 迟早会漂移成"工具面说合法、服务端说非法"。
 
