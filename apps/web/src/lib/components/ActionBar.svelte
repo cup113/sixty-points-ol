@@ -2,7 +2,7 @@
   import type { TableClient } from '$lib/client/table.svelte';
   import { helpKeyOf, phaseHelp } from '@sixty/engine';
   import { SPECTATOR_LABEL_SEAT } from '$lib/role';
-  import { whoLabel } from '$lib/labels';
+  import { whoLabel, type ScoredStep } from '$lib/labels';
   import ActionClock from './ActionClock.svelte';
   import ActionTray from './ActionTray.svelte';
   import HelpPopover from './HelpPopover.svelte';
@@ -10,8 +10,21 @@
   let {
     client,
     summaryOpen = false,
-    onToggleSummary
-  }: { client: TableClient; summaryOpen?: boolean; onToggleSummary?: () => void } = $props();
+    onToggleSummary,
+    pacingStep = 'summary',
+    nextDealReady = true,
+    onSkipPacing
+  }: {
+    client: TableClient;
+    summaryOpen?: boolean;
+    onToggleSummary?: () => void;
+    /** 结算三拍走到哪一拍（ADR-0022）：`summary` = 三拍已走完，这一行不必再管节奏 */
+    pacingStep?: ScoredStep;
+    /** 「下一副 / 开新对局」是否已解锁（两拍走完）。**两处按钮共用这一个锁** */
+    nextDealReady?: boolean;
+    /** 「看底牌 / 看结算」：提前进下一拍（本地、不缩短全桌节奏） */
+    onSkipPacing?: () => void;
+  } = $props();
 
   const view = $derived(client.view);
   const deal = $derived(view?.deal ?? null);
@@ -100,6 +113,21 @@
     {#if status}
       <span class="text-xs text-white/45">{status}</span>
     {/if}
+    <!-- 结算三拍里的「提前看下一拍」（ADR-0022）：住这一行的中间格，与状态句/托盘同一个位置。
+         为什么在这一行而不是毡面上：这一行就是**动作面**（「牌局动作留桌面」那条纪律），
+         而毡面内容槽里那 3 个出牌点与「我」那一点已经把整格占满了 —— 放进去必然压住牌。
+         结算阶段 `status` 恰好是 null（上面那段只覆盖叫牌/埋底/出牌），所以它落在空格里。 -->
+    {#if phase === 'scored' && pacingStep !== 'summary' && onSkipPacing !== undefined}
+      <button
+        type="button"
+        data-pacing-skip="true"
+        data-pacing-step={pacingStep}
+        class="rounded-full border border-white/20 bg-black/30 px-3 py-1 text-[11px] text-white/70 hover:bg-black/45 hover:text-white"
+        onclick={() => onSkipPacing()}
+      >
+        {pacingStep === 'trick' ? '看底牌 »' : '看结算 »'}
+      </button>
+    {/if}
     <ActionTray {client} />
   </div>
 
@@ -115,14 +143,33 @@
     >
       {summaryOpen ? '收起结算' : '结算详情'}
     </button>
-    <!-- 发牌与开新对局只属于在座玩家；观战者看完结算即可 -->
+    <!-- 发牌与开新对局只属于在座玩家；观战者看完结算即可。
+         两者都受**三拍的锁**约束（`nextDealReady`）：跳过是本地的一拍一步，
+         而换副是全桌的 —— 没有这把锁，跳得快的人在 ~0 秒就能把别人正在看的末墩与底牌切走。
+         锁着时 `title` 说自己为什么锁着（按钮本身是灰的，不解释就成了「坏了」）。 -->
     {#if !spectating}
       {#if finished}
-        <button type="button" class={gold} disabled={client.busy} onclick={() => void client.newGame()}>
+        <button
+          type="button"
+          class={gold}
+          data-next-deal="true"
+          disabled={client.busy || !nextDealReady}
+          title={nextDealReady ? '开新对局（级别重置）' : '让末墩与底牌先亮完'}
+          onclick={() => void client.newGame()}
+        >
           开新对局（级别重置）
         </button>
       {:else}
-        <button type="button" class={gold} disabled={client.busy} onclick={() => void client.deal()}>下一副</button>
+        <button
+          type="button"
+          class={gold}
+          data-next-deal="true"
+          disabled={client.busy || !nextDealReady}
+          title={nextDealReady ? '下一副' : '让末墩与底牌先亮完'}
+          onclick={() => void client.deal()}
+        >
+          下一副
+        </button>
       {/if}
     {/if}
   {/if}

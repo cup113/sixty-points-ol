@@ -425,6 +425,29 @@ button:disabled {
   margin-left: 0;
 }
 
+/* ---------- 第二拍「亮底牌」摊开的那 3 张（ADR-0022） ---------- */
+/*
+ * 这一拍的任务是「看清这 3 张是什么牌」：26px（结算算式里那一档）要凑近才读得出角标，
+ * 而 56px（出牌堆那一档）在 320px 上会把这一行撑得比两翼还宽、挤到出牌点上。
+ * 46px 是中间那一档：312px 宽的内容槽里 3 张共约 150px、高约 70px，
+ * 两翼（各约 119px 宽、85px 高）与「我」那一点之间的空带放得下 ——
+ * 「放得下」不是估的：`scripts/shot-auction.ts` 的 ⑱ 量它与三个出牌点的相交面积。
+ */
+.kitty-reveal .card {
+  --cw: 46px;
+  margin-left: 6px;
+}
+
+.kitty-reveal .card:first-child {
+  margin-left: 0;
+}
+
+@media (max-width: 640px) {
+  .kitty-reveal .card {
+    --cw: 40px;
+  }
+}
+
 /* ---------- 叫品按钮 ---------- */
 .bidbtn {
   transition:

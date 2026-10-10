@@ -72,6 +72,7 @@ const infoRail = read('../src/lib/components/InfoRail.svelte');
 const actionBar = read('../src/lib/components/ActionBar.svelte');
 const actionTray = read('../src/lib/components/ActionTray.svelte');
 const actionClock = read('../src/lib/components/ActionClock.svelte');
+const kittyReveal = read('../src/lib/components/KittyReveal.svelte');
 const trickArea = read('../src/lib/components/TrickArea.svelte');
 const handFan = read('../src/lib/components/HandFan.svelte');
 const dealSummary = read('../src/lib/components/DealSummary.svelte');
@@ -1978,6 +1979,220 @@ test('反证：入口点不动 / 表头乱序 / 按钮跑出回溯格 / 默认�
   for (const [name, problem, pattern] of cases) {
     assert.match(problem ?? '', pattern, `${name}：没有被判出来（守卫空转）`);
   }
+});
+
+/* ---------- 一副结束时的三拍（ADR-0022） ---------- */
+
+/**
+ * 末墩收墩之后的三拍：看清末墩（2.0s）→ 亮底牌（3.2s）→ 弹结算。
+ *
+ * 为什么需要守卫：改动前 `summary !== null` **就**弹窗，而结算弹窗是 `fixed inset-0 z-50`
+ * —— 一帧之内盖住毡面。末墩三家出的什么、庄家埋了什么，玩家根本来不及看，而这两样恰好
+ * 是这一副最该看清的（末墩决定底牌倍数、底牌决定保底还是抠底）。所以这条守卫的**核心**
+ * 是第 ① 条：弹窗只能由**第三拍**驱动。
+ *
+ * 另外三条各有一次具体的坏法：
+ * - ② 定时器不清理 ⇒ 换副/离桌之后它们还会叫醒一次（把新一副的状态推起来）；
+ * - ③ 跳过按钮住进毡面 ⇒ 它必然压住 3 个出牌点或「我」那一点（那一格已经满了）；
+ * - ④ 锁只上在一处 ⇒ 两处按钮里剩下那一个成了后门，跳过就能提前换副（全桌节奏当场失效）。
+ *
+ * 真实时间轴（哪一拍真的出现在屏幕上、亮底牌与三个出牌点不相交）由
+ * `scripts/shot-auction.ts` 的 ⑱/⑲ 与 `scripts/ui-check.ts` 的出货 HTML 断言，
+ * 这一层守的是「形状与接线」。
+ */
+function scoredPacingCheck(
+  pageSource: string,
+  barSource: string,
+  summarySource: string,
+  revealSource: string
+): string | null {
+  const page = code(pageSource);
+  const bar = code(barSource);
+  const modal = code(summarySource);
+  const reveal = code(revealSource);
+
+  // ① 弹窗由第三拍驱动（不是「summary 一到就弹」）
+  if (!/scoredStep === 'summary'/.test(page)) {
+    return '结算弹窗没有受第三拍约束（缺 scoredStep === "summary"）：一收墩就弹，末墩与底牌都被盖住';
+  }
+  if (!(page.includes('scoredStepAt(') && page.includes('nextDealUnlocked('))) {
+    return '页面没有用 scoredStepAt / nextDealUnlocked 算这一拍与那把锁：三拍会各写各的时长';
+  }
+  if (/\b(2000|3200|5200)\b/.test(page)) {
+    return '页面里出现了裸的时长数字（2000 / 3200 / 5200）：时长只许由 labels.ts 的常量给出';
+  }
+  // ② 叫醒时钟：状态只由本地时钟一处给出，而且它敢停、也会停
+  const wakeStart = page.indexOf('$effect(() => {\n    void pacingTick;');
+  if (wakeStart < 0) {
+    return '页面里找不到三拍的「叫醒」effect（它应当以 `void pacingTick;` 开头）';
+  }
+  const wakeBody = page.slice(wakeStart, page.indexOf('});', wakeStart));
+  if (!wakeBody.includes('clearInterval')) {
+    return '三拍的叫醒时钟没有清理（缺 clearInterval）：解锁之后它会一直跳下去';
+  }
+  if (!/return;/.test(wakeBody)) {
+    return '叫醒 effect 没有停止条件（缺 `if (scoredAt === 0 || nextDealReady) return;`）：解锁之后时钟会一直跳';
+  }
+  // 跳过必须**一次点一拍**（`nextStep`）：一次点到底会把亮底牌那一拍整个吃掉，
+  // 而那颗按钮在第一拍写的正是「看底牌 »」。两个动作也要接得上（`laterStep` 只许往前）。
+  if (!/nextStep\(scoredStep\)/.test(page)) {
+    return '「跳过」没有接到 nextStep(scoredStep) 上：一次点击会连跳两拍，亮底牌被你跳过去了';
+  }
+  if (!/laterStep\(/.test(page)) {
+    return '页面没有用 laterStep 合并「时钟」与「手动提前」两路：点完可能被时钟反超退回去';
+  }
+  // ②b 起算那个 effect **不许**返回清理函数：它每一帧都会重跑（`summary` 每帧都是新对象），
+  //     带清理的写法会在重跑时掐掉定时器、而早退分支不会再建 —— 三拍永远停在第一拍。
+  //     （这个坑是 shot 的时间轴判据抓出来的：采样 112 帧、三拍一步没动。）
+  const pacingStart = page.indexOf('$effect(() => {\n    const no = summary?.dealNo');
+  if (pacingStart < 0) {
+    return '页面里找不到三拍的「起算」effect（它应当以 `const no = summary?.dealNo` 开头）';
+  }
+  const effectBody = page.slice(pacingStart, page.indexOf('});', pacingStart));
+  if (/clearInterval|clearTimeout/.test(effectBody)) {
+    return (
+      '三拍的起算 effect 返回了清理函数：它每一帧都会重跑（summary 每帧都是新对象），' +
+      '重跑时清理会掐掉叫醒时钟、而早退分支不会再建 —— 三拍会永远停在第一拍'
+    );
+  }
+  // ③ 亮底牌那一层：两个钩子分挂两层（外壳 = 定位壳，牌匾 = 要被量的那一块），
+  //    让开点击，且只摊公开的那 3 张
+  if (!reveal.includes('data-kitty-layer')) {
+    return '亮底牌那一层丢了外层钩子 data-kitty-layer：量的时候会误把整格当成「亮出来的那一块」';
+  }
+  if (!reveal.includes('data-kitty-reveal')) {
+    return '亮底牌那一层丢了 data-kitty-reveal 钩子：实测与出货 HTML 都认不出它';
+  }
+  const layerTag = /<div[^>]*data-kitty-layer[^>]*>/.exec(reveal)?.[0] ?? '';
+  const plaqueTag = /<div[^>]*data-kitty-reveal[^>]*>/.exec(reveal)?.[0] ?? '';
+  if (layerTag === '' || plaqueTag === '') {
+    return '亮底牌那一层的两个钩子不在两个不同的 div 上（一个定位壳 + 一块牌匾）';
+  }
+  if (plaqueTag.includes('inset-0')) {
+    return '牌匾自己写成了 `absolute inset-0`：它会被量成整格，几何判据等于空转';
+  }
+  if (!layerTag.includes('pointer-events-none')) {
+    return '亮底牌那一层没有让开点击：毡面内容槽里只剩它，它会吃掉整格的点击';
+  }
+  if (/<button|<a\b/.test(reveal)) {
+    return '亮底牌那一层里出现了可点元素：动作面归操作条那一行（「跳过」在那里）';
+  }
+  if (!page.includes('scoredStep === \'kitty\'')) {
+    return '亮底牌那一层不是只在第二拍渲染：它要么一直挂着，要么永远不出现';
+  }
+  if (!page.includes('summary.kitty')) {
+    return '亮底牌那一层摊的不是 summary.kitty（结算时公开的埋下的底牌）：它可能摊错了那 3 张';
+  }
+  // ④ 锁必须在**两处**都上：操作条那一行 + 结算弹窗
+  if (!bar.includes('!nextDealReady')) {
+    return '操作条那一行的「下一副 / 开新对局」没有上锁：跳过就能提前换副（切开别人的亮底牌）';
+  }
+  if (!modal.includes('!nextDealReady')) {
+    return '结算弹窗里的「下一副 / 开新对局」没有上锁：弹窗那条路成了后门';
+  }
+  if (!(page.includes('<ActionBar') && /nextDealReady/.test(page.slice(page.indexOf('<ActionBar'))))) {
+    return '页面没有把 nextDealReady 传给操作条那一行：那把锁悬空了';
+  }
+  if (!/nextDealReady/.test(page.slice(page.indexOf('<DealSummary')))) {
+    return '页面没有把 nextDealReady 传给结算弹窗：那把锁悬空了';
+  }
+  // 跳过按钮住操作条那一行，只在结算阶段出现（与状态句/托盘同一个位置，互斥）
+  if (!bar.includes('data-pacing-skip')) {
+    return '操作条那一行里没有「看底牌 / 看结算」按钮：跳过没地方点';
+  }
+  if (!/phase === 'scored'/.test(bar.slice(bar.indexOf('data-pacing-skip') - 400))) {
+    return '跳过按钮不是只在结算阶段出现：它在别的阶段会挤掉状态句或托盘';
+  }
+  return null;
+}
+
+test('一副结束时的三拍：弹窗只在第三拍弹、跳过在操作条行、换副的锁两处都上', () => {
+  const problem = scoredPacingCheck(page, actionBar, dealSummary, kittyReveal);
+  assert.equal(problem, null, problem ?? '');
+});
+
+test('反证：一收墩就弹 / 锁只上一处 / 亮底牌层截获点击 / 定时器不清理，都必须被判出来', () => {
+  // 注入一律打在**剥掉注释**的源码上（`code()`）：这几句话在注释里也出现过，
+  // 直接 replace 会打着注释、然后被 `code()` 剥掉 —— 反证会「看起来通过、其实没注入」。
+  const p = code(page);
+  const b = code(actionBar);
+  const m = code(dealSummary);
+  const r = code(kittyReveal);
+  assert.match(
+    scoredPacingCheck(p.replace("scoredStep === 'summary' && ", ''), b, m, r) ?? '',
+    /第三拍/,
+    '「一收墩就弹」被判成合规：这条守卫是空转的'
+  );
+  assert.match(
+    scoredPacingCheck(p.replace("scoredStep === 'kitty' && ", ''), b, m, r) ?? '',
+    /第二拍/,
+    '「亮底牌不经第二拍」没有被判出来'
+  );
+  assert.match(
+    scoredPacingCheck(p, b.replaceAll('!nextDealReady', 'false'), m, r) ?? '',
+    /操作条/,
+    '操作条那一行的锁被摘掉没有被判出来'
+  );
+  assert.match(
+    scoredPacingCheck(p, b, m.replaceAll('!nextDealReady', 'false'), r) ?? '',
+    /弹窗/,
+    '结算弹窗里的锁被摘掉没有被判出来'
+  );
+  assert.match(
+    scoredPacingCheck(p, b, m, r.replace('pointer-events-none', '')) ?? '',
+    /让开点击/,
+    '亮底牌那一层截获点击没有被判出来'
+  );
+  assert.match(
+    scoredPacingCheck(p, b, m, r.replace('data-kitty-reveal="true"', 'data-kitty-reveal="true" inset-0')) ?? '',
+    /inset-0|空转/,
+    '牌匾被写成整格大小（几何判据会空转）没有被判出来'
+  );
+  assert.match(
+    scoredPacingCheck(p.replace('clearInterval', 'void 0'), b, m, r) ?? '',
+    /清理/,
+    '叫醒时钟不清理没有被判出来'
+  );
+  assert.match(
+    scoredPacingCheck(p.replace('if (scoredAt === 0 || nextDealReady) return;', ''), b, m, r) ?? '',
+    /停止条件/,
+    '叫醒 effect 没有停止条件（解锁后一直跳）没有被判出来'
+  );
+  assert.match(
+    scoredPacingCheck(p.replace('scoredAt = Date.now();', 'scoredAt = Date.now(); return () => clearInterval(1);'), b, m, r) ?? '',
+    /起算/,
+    '起算 effect 里长出清理函数（那正是「三拍永远停在第一拍」那个坑）没有被判出来'
+  );
+  assert.match(
+    scoredPacingCheck(p.replace('nextStep(scoredStep)', 'scoredStep'), b, m, r) ?? '',
+    /nextStep/,
+    '跳过不再「一次一拍」（会连跳两拍）没有被判出来'
+  );
+  assert.match(
+    scoredPacingCheck(p.replace('laterStep(manualStep, scoredStepAt(scoredElapsed))', 'manualStep'), b, m, r) ?? '',
+    /laterStep/,
+    '两路状态没有合并（手动提前可能被时钟反超）没有被判出来'
+  );
+  assert.match(
+    scoredPacingCheck(`${p}\nconst dur = 2000;`, b, m, r) ?? '',
+    /裸的时长/,
+    '把时长写成裸数字没有被判出来'
+  );
+  assert.match(
+    scoredPacingCheck(p, b, m, r + '\n<button type="button">跳过</button>') ?? '',
+    /可点元素/,
+    '亮底牌那一层里长出按钮没有被判出来'
+  );
+  assert.equal(
+    scoredPacingCheck(
+      `${p}`,
+      `${b}`,
+      `${m}`,
+      `${r}`
+    ),
+    null,
+    '这是对真实源码的自检：上面那条用例已经断言它合规，这里只确认守卫本身不抖'
+  );
 });
 
 /* ---------- 出牌堆的 CSS 契约（与 fan-layout.ts 的 CLUSTER_STRIP_RATIO 一体两面） ---------- */

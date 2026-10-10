@@ -13,7 +13,8 @@
     open = false,
     onClose,
     replays = {},
-    onOpenReplay
+    onOpenReplay,
+    nextDealReady = true
   }: {
     client: TableClient;
     open?: boolean;
@@ -21,6 +22,14 @@
     /** 机器重演缓存与拉取通道（页面持有，与战报逐副卡同一条路，见 `ReplayPanel`） */
     replays?: Readonly<Record<number, ReplayResult>>;
     onOpenReplay?: (dealNo: number) => void;
+    /**
+     * 「下一副 / 开新对局」是否已解锁（结算三拍走完，ADR-0022）。
+     *
+     * 与操作条那一行的同名按钮**共用这一个锁**：跳过只推进自己看的进度，
+     * 换副却是全桌的动作 —— 少了这把锁，一个跳得快的人在 ~0 秒就能开下一副，
+     * 而别人可能还在看末墩，那一副的亮底牌就被切走了。
+     */
+    nextDealReady?: boolean;
   } = $props();
 
   const view = $derived(client.view);
@@ -36,7 +45,10 @@
 </script>
 
 {#if open && summary !== null && view !== null}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+  <div
+    data-deal-summary="true"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+  >
     <!-- 高度上限与自己的滚动区：结算内容高度不定（底牌牌面、级别表、对局结束块），
          没有上限时短屏上排在最后的「下一副 / 开新对局」会落到视口外，且无处可滚。 -->
     <div
@@ -102,7 +114,8 @@
             <button
               type="button"
               class="rounded-lg bg-gold px-5 py-1.5 text-xs font-bold text-ink hover:brightness-110 disabled:opacity-40"
-              disabled={client.busy}
+              disabled={client.busy || !nextDealReady}
+              title={nextDealReady ? '开新对局' : '让末墩与底牌先亮完'}
               onclick={() => void client.newGame()}
             >
               开新对局
@@ -111,7 +124,8 @@
             <button
               type="button"
               class="rounded-lg bg-gold px-5 py-1.5 text-xs font-bold text-ink hover:brightness-110 disabled:opacity-40"
-              disabled={client.busy}
+              disabled={client.busy || !nextDealReady}
+              title={nextDealReady ? '下一副' : '让末墩与底牌先亮完'}
               onclick={() => void client.deal()}
             >
               下一副

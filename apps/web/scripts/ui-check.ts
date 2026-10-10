@@ -970,6 +970,46 @@ async function main(): Promise<void> {
       + '收墩后信息须上出现「上一轮」回看入口（浮层默认关着）'
   );
 
+  // 7e) 一副结束时的三拍（ADR-0022）：把这一副**打完**，在出货产物上验第一拍。
+  //
+  //     为什么必须打到结算：改动前 `summary !== null` 就弹窗，而弹窗是 `fixed inset-0 z-50`
+  //     —— 一收墩就盖住毡面，末墩与底牌都来不及看。第一拍（看清末墩的 2.0 秒）里，
+  //     出货 HTML 必须**没有**那个弹窗、**没有**亮底牌那一层，而操作条那一行里要有
+  //     「看底牌 »」这个入口，并且「下一副」是**禁用**的（`nextDealReady` 在首帧为假）。
+  //     真实时间轴（2.0s → 3.2s → 弹窗）由 `scripts/shot-auction.ts` 的带浏览器场景实测，
+  //     这一层只能看首帧那一份 HTML，所以它守的是「首帧不是弹窗」与「锁上的按钮真的是禁用的」。
+  for (let step = 0; step < 80; step += 1) {
+    const state = await viewOf(code, dealerCred);
+    if (state.view.deal?.phase !== 'play') break;
+    await playOneLegalCard();
+    if (step === 79) assert(false, '打了 80 张牌还没结算：出牌循环没有收敛');
+  }
+  const scoredPage = await page(`/table/${code}`, dealerCred);
+  assert(scoredPage.includes('data-pacing-skip'), '结算阶段的出货 HTML 里没有三拍的入口（缺 data-pacing-skip）');
+  assert(
+    scoredPage.includes('看底牌 »'),
+    '结算首帧的跳过按钮写的是别的字：第一拍该是「看底牌 »」（第二拍才是「看结算 »」）'
+  );
+  assert(
+    !scoredPage.includes('data-kitty-reveal'),
+    '结算首帧就摊开了底牌：第二拍（3.2 秒）被吃掉，底牌与末墩挤在同一拍里'
+  );
+  assert(
+    !scoredPage.includes('data-deal-summary'),
+    '结算弹窗出现在首帧：一收墩就弹，末墩与底牌都被弹窗盖住（这正是 ADR-0022 要修的）'
+  );
+  assert(scoredPage.includes('结算详情'), '结算阶段没有「结算详情」入口：弹窗关掉之后玩家读不到结算');
+  const nextDeal = /<button[^>]*data-next-deal="true"[^>]*>/.exec(scoredPage)?.[0];
+  assert(nextDeal !== undefined, '结算阶段的操作条行里没有「下一副」（缺 data-next-deal）');
+  assert(
+    /\bdisabled\b/.test(nextDeal),
+    '结算首帧「下一副」就是可点的：跳过的人能在 ~0 秒开下一副，把别人正在看的末墩与底牌切走'
+  );
+  console.log(
+    `结算三拍（出货 HTML）：首帧有「看底牌 »」入口、无亮底牌层、无弹窗，`
+      + `且「下一副」带 disabled=${/\bdisabled\b/.test(nextDeal)}`
+  );
+
   // 8) 教程页：新版面跑同一套 position 守卫，且小节与真实牌面都在
   const rules = await page('/rules');
   assertNoPositionMix(rules, '教程页');

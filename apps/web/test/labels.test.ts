@@ -27,6 +27,9 @@ import {
   BID_GLYPH,
   BID_TIER_LIMIT,
   CLOCK_STALE_SECONDS,
+  SCORED_HOLD_MS,
+  SCORED_KITTY_MS,
+  SCORED_PACING_MS,
   bidText,
   bidTiers,
   callText,
@@ -43,7 +46,11 @@ import {
   lastCompletedTrick,
   levelProgression,
   levelRows,
+  laterStep,
+  nextDealUnlocked,
+  nextStep,
   scoreLineText,
+  scoredStepAt,
   trickSideBadge,
   type BidTier,
   type BidTrigger
@@ -358,6 +365,82 @@ test('反证：三档必须真的分得开（挪门槛 / 去掉小一档都要�
     '三位数与一位数没有可区分的长度差：小一档的字号就没有意义了'
   );
   assert.equal(clockFace(5_000_000).text, '—', '很久没动的桌子没有写成横杠');
+});
+
+/* ---------- 一副结束时的三拍（ADR-0022） ---------- */
+
+test('scoredStepAt：末墩 / 亮底牌 / 结算三拍，边界逐个数', () => {
+  // 第一拍：收墩那一刻起 2.0 秒，末墩还占着毡面
+  assert.equal(scoredStepAt(0), 'trick');
+  assert.equal(scoredStepAt(1), 'trick');
+  assert.equal(scoredStepAt(SCORED_HOLD_MS - 1), 'trick', '1999ms 还不该亮底牌');
+  // 第二拍：底牌摊开 3.2 秒
+  assert.equal(scoredStepAt(SCORED_HOLD_MS), 'kitty');
+  assert.equal(scoredStepAt(SCORED_PACING_MS - 1), 'kitty', '5199ms 还不该弹结算');
+  // 第三拍：弹结算，一直开着（交给玩家关）
+  assert.equal(scoredStepAt(SCORED_PACING_MS), 'summary');
+  assert.equal(scoredStepAt(SCORED_PACING_MS * 100), 'summary');
+  // 坏输入与负数：牌面上绝不出现 NaN，而且宁可多停一拍也不许直接跳到弹窗 ——
+  // 负数、NaN 与 Infinity **一律当 0**（与 `clockFace` 同一条纪律：坏输入收敛到最小值，
+  // 而不是「越大越该弹」）。`Infinity` 也走这一条：它在真实时钟里不可能出现
+  // （`Date.now() - scoredAt` 是个有限数），一旦出现就说明有个坏值混进来了，宁可停在原地。
+  assert.equal(scoredStepAt(-1), 'trick');
+  assert.equal(scoredStepAt(Number.NaN), 'trick');
+  assert.equal(scoredStepAt(Number.POSITIVE_INFINITY), 'trick');
+  // 常量与判定自洽：改了时长而忘了同步文档，这一条会红
+  assert.equal(SCORED_HOLD_MS, 2000, '第一拍的时长被改了：CONTEXT.md 与 ADR-0022 要同步');
+  assert.equal(SCORED_KITTY_MS, 3200, '第二拍的时长被改了：CONTEXT.md 与 ADR-0022 要同步');
+  assert.equal(SCORED_PACING_MS, SCORED_HOLD_MS + SCORED_KITTY_MS, '第三拍的门槛必须等于两拍之和');
+});
+
+test('nextDealUnlocked：跳过不解锁（这是全桌节奏的唯一保证）', () => {
+  assert.equal(nextDealUnlocked(0), false);
+  assert.equal(nextDealUnlocked(SCORED_HOLD_MS), false, '亮底牌那一拍还没走完，换副就该锁着');
+  assert.equal(nextDealUnlocked(SCORED_PACING_MS - 1), false);
+  assert.equal(nextDealUnlocked(SCORED_PACING_MS), true);
+  assert.equal(nextDealUnlocked(Number.NaN), false, '坏输入必须当「没解锁」，不许放行换副');
+  assert.equal(nextDealUnlocked(Number.POSITIVE_INFINITY), false, '同上：坏输入一律当没解锁');
+  assert.equal(nextDealUnlocked(-1), false);
+  // 与 scoredStepAt 的关系：只有它在 summary 那一拍上，两者才一致 —— 跳过会把它们**分开**，
+  // 而分开时锁必须是「还没好」，那正是 ADR-0022 决策四要的东西。
+  assert.equal(scoredStepAt(SCORED_PACING_MS), 'summary');
+  assert.equal(nextDealUnlocked(SCORED_PACING_MS), true);
+});
+
+test('nextStep / laterStep：一次点一拍、只许往前（「看底牌»」不许把底牌跳过去）', () => {
+  // 一次点一拍：第一拍那颗按钮写的是「看底牌 »」，一次点击若直接到结算，
+  // 亮底牌那一拍就整个不存在了（实测抓过：点了「看底牌»」而亮底牌仍在 2.3 秒才出现）
+  assert.equal(nextStep('trick'), 'kitty');
+  assert.equal(nextStep('kitty'), 'summary');
+  assert.equal(nextStep('summary'), 'summary', '到顶就停在结算，没有第四拍');
+  // 只许往前：手动提前那一拍与时钟那一拍取「较后者」，于是点完不会被时钟反超退回去
+  assert.equal(laterStep('kitty', 'trick'), 'kitty');
+  assert.equal(laterStep('trick', 'kitty'), 'kitty');
+  assert.equal(laterStep('summary', 'kitty'), 'summary');
+  assert.equal(laterStep('trick', 'trick'), 'trick');
+  // 三拍首尾相接：从第一拍连点两次必须恰好走到结算（不多不少）
+  assert.equal(nextStep(nextStep('trick')), 'summary');
+});
+
+test('反证：三拍必须真的分得开（塌成两拍 / 拍序颠倒都要被判出来）', () => {
+  // 这条反证是**永久**的：每次运行都重证「三段确实互不相同」，
+  // 而不是只在写这段代码的那一次注入实验里证过。
+  const steps = new Set([
+    scoredStepAt(0),
+    scoredStepAt(SCORED_HOLD_MS),
+    scoredStepAt(SCORED_PACING_MS)
+  ]);
+  assert.equal(steps.size, 3, '三拍没有真的分开：某一拍被吞掉了（两拍不能叫「三拍」）');
+  // 拍序：末墩在亮底牌之前、亮底牌在结算之前（顺序颠倒等于把节奏讲反了）
+  assert.deepEqual(
+    [scoredStepAt(0), scoredStepAt(SCORED_HOLD_MS), scoredStepAt(SCORED_PACING_MS)],
+    ['trick', 'kitty', 'summary'],
+    '三拍的顺序不对：末墩 → 亮底牌 → 结算'
+  );
+  // 两拍都不能是 0：某一拍为 0 就等于把它跳过了，而这两拍各有各的任务
+  assert.ok(SCORED_HOLD_MS > 0 && SCORED_KITTY_MS > 0, '有一拍的时长是 0：那一拍根本不会出现');
+  // 底牌那一拍必须**够看清 3 张牌**（比收墩停顿更长：读 3 张牌面比读一墩牌慢）
+  assert.ok(SCORED_KITTY_MS >= SCORED_HOLD_MS, '亮底牌比看清末墩还短：那一拍读不完 3 张牌');
 });
 
 test('trickSideBadge：只说这 N 分归庄方还是闲方', () => {  // 庄家座位 2 赢了这一墩 → 庄；其余两个座位都是闲家一方 → 闲

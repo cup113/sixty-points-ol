@@ -36,6 +36,7 @@ import {
   type TrumpModel
 } from '@sixty/engine';
 import { spotWidthPct } from '../src/lib/fan-layout.ts';
+import { SCORED_HOLD_MS, SCORED_KITTY_MS, SCORED_PACING_MS } from '../src/lib/labels.ts';
 
 const here = dirname(fileURLToPath(import.meta.url)); // apps/web/scripts
 const webRoot = resolve(here, '..'); // apps/web
@@ -321,10 +322,21 @@ interface Shot {
    *   **只有这一条能验到多张出牌堆**：单张会让 `computeClusterStep` 走早退分支（不写 `--step`），
    *   于是「多张牌堆的宽度预算」从来没有被任何守卫执行过（5 张顺子把两簇挤到一起、
    *   还捅出毡面，而所有判据全绿的根因就在这里）。
+   * - `'deal-out'`：把**整副打完**（三家各 17 张，每步问引擎要一张合法牌）—— 用它抵达结算阶段，
+   *   三拍（ADR-0022）只在那里发生。
    */
-  readonly trick?: 'three-clusters' | 'two-played' | 'run-clusters';
+  readonly trick?: 'three-clusters' | 'two-played' | 'run-clusters' | 'deal-out';
   /** `'run-clusters'` 要打的顺子长度（默认 5）：出牌堆张数只能由顺子长度带出来 */
   readonly runLength?: number;
+  /**
+   * 结算三拍（ADR-0022）：这一屏要**长采样**，重建「看清末墩 → 亮底牌 → 弹结算」的时间轴。
+   * `'auto'` = 全程不碰（验节奏本身）；`'skip'` = 第一拍里点一次「看底牌»」（验跳过提前进拍、
+   * 而换副那把锁照旧不解）。
+   *
+   * 为什么点「跳过」不走 `clicks`：那个循环在采样开始**之前**跑，会把第一拍整个吃掉了 ——
+   * 于是「三拍依次发生」这条判据永远看不到第一拍。跳过必须发生在采样过程中。
+   */
+  readonly pacing?: 'auto' | 'skip';
   /** panel = 只拍叫牌面板那一块；viewport = 整屏（给上下文） */
   readonly mode: 'panel' | 'viewport';
   readonly size: { readonly width: number; readonly height: number };
@@ -479,6 +491,26 @@ const SHOTS: readonly Shot[] = [
     runLength: 5,
     mode: 'viewport',
     size: MOBILE_MIN
+  },
+  {
+    file: '15-scored-pacing',
+    label:
+      '桌面宽度、一副打完：结算三拍的时间轴（末墩 2.0s → 亮底牌 3.2s → 弹结算），亮底牌与三个出牌点不相交',
+    ...sceneFor(0, [{ points: 40, strain: 'C' }, 'pass', 'pass']),
+    trick: 'deal-out',
+    pacing: 'auto',
+    mode: 'viewport',
+    size: DESKTOP
+  },
+  {
+    file: '16-scored-pacing-320',
+    label:
+      '最窄机型 320px、一副打完：亮底牌那一层在 272px 宽的内容槽里仍不与出牌点相交；点「跳过」提前看结算，「下一副」仍锁着',
+    ...sceneFor(0, [{ points: 40, strain: 'C' }, 'pass', 'pass']),
+    trick: 'deal-out',
+    pacing: 'skip',
+    mode: 'viewport',
+    size: MOBILE_MIN
   }
 ];
 
@@ -563,6 +595,53 @@ interface Rect {
   readonly height: number;
   readonly right: number;
   readonly bottom: number;
+}
+
+interface Measurements {
+  /** 这一帧是不是结算刚发生的那一拍 */
+  readonly pacingStep: string | null;
+  readonly kitty: Rect | null;
+  readonly kittyCards: readonly Rect[];
+  readonly modal: Rect | null;
+  readonly skip: Rect | null;
+  readonly skipLabel: string;
+  readonly nextDealDisabled: boolean | null;
+}
+
+/**
+ * 三拍（ADR-0022）的采样：一次只取「此刻屏幕上是什么」。
+ *
+ * 时间轴本身由**轮询**重建（见 `runPacing`）：脚本无法知道页面内部的 `scoredAt`，
+ * 所以它只认钩子（`data-pacing-step` / `data-kitty-reveal` / `data-deal-summary` /
+ * `data-next-deal`），把这些钩子的**出现顺序与时刻**记下来再断言 —— 那才是「三拍真的这么走」
+ * 的证据，而单独某一帧的量只能说明那一帧的样子。
+ */
+const MEASURE_PACING = `(() => {
+  const rect = (el) => { if (el === null) return null; const b = el.getBoundingClientRect();
+    return { x: b.x, y: b.y, width: b.width, height: b.height, right: b.right, bottom: b.bottom }; };
+  const skipEl = document.querySelector('[data-pacing-skip]');
+  const nextEl = document.querySelector('[data-next-deal="true"]');
+  const kittyEl = document.querySelector('[data-kitty-reveal]');
+  const modalEl = document.querySelector('[data-deal-summary="true"]');
+  return {
+    pacingStep: skipEl === null ? null : (skipEl.getAttribute('data-pacing-step') ?? null),
+    kitty: rect(kittyEl),
+    kittyCards: kittyEl === null ? [] : [...kittyEl.querySelectorAll('.card')].map(rect),
+    modal: rect(modalEl),
+    skip: rect(skipEl),
+    skipLabel: skipEl === null ? '' : (skipEl.textContent ?? '').trim(),
+    nextDealDisabled: nextEl === null ? null : nextEl.hasAttribute('disabled')
+  };
+})()`;
+
+/**
+ * 一帧采样：`step` 是钩子报的拍，其余是那一拍的几何。
+ * `at` 是**脚本侧**的时刻（毫秒，从导航完成算起）——它只用来算「两拍之间隔了多久」，
+ * 绝对基准是页面的 `scoredAt`，两者差一个加载时间，所以判据给足容差（见 `runPacing`）。
+ */
+interface PacingSample {
+  readonly at: number;
+  readonly s: Measurements;
 }
 
 interface MeasuredSlot extends Rect {
@@ -1243,6 +1322,238 @@ function assertLayout(
   return { summary, problems };
 }
 
+/**
+ * 把**整副打完**，抵达结算阶段（三拍只在结算发生，ADR-0022）。
+ *
+ * 每步都问引擎要一张合法牌（与 `driveTrick` 同一套做法：`checkPlay` 是界面与 MCP 共用的那一份）。
+ * 一共 51 张（三家各 17），循环上限给 60：**收敛与否本身是判据** ——
+ * 打完不结算说明出牌阶段的状态机有问题，而不是「再多打几张就好了」。
+ */
+async function driveToScored(
+  code: string,
+  seats: readonly Credential[],
+  declarerSeat: number
+): Promise<void> {
+  const declarer = seats[declarerSeat]!;
+  const opening = await viewOf(code, declarer.credential);
+  const hand = opening.you?.hand ?? [];
+  if (opening.view.deal === null || hand.length === 0) throw new Error('结算场景：庄家还没有手牌视图');
+  await act(code, declarer.credential, { type: 'bury', cards: hand.slice(0, 3) });
+
+  for (let played = 0; played < 60; played += 1) {
+    const turn = (await viewOf(code, declarer.credential)).view.deal?.playTurn ?? null;
+    if (turn === null) return; // 这一副打完了（结算阶段没有 playTurn）
+    const state = await viewOf(code, seats[turn]!.credential);
+    const deal = state.view.deal;
+    const own = state.you?.hand ?? [];
+    if (deal === null || deal.trump === null || own.length === 0) {
+      throw new Error(`结算场景：座位 ${turn} 看不到自己该出的牌`);
+    }
+    const lead = deal.trick !== null && deal.trick.plays.length > 0 ? deal.trick.plays[0]!.cards : null;
+    const card = own.find((candidate) => checkPlay(own, [candidate], deal.trump, lead) === null);
+    if (card === undefined) throw new Error(`结算场景：座位 ${turn} 手里找不到一张合法出牌`);
+    await act(code, seats[turn]!.credential, { type: 'play', cards: [card] });
+  }
+  throw new Error('结算场景：打了 60 张牌还没结算（出牌阶段的状态机没有收敛）');
+}
+
+/**
+ * 三拍的时间轴采样（ADR-0022）。
+ *
+ * 做法：导航之后**每 120ms 采一帧**，把「哪一拍、亮底牌层在不在、弹窗在不在、下一副锁没锁」
+ * 记成序列，最后按**出现顺序与相对时刻**断言。为什么不用「睡到 2.5 秒再看一眼」那种写法：
+ * 脚本不知道页面内部的 `scoredAt`（导航完成到 React/水合之间有几十到几百毫秒的抖动），
+ * 固定时刻采样会在快机器上正好落进两拍的边界里，判据于是变成随机红 —— 而这里断言的是
+ * **顺序**（末墩 → 底牌 → 弹窗，各自至少被看到一次）与**节奏**（相邻两拍相隔约等于常量）。
+ */
+async function runPacing(
+  cdp: Cdp,
+  shot: Shot,
+  outPath: string,
+  startedAt: number
+): Promise<{ readonly summary: string; readonly problems: readonly string[] }> {
+  const samples: PacingSample[] = [];
+  const problems: string[] = [];
+  const fail = (message: string): void => {
+    problems.push(message);
+  };
+  const deadline = Date.now() + 14_000;
+  let skipClicks = 0;
+  let captured = false;
+  /** 亮底牌那一拍的第一帧；同时也是**截图与几何测量**的落点（最有信息量的一帧） */
+  let kittyShot: PacingSample | null = null;
+  let geometry: Measurement | null = null;
+
+  // 采样一直做到「弹窗出现且下一副解锁」为止（或超时）：这两件事都发生了才说明三拍走完了
+  for (;;) {
+    const s = await evaluate<Measurements>(cdp, MEASURE_PACING);
+    if (s === null) throw new Error(`${shot.file}：三拍采样取不到结果（页面还没渲染完？）`);
+    samples.push({ at: Date.now() - startedAt, s });
+    if (kittyShot === null && s.kitty !== null) {
+      kittyShot = samples[samples.length - 1]!;
+      // 先量再拍：几何量的是视口坐标，与截图无关（与 `shoot` 同一条纪律）
+      geometry = await evaluate<Measurement>(cdp, MEASURE);
+      const capture = (await cdp.send('Page.captureScreenshot', { format: 'png' })) as { data: string };
+      writeFileSync(outPath, Buffer.from(capture.data, 'base64'));
+      captured = true;
+    }
+    if (s.modal !== null && s.nextDealDisabled === false) break;
+    if (Date.now() > deadline) break;
+    // 「跳过」：只要那颗按钮还在（= 还没进结算）就一直点。
+    //
+    // 为什么是「一直点」而不是「点一次」：第一次点很可能落在**水合之前** —— 那时页面上
+    // 那颗按钮还是 SSR 那一份，`el.click()` 返回 true 但**没有监听器**，点了个空。
+    // 一次就信的写法于是变成随机红（实测：同一份代码一次跑通了、一次没跑通）。
+    // 「一次点一拍」本身是幂等的（`nextStep` 到顶就停在结算），重复点不会连跳。
+    if (shot.pacing === 'skip' && s.pacingStep !== null && s.modal === null) {
+      const clicked =
+        (await evaluate<boolean>(
+          cdp,
+          `(() => { const el = document.querySelector('[data-pacing-skip]');
+             if (!el) return false; el.click(); return true; })()`
+        )) === true;
+      if (clicked) skipClicks += 1;
+    }
+    await new Promise((r) => setTimeout(r, 120));
+  }
+  // 极端情况下（底牌那一拍整个没被采到）也要留下一张图：不然人工验收看到的是空白
+  if (!captured) {
+    const capture = (await cdp.send('Page.captureScreenshot', { format: 'png' })) as { data: string };
+    writeFileSync(outPath, Buffer.from(capture.data, 'base64'));
+  }
+
+  const firstAt = (predicate: (s: Measurements) => boolean): number | null => {
+    const hit = samples.find((sample) => predicate(sample.s));
+    return hit === undefined ? null : hit.at;
+  };
+
+  // ① 三拍必须**依次**出现：末墩（有跳过入口、无底牌、无弹窗）→ 亮底牌 → 弹窗
+  const trickAt = firstAt((s) => s.pacingStep === 'trick');
+  const kittyAt = firstAt((s) => s.kitty !== null);
+  const modalAt = firstAt((s) => s.modal !== null);
+  if (trickAt === null) {
+    fail('采样里没有「末墩」那一拍（`data-pacing-step="trick"` 一次都没看到）：三拍的第一拍被吞掉了');
+  }
+  if (kittyAt === null) fail('采样里始终没有亮底牌那一层（`data-kitty-reveal`）：第二拍没有发生');
+  if (modalAt === null) fail('采样里始终没有结算弹窗：第三拍没有发生（三拍的最后一步断了）');
+  if (trickAt !== null && kittyAt !== null && kittyAt < trickAt) {
+    fail(`亮底牌出现在末墩那一拍之前（${kittyAt}ms < ${trickAt}ms）：三拍的顺序反了`);
+  }
+  if (kittyAt !== null && modalAt !== null && modalAt < kittyAt) {
+    fail(`结算弹窗出现在亮底牌之前（${modalAt}ms < ${kittyAt}ms）：底牌没摊开就弹窗了`);
+  }
+
+  // ② 第一拍里**不许**有底牌、也不许有弹窗（这一条就是 ADR-0022 的全部理由）
+  for (const sample of samples.filter((item) => item.s.pacingStep === 'trick')) {
+    if (sample.s.kitty !== null) {
+      fail(`第一拍（${sample.at}ms）里就摊开了底牌：末墩还没看清，底牌就压上来了`);
+    }
+    if (sample.s.modal !== null) {
+      fail(`第一拍（${sample.at}ms）里就弹了结算：末墩与底牌都被盖住`);
+    }
+  }
+
+  // ③ 节奏：两拍之间应当接近常量（容差给足 —— 采样间隔 120ms + 水合抖动）
+  const hold = kittyAt === null ? null : kittyAt - (trickAt ?? 0);
+  const kittyHold = modalAt === null || kittyAt === null ? null : modalAt - kittyAt;
+  const TOL = 500;
+  if (shot.pacing === 'auto') {
+    if (hold !== null && Math.abs(hold - SCORED_HOLD_MS) > TOL) {
+      fail(`第一拍的停留是 ${hold}ms，而常量是 ${SCORED_HOLD_MS}ms（容差 ${TOL}ms）：看清末墩那一拍没走满`);
+    }
+    if (kittyHold !== null && Math.abs(kittyHold - SCORED_KITTY_MS) > TOL) {
+      fail(
+        `第二拍的停留是 ${kittyHold}ms，而常量是 ${SCORED_KITTY_MS}ms（容差 ${TOL}ms）：亮底牌那一拍没走满`
+      );
+    }
+    if (kittyAt !== null && kittyAt < SCORED_HOLD_MS - TOL) {
+      fail(`亮底牌在 ${kittyAt}ms 就出现了，而第一拍是 ${SCORED_HOLD_MS}ms：看清末墩那一拍被抢跑了`);
+    }
+  } else if (kittyAt !== null && kittyAt >= SCORED_HOLD_MS - TOL) {
+    // 点了「跳过」却没有提前：按钮没接上，或者点在了水合之前
+    // （那时按钮还是 SSR 那一份、监听器还没挂上 —— 所以脚本会**一直点到它消失**）
+    fail(`点了「看底牌»」但亮底牌仍在 ${kittyAt}ms 才出现（第一拍是 ${SCORED_HOLD_MS}ms）：跳过没有生效`);
+  }
+
+  // ④ 换副的锁：**在解锁时刻之前**，无论弹窗是自动弹出还是被跳过提前打开的，
+  //    「下一副」都必须还是禁用的。判据按**时刻**写，而不是「弹窗一出现就必须禁用」——
+  //    自动那一路的弹窗本来就出现在解锁那一刻（5.2s），那时它当然已经是可点的
+  //    （这一条最早写成「弹窗首帧必须禁用」，于是把正常行为判成了缺陷）。
+  for (const sample of samples) {
+    if (sample.s.modal === null) continue;
+    if (sample.at < SCORED_PACING_MS - TOL && sample.s.nextDealDisabled === false) {
+      fail(
+        `「下一副」在 ${sample.at}ms 就可点了（两拍之和是 ${SCORED_PACING_MS}ms）：` +
+          '全桌节奏被跳过缩短了，跳得快的人能切开别人正在看的末墩与底牌'
+      );
+      break;
+    }
+  }
+  const unlockedAt = firstAt((s) => s.modal !== null && s.nextDealDisabled === false);
+  if (unlockedAt !== null && unlockedAt < SCORED_PACING_MS - TOL) {
+    fail(
+      `「下一副」在 ${unlockedAt}ms 就解锁了，而两拍之和是 ${SCORED_PACING_MS}ms：全桌节奏被跳过缩短了`
+    );
+  }
+
+  // ⑤ 亮底牌那一层的几何（⑱）：3 张牌、在内容槽里、与三个出牌点零相交
+  if (kittyShot !== null && geometry !== null) {
+    const slot = geometry.feltRows.find((row) => row.name === 'slot')?.rect ?? null;
+    const box = kittyShot.s.kitty;
+    if (kittyShot.s.kittyCards.length !== 3) {
+      fail(`亮底牌摊开了 ${kittyShot.s.kittyCards.length} 张（应当是 3 张：埋下的底牌就 3 张）`);
+    }
+    if (slot !== null && box !== null && !contains(slot, box)) {
+      fail(`亮底牌那一层越出了内容槽（${boxOf(box)} 不在 ${boxOf(slot)} 里）`);
+    }
+    // 与出牌点（尤其是「我」那一点）零相交：这一拍要「末墩与底牌同时看得见」，
+    // 压住就等于把末墩挡住。每个出牌点各自与底牌整块比，不相交就是不相交。
+    if (box !== null) {
+      for (const spot of geometry.spots) {
+        const area = overlapArea(box, spot.rect);
+        if (area > 0) {
+          fail(
+            `亮底牌那一层压住了座位 ${spot.seat} 的出牌点 ${area.toFixed(0)}px²` +
+              `（底牌 ${boxOf(box)} 与出牌点 ${boxOf(spot.rect)}）：这一拍要末墩与底牌同时看得见`
+          );
+        }
+      }
+      // 与「我」那一点分开量：它跨整幅、在最下面，而底牌在正中间 —— 两者竖直方向最容易撞
+      const seats = geometry.spots.map((spot) => `座位 ${spot.seat}`).join(' / ');
+      if (!geometry.spots.some((spot) => spot.cards.length > 0)) {
+        fail(`结算阶段三个出牌点里一张牌都没有（${seats}）：末墩本身没了，这一拍没什么可看的`);
+      }
+    }
+  }
+
+  // ⑥ 这一屏里页面**不许有未捕获错误**：三拍是纯客户端时序，一个水合异常就会让整页停在
+  //    SSR 那一帧 —— 那时钩子还在、看着正常，而时间永远不走（三拍全都不发生）。
+  const pageErrors = await evaluate<readonly string[]>(cdp, `window.__errs ?? []`);
+  if (pageErrors !== null && pageErrors.length > 0) {
+    fail(`三拍期间页面报错 ${pageErrors.length} 条（第一句：${pageErrors[0]}）：纯客户端时序会被它钉住`);
+  }
+
+  // ⑦ 把**原有那一整套版面判据**也在这一屏上跑一遍：三拍场景走的是这条采样路径
+  //    （不是 `shoot` 那条「量一帧」的路径），少了这一句，结算屏就成了唯一没人量的版面 ——
+  //    而它恰好是「亮底牌那一层 + 末墩 + 未关弹窗」叠在一起的那一屏。
+  const layout = geometry === null ? null : assertLayout(geometry, shot.file, shot.size.width);
+  if (layout !== null) problems.push(...layout.problems);
+
+  const beat = (ms: number | null): string => (ms === null ? '—' : `${(ms / 1000).toFixed(2)}s`);
+  const kittySize =
+    kittyShot?.s.kitty === null || kittyShot === null || kittyShot.s.kitty === null
+      ? '—'
+      : `${kittyShot.s.kitty.width.toFixed(0)}×${kittyShot.s.kitty.height.toFixed(0)}px`;
+  const summary =
+    `三拍：末墩 @${beat(trickAt)} → 亮底牌 @${beat(kittyAt)}（停 ${hold ?? '—'}ms）` +
+    ` → 弹窗 @${beat(modalAt)}（亮牌停 ${kittyHold ?? '—'}ms）` +
+    `；下一副解锁 @${beat(unlockedAt)}；亮底牌块 ${kittySize}；采样 ${samples.length} 帧` +
+    (skipClicks > 0 ? `；中途点了 ${skipClicks} 次「跳过」` : '') +
+    (layout === null ? '' : `；${layout.summary}`) +
+    (pageErrors !== null && pageErrors.length > 0 ? `；页面错误 ${pageErrors.join(' | ')}` : '');
+  return { summary, problems };
+}
+
 async function shoot(
   shot: Shot,
   port: number,
@@ -1265,6 +1576,21 @@ async function shoot(
       deviceScaleFactor: 2,
       mobile: false
     });
+    // 三拍场景：**在文档开始前**装一个错误捕获。
+    //
+    // 为什么必须在导航之前：三拍是纯客户端时序（本地时钟 + 定时器 + 水合），一旦水合阶段
+    // 抛异常，页面会**停在 SSR 那一帧**——钩子还在、看着「正常」，而时间永远不走。
+    // 那种坏法在采样里只表现为「三拍没前进」，看不出原因；装了捕获就能直接读到那句话。
+    // 它同时是一条守卫：这一屏里页面不许有任何未捕获错误（见 runPacing 的 ⑥）。
+    if (shot.pacing !== undefined) {
+      await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+        source: `window.__errs = [];
+          addEventListener('error', (e) => window.__errs.push('error: ' + (e.message || String(e.error))));
+          addEventListener('unhandledrejection', (e) => window.__errs.push('reject: ' + String(e.reason)));
+          const ce = console.error.bind(console);
+          console.error = (...a) => { window.__errs.push('console: ' + a.map(String).join(' ')); ce(...a); };`
+      });
+    }
     await cdp.send('Page.navigate', { url: `${base}/table/${cookie.code}` });
     // 等**牌桌页**真的加载完：只等 readyState 会在 navigate 提交之前读到 about:blank 的
     // 'complete'，于是截到一张空白页 —— 所以同时要求路径已经是 /table/<码>。
@@ -1280,6 +1606,20 @@ async function shoot(
     );
     // SSE 首帧 + 字体就绪：面板的候选档位由服务端首帧就给出，这里只是等排版稳定
     await evaluate(cdp, 'document.fonts ? document.fonts.ready.then(() => true) : true');
+
+    // 结算三拍（ADR-0022）：这一屏不做「量一帧」，而是**长采样**重建时间轴 ——
+    // 三拍的判据是「顺序与节奏」，单帧量不到。截图与几何落在那条时间轴里最有信息量的一帧
+    // （亮底牌那一拍：末墩与底牌同时在画面上）。
+    if (shot.pacing !== undefined) {
+      const pacing = await runPacing(cdp, shot, outPath, Date.now());
+      console.log(`    ↳ ${pacing.summary}`);
+      if (pacing.problems.length > 0) {
+        console.log(`    ✗ ${pacing.problems.length} 条三拍判据不过：`);
+        for (const problem of pacing.problems) console.log(`      - ${problem}`);
+      }
+      return { path: outPath, summary: pacing.summary, problems: pacing.problems };
+    }
+
     for (const selector of shot.clicks ?? []) {
       const clicked = await evaluate<boolean>(
         cdp,
@@ -1579,6 +1919,8 @@ async function runShot(
 
   if (shot.trick === 'run-clusters') {
     await driveRunTrick(table.code, seats, table.declarerSeat, runLength);
+  } else if (shot.trick === 'deal-out') {
+    await driveToScored(table.code, seats, table.declarerSeat);
   } else if (shot.trick !== undefined) {
     await driveTrick(table.code, seats, table.declarerSeat, shot.trick === 'two-played' ? 2 : 3);
   }

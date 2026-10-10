@@ -24,7 +24,17 @@
   import InfoRail from '$lib/components/InfoRail.svelte';
   import TrickArea from '$lib/components/TrickArea.svelte';
   import TrickReview from '$lib/components/TrickReview.svelte';
-  import { followSuitCards, kittyHandDelta, lastCompletedTrick } from '$lib/labels';
+  import {
+    followSuitCards,
+    kittyHandDelta,
+    lastCompletedTrick,
+    laterStep,
+    nextDealUnlocked,
+    nextStep,
+    scoredStepAt,
+    type ScoredStep
+  } from '$lib/labels';
+  import KittyReveal from '$lib/components/KittyReveal.svelte';
   import type { PageProps } from './$types';
 
   let { data }: PageProps = $props();
@@ -168,9 +178,87 @@
     return [];
   });
 
-  // 每副结束自动弹出结算；关闭后可随时用「结算详情」重开（观战者也照弹，结算信息本来就是公开的）
+  /**
+   * 一副结束时的**三拍**（ADR-0022）：看清末墩（2.0s）→ 亮底牌（3.2s）→ 弹结算。
+   *
+   * 为什么需要它：收墩那一刻 `summary` 就来了，而结算弹窗是 `fixed inset-0 z-50` ——
+   * 一帧之内盖住毡面，末墩三家出的什么、庄家埋了什么，玩家根本来不及看。而这两样恰好是
+   * 这一副最该看清的（末墩决定底牌倍数、底牌决定保底还是抠底）。
+   *
+   * 三条纪律：
+   * - **本地时钟**：`scoredAt` 是「这个浏览器第一次看到这一副结算」的时刻，不是服务端时间。
+   *   各浏览器之间的偏差只有 SSE 投递那几十毫秒，而全桌节奏由「下一副」那把锁保证
+   *   （`SCORED_PACING_MS`）—— 不需要新通道、也不需要服务端参与（时间不进引擎）。
+   * - **重载/补位也会重走三拍**：`scoredDeal` 只在内存里，刷新之后 `elapsed` 从 0 起算。
+   *   代价是刷新后要多等 5.2 秒才看到弹窗，换来的是**一条路径**：任何时刻进入结算，
+   *   看到的都是同一套节奏（而不是「首帧就弹、刷新才走三拍」那种随缘行为）。
+   * - **换副即收敛**：`summary` 变回 null（下一副已发牌）时三拍自然作废，不留残留的跳过态。
+   */
+  let scoredAt = $state(0);
+  let scoredDeal = -1; // 非响应式：只用来认「这一副是不是已经起过三拍」
+  let pacingTick = $state(0); // 让下面两处重算（Date.now() 本身不是响应式的）
+  /** 手动提前到的那一拍（`null` = 还没点过）：只许往前，见 `laterStep` */
+  let manualStep = $state<ScoredStep | null>(null);
+  const scoredElapsed = $derived.by(() => {
+    void pacingTick;
+    return scoredAt === 0 ? 0 : Date.now() - scoredAt;
+  });
+  const scoredStep = $derived(
+    manualStep === null ? scoredStepAt(scoredElapsed) : laterStep(manualStep, scoredStepAt(scoredElapsed))
+  );
+  /** 「下一副 / 开新对局」的锁：**跳过不解锁**（跳过只是自己看快一点，不缩短全桌节奏） */
+  const nextDealReady = $derived(nextDealUnlocked(scoredElapsed));
+
+  /**
+   * 起算：认出「这一副的结算」并记下本地时刻。**这个 effect 刻意不返回清理函数。**
+   *
+   * 为什么：`summary` 是每收到一帧 SSE 就换一个身份的**新对象**，于是这个 effect 每一帧都会重跑。
+   * 带清理函数的写法（先计时、再把定时器交给清理）会在这里断掉 —— 清理把定时器掐掉之后，
+   * 重跑又会命中下面的早退分支、不再重建它们，**三拍于是永远停在第一拍**。
+   * 这个坑是 `pnpm shot` 的两条时间轴判据抓出来的（采样 112 帧、三拍一步没动），
+   * 单测与源码守卫都看不见它：它们守的是「接线对不对」，而这里是「每一帧都重跑」这条运行时事实。
+   */
   $effect(() => {
-    if (summary !== null && summary.dealNo !== openedFor) {
+    const no = summary?.dealNo ?? null;
+    if (no === null) {
+      // 这一副不结算了（下一副已发牌、全 pass 重发、回大厅）⇒ 三拍作废，别留下残留的提前态
+      if (scoredDeal !== -1) {
+        scoredDeal = -1;
+        scoredAt = 0;
+        manualStep = null;
+      }
+      return;
+    }
+    if (no === scoredDeal) return;
+    scoredDeal = no;
+    scoredAt = Date.now();
+    manualStep = null;
+  });
+
+  /**
+   * 叫醒：只要还没解锁就每 100ms 推一次 `pacingTick`，两处状态于是按本地时钟重算。
+   *
+   * 为什么是「轮询」而不是两个 `setTimeout`：轮询的状态只由 `scoredElapsed` 一处给出，
+   * 「跳过」与「定时」两条路不可能各说各的；而且它**自己能停** —— 解锁那一刻这个 effect
+   * 重跑时直接 return，上一个 interval 的清理把时钟收掉。这个 effect 的重跑是安全的：
+   * 它的函数体每次都会重建 interval（与上面那个「早退就不再建」的形状正好相反）。
+   */
+  $effect(() => {
+    void pacingTick;
+    if (scoredAt === 0 || nextDealReady) return;
+    const id = setInterval(() => (pacingTick += 1), 100);
+    return () => clearInterval(id);
+  });
+
+  /**
+   * 结算弹窗在**第三拍**才自己弹出来（第一拍之前一帧都不弹）。
+   *
+   * 关闭后可随时用「结算详情」重开（观战者也照弹，结算信息本来就是公开的）。
+   * 跳过会让人提前进第三拍 —— 那时 `nextDealReady` 仍是 false，所以跳得快的人
+   * 拿不到「下一副」，别人还在看末墩时不会被他切走。
+   */
+  $effect(() => {
+    if (summary !== null && scoredStep === 'summary' && summary.dealNo !== openedFor) {
       openedFor = summary.dealNo;
       summaryOpen = true;
     }
@@ -353,6 +441,12 @@
           <BidPanel {client} />
         {:else}
           <TrickArea {view} seat={anchor} mySeat={label} {names} />
+          <!-- 第二拍亮底牌（ADR-0022）：与出牌区**同层**、整块让开点击，
+               于是末墩还看得见、底牌摊在正中间，两样东西不会互相盖住
+               （相交面积由 shot-auction.ts 的 ⑱ 实测）。 -->
+          {#if scoredStep === 'kitty' && summary !== null && summary.kitty.length > 0}
+            <KittyReveal cards={summary.kitty} {trump} />
+          {/if}
         {/if}
       {/if}
     </div>
@@ -396,7 +490,14 @@
        「毡面与操作条之间那条 44px 常驻动作带」已经撤掉（ADR-0020 修订）：
        零回流由这一行的 `min-h-[2.6rem]` 保证，不必再占一条空白，那 44px 还给牌区。 -->
   <div class="relative">
-    <ActionBar {client} {summaryOpen} onToggleSummary={() => (summaryOpen = !summaryOpen)} />
+    <ActionBar
+      {client}
+      {summaryOpen}
+      onToggleSummary={() => (summaryOpen = !summaryOpen)}
+      pacingStep={scoredStep}
+      {nextDealReady}
+      onSkipPacing={() => (manualStep = nextStep(scoredStep))}
+    />
   </div>
 
   <!-- 观战者没有手牌：手牌区整块消失，牌桌更大。
@@ -438,6 +539,7 @@
     open={summaryOpen}
     onClose={() => (summaryOpen = false)}
     {replays}
+    {nextDealReady}
     onOpenReplay={openReplay}
   />
 {/if}

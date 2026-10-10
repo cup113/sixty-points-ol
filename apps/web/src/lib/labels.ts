@@ -156,6 +156,91 @@ export function clockFace(ageMs: number): ClockFace {
   return { text: String(seconds), tone: seconds >= 100 ? 'long' : 'plain' };
 }
 
+/* ---------- 一副结束时的三拍（ADR-0022） ---------- */
+
+/**
+ * 末墩收墩之后的**三拍**：看清末墩 → 亮底牌 → 弹结算。
+ *
+ * 为什么需要这三拍：收墩那一刻 `summary` 就来了，于是结算弹窗（`fixed inset-0 z-50`）
+ * **一帧之内盖住毡面** —— 末墩三家出的什么、庄家埋了什么，都在弹窗底下，玩家根本来不及看。
+ * 而末墩与底牌恰恰是这一副最该被看清的两样（末墩决定底牌倍数，底牌决定保底还是抠底）。
+ *
+ * 三拍的时长是**写死的常量**（像 `CLOCK_STALE_SECONDS` 一样）：它们是「让人看完」的粗估值，
+ * 不是可按桌子调的参数。第一拍要够看清最多 3 簇（每簇 5+ 张），第二拍要看清 3 张牌面。
+ * 第三拍不再计时：弹窗一出现就一直开着，由玩家自己关。
+ */
+export const SCORED_HOLD_MS = 2000;
+export const SCORED_KITTY_MS = 3200;
+/**
+ * 「下一副 / 开新对局」最早能点的时刻 = 两拍之和。
+ *
+ * 为什么要这条锁：「跳过」是**本地**的（各人看各人的进度），而「下一副」是**全桌**的
+ * （服务端换副，所有人一起进下一副）。少了这条锁，一个跳得快的人在 ~0 秒就能开下一副，
+ * 而别人可能还在看末墩 —— 那一副的亮底牌就被切走了。锁上之后**全桌节奏一致**，
+ * 而且不需要新通道：每个人的这把锁都从「自己第一次看到这一副结算」起算，
+ * 各浏览器之间的偏差只有帧级（SSE 投递）那几十毫秒。
+ */
+export const SCORED_PACING_MS = SCORED_HOLD_MS + SCORED_KITTY_MS;
+
+/** 结算期间的一拍：末墩 / 亮底牌 / 结算（弹窗） */
+export type ScoredStep = 'trick' | 'kitty' | 'summary';
+
+/**
+ * 从「本地第一次看到这一副的结算」起算 `elapsedMs` 之后该在哪一拍。
+ *
+ * 边界写成 `>=`：到点即进下一拍（`1999 → 'trick'`、`2000 → 'kitty'`、`5199 → 'kitty'`、
+ * `5200 → 'summary'`）。负数与非有限值一律当 0（与 `clockFace` 同一条纪律）：
+ * 宁可多停一拍，也不许因为一个 NaN 直接跳到弹窗。
+ */
+export function scoredStepAt(elapsedMs: number): ScoredStep {
+  const ms = Number.isFinite(elapsedMs) ? Math.max(0, elapsedMs) : 0;
+  if (ms >= SCORED_PACING_MS) return 'summary';
+  if (ms >= SCORED_HOLD_MS) return 'kitty';
+  return 'trick';
+}
+
+/**
+ * 结算弹窗里那个「下一副 / 开新对局」按钮是否已经解锁（= 两拍走完）。
+ *
+ * 与 `scoredStepAt` 分开写，是因为**跳过**会让两者脱钩：跳过之后人已经在弹窗里
+ * （`step === 'summary'`），但按钮仍然锁着 —— 那正是要的（ADR-0022 决策四）。
+ */
+export function nextDealUnlocked(elapsedMs: number): boolean {
+  const ms = Number.isFinite(elapsedMs) ? Math.max(0, elapsedMs) : 0;
+  return ms >= SCORED_PACING_MS;
+}
+
+/** 三拍的先后（`trick` < `kitty` < `summary`）—— 「手动提前」只许顺着它往前 */
+export const SCORED_STEPS: readonly ScoredStep[] = ['trick', 'kitty', 'summary'];
+
+function stepRank(step: ScoredStep): number {
+  return SCORED_STEPS.indexOf(step);
+}
+
+/**
+ * 两拍里**更靠后**的那一拍。
+ *
+ * 为什么要它：三拍有两个来源 —— **本地时钟**（自动推进）与**手动提前**（点「看底牌»」）。
+ * 手动提前只能往前、绝不后退，也不许被时钟反超之后再退回来（否则点完又跳回去，
+ * 看起来像按钮坏了）。所以最终那一拍是两者的「较后者」。
+ */
+export function laterStep(a: ScoredStep, b: ScoredStep): ScoredStep {
+  return stepRank(a) >= stepRank(b) ? a : b;
+}
+
+/**
+ * 点一下「跳过」之后该到哪一拍：**一次只前进一拍**，到顶就停在结算。
+ *
+ * 一次一拍是实现与文案一致的硬要求：按钮在末墩那一拍写「看底牌 »」，在亮底牌那一拍写
+ * 「看结算 »」—— 若一次点击直接跳到结算，第一拍那颗按钮就把亮底牌整个吃掉了
+ * （底牌一张都看不到，而它正是这一拍存在的理由）。这个错就是 `pnpm shot` 的
+ * 「点了「看底牌»」但亮底牌仍在 2317ms 才出现」抓出来的。
+ */
+export function nextStep(step: ScoredStep): ScoredStep {
+  const at = Math.min(stepRank(step) + 1, SCORED_STEPS.length - 1);
+  return SCORED_STEPS[at]!;
+}
+
 /**
  * 时间上最后一次出手 —— 可能就是「不叫」。
  *
