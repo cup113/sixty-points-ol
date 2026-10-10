@@ -25,7 +25,16 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkPlay, type Card, type TrumpModel } from '@sixty/engine';
+import {
+  cardClass,
+  cardKey,
+  cardLevel,
+  checkPlay,
+  classOfSet,
+  isRun,
+  type Card,
+  type TrumpModel
+} from '@sixty/engine';
 
 const here = dirname(fileURLToPath(import.meta.url)); // apps/web/scripts
 const webRoot = resolve(here, '..'); // apps/web
@@ -306,9 +315,15 @@ interface Shot {
    *
    * - `'three-clusters'`：三家都出过牌 ⇒ 引擎已收墩、`trick` 复位，出牌区改显示上一墩，
    *   于是毡面上留着**三个出牌点**（量预算与相交）；
-   * - `'two-played'`：只出了两张 ⇒ 第三位正好轮到他出牌，**托盘在**（量它是否落在毡面之外）。
+   * - `'two-played'`：只出了两张 ⇒ 第三位正好轮到他出牌，**托盘在**（量它是否落在毡面之外）；
+   * - `'run-clusters'`：三家各出 `runLength` 张（庄家领顺子、两家跟同样张数）——
+   *   **只有这一条能验到多张出牌堆**：单张会让 `computeClusterStep` 走早退分支（不写 `--step`），
+   *   于是「多张牌堆的宽度预算」从来没有被任何守卫执行过（5 张顺子把两簇挤到一起、
+   *   还捅出毡面，而所有判据全绿的根因就在这里）。
    */
-  readonly trick?: 'three-clusters' | 'two-played';
+  readonly trick?: 'three-clusters' | 'two-played' | 'run-clusters';
+  /** `'run-clusters'` 要打的顺子长度（默认 5）：出牌堆张数只能由顺子长度带出来 */
+  readonly runLength?: number;
   /** panel = 只拍叫牌面板那一块；viewport = 整屏（给上下文） */
   readonly mode: 'panel' | 'viewport';
   readonly size: { readonly width: number; readonly height: number };
@@ -415,8 +430,33 @@ const SHOTS: readonly Shot[] = [
     trick: 'two-played',
     mode: 'viewport',
     size: MOBILE_NARROW
+  },
+  {
+    file: '11-narrow-run-five',
+    label: '窄屏 360px、一墩打完且三家各出 5 张顺子：出牌堆紧凑叠排、互不相撞、不出预算（截图 #1 的直接回归）',
+    ...sceneFor(0, [{ points: 40, strain: 'C' }, 'pass', 'pass']),
+    trick: 'run-clusters',
+    runLength: 5,
+    mode: 'viewport',
+    size: MOBILE_NARROW
+  },
+  {
+    file: '12-desktop-run-five',
+    label: '桌面宽度下同一局面：两个对手出牌点的中点居中、「我」那条底栏限宽居中、状态条不折行',
+    ...sceneFor(0, [{ points: 40, strain: 'C' }, 'pass', 'pass']),
+    trick: 'run-clusters',
+    runLength: 5,
+    mode: 'viewport',
+    size: DESKTOP
   }
 ];
+
+/**
+ * `'run-clusters'` 的重发上限：一副牌里庄家那 20 张（17 + 拿上来的底牌 3）出现 ≥k 张顺子的概率
+ * 是**量出来的**，不是猜的 —— 20000 次发牌抽样：≥2 84.9%、≥3 44.3%、≥4 17.3%、**≥5 5.9%**、≥6 1.9%。
+ * 所以 5 张顺子的场景必须整桌重发；上限 120 次时一次都撞不上的概率约 0.07%。
+ */
+const RUN_ATTEMPTS = 120;
 
 async function joinTarget(port: number): Promise<{ id: string; wsUrl: string }> {
   const response = await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' });
@@ -492,6 +532,15 @@ interface Measurement {
   readonly band: Rect | null;
   /** 动作托盘：只在「这一手归你动」时存在 */
   readonly tray: Rect | null;
+  /**
+   * 阶段状态条那一行（`TableStatus` 根节点）与它的直接子元素。
+   * 折行判据看子元素的**竖直中线**而不是高度阈值：一行里的 chip 高矮本来就不同
+   * （第 N 轮是小 chip、定约/庄已抓是大字），只有「折到第二行」才会让中线错开。
+   */
+  readonly statusRow: Rect | null;
+  readonly statusChildren: readonly Rect[];
+  /** 「我」那条底栏（`SeatCard` 的 `bar` 形态）：限宽与居中都在它身上量 */
+  readonly seatBar: Rect | null;
 }
 
 const MEASURE = `(() => {
@@ -530,7 +579,13 @@ const MEASURE = `(() => {
       rect: rect(el)
     })),
     band: one('[data-action-band]'),
-    tray: one('[data-action-tray]')
+    tray: one('[data-action-tray]'),
+    statusRow: one('[data-status-row]'),
+    statusChildren: (() => {
+      const el = document.querySelector('[data-status-row]');
+      return el === null ? [] : [...el.children].map(rect);
+    })(),
+    seatBar: one('[data-seat-bar]')
   };
 })()`;
 
@@ -563,7 +618,11 @@ function contains(outer: Rect, inner: Rect): boolean {
  * 一次只能看见一个红点、修一条才发现下一条 —— 于是改成「每个场景各自收齐、
  * 截完图继续跑下一个场景，最后由 main 把全部问题一起报出来」。
  */
-function assertLayout(m: Measurement, file: string): { readonly summary: string; readonly problems: readonly string[] } {
+function assertLayout(
+  m: Measurement,
+  file: string,
+  viewportWidth: number
+): { readonly summary: string; readonly problems: readonly string[] } {
   const problems: string[] = [];
   const fail = (message: string): void => {
     problems.push(message);
@@ -663,12 +722,22 @@ function assertLayout(m: Measurement, file: string): { readonly summary: string;
     if (area > 0) fail(`动作带压在毡面上 ${area.toFixed(0)}px²（托盘会盖住「我」那条底栏）`);
   }
 
-  // ⑦ 出牌区的各点互不相交；每张牌都在自己那一点的预算里，且不同点的牌互相不叠
+  // ⑦ 出牌区的各点互不相交；每张牌都在自己那一点的预算里，且不同点的牌互相不叠。
+  //
+  //    「在自己的预算里」**横向严格、纵向放宽 4px**：横向才是算法的错处所在（步距算错就把牌
+  //    推出盒子）；纵向要容下装饰性变换 —— 第 2/3 张牌带 4°/−3° 旋转与 translateY(-2px)，
+  //    包围盒天然比布局盒大出 1–2px，那是「错落的墩」本身的设计，不是宽度预算的问题。
   for (let i = 0; i < m.spots.length; i += 1) {
     const spot = m.spots[i]!;
     for (const card of spot.cards) {
-      if (!contains(spot.rect, card)) {
-        fail(`座位 ${spot.seat} 的出牌点里有牌越出预算（牌 ${boxOf(card)} 不在 ${boxOf(spot.rect)} 里）`);
+      if (card.x < spot.rect.x - 0.5 || card.right > spot.rect.right + 0.5) {
+        fail(
+          `座位 ${spot.seat} 的出牌点里有牌横向越出预算（牌 ${boxOf(card)} 不在 ${boxOf(spot.rect)} 里）：` +
+            '多张牌堆的步距必须按预算算，不能靠 justify-content 溢出'
+        );
+      }
+      if (card.y < spot.rect.y - 4 || card.bottom > spot.rect.bottom + 4) {
+        fail(`座位 ${spot.seat} 的出牌点里有牌纵向越出预算（牌 ${boxOf(card)} 不在 ${boxOf(spot.rect)} 里）`);
       }
     }
     for (let j = i + 1; j < m.spots.length; j += 1) {
@@ -699,11 +768,119 @@ function assertLayout(m: Measurement, file: string): { readonly summary: string;
     }
   }
 
+  // ⑨ 两个对手出牌点的**中点必须落在内容槽中线上**（截图 #2「两个对手牌中央的中点偏左」）。
+  //    旧布局：左点 `left-0 w-[38%]`（中心 19%）+ 右点 `right-[20%] w-[38%]`（中心 61%）
+  //    ⇒ 中点 40%，整组偏左 10%（窄屏实测约 31px）—— 而「我」那一点与状态条都在中线上，
+  //    于是三家看起来是歪的。判据按「左右两翼 + 一条通栏」的分工认三个点：
+  //    通栏那一条是我方点（`inset-x-0`），两翼各占 38%。
+  if (slot !== undefined && m.spots.length === 3) {
+    const slotCenter = slot.x + slot.width / 2;
+    const wings = m.spots.filter((spot) => spot.rect.width <= slot.width * 0.5);
+    if (wings.length !== 2) {
+      fail(
+        `三个出牌点里认不出「左右两翼 + 一条通栏」的分工：宽度 ${m.spots
+          .map((spot) => spot.rect.width.toFixed(0))
+          .join(' / ')}px（内容槽 ${slot.width.toFixed(0)}px）`
+      );
+    } else {
+      const centers = wings.map((spot) => spot.rect.x + spot.rect.width / 2);
+      const mid = (Math.min(...centers) + Math.max(...centers)) / 2;
+      if (Math.abs(mid - slotCenter) > 1) {
+        fail(
+          `两个对手出牌点的中点没在内容槽中线上（中点 ${mid.toFixed(1)} vs 中线 ${slotCenter.toFixed(1)}，` +
+            `偏 ${(mid - slotCenter).toFixed(1)}px）：左右两点的宽度预算必须对称（各 10% 内缩）`
+        );
+      }
+      const margins = wings.map((spot) => [
+        spot.rect.x - slot.x,
+        slot.right - spot.rect.right
+      ]);
+      const leftInner = Math.min(...margins.map((pair) => pair[0]!));
+      const rightInner = Math.min(...margins.map((pair) => pair[1]!));
+      if (Math.abs(leftInner - rightInner) > 1) {
+        fail(
+          `两个对手出牌点到内容槽左右的边距不对称（${leftInner.toFixed(1)}px vs ${rightInner.toFixed(1)}px）：` +
+            '只挪一边就会把中点推偏'
+        );
+      }
+    }
+  }
+
+  // ⑩ 出牌堆**不许被拉伸**（截图 #1「5 张顺子时己方牌间距被拉伸」的判据）。
+  //    紧凑上限 = 每张露出 0.6 × 牌宽（`CLUSTER_STRIP_RATIO`）；+3px 容纳 2/3 两张牌那 4°/−3°
+  //    旋转变换带来的包围盒位移。旧的「自然间距」是 牌宽+6（完全摊开），而 CSS 的 `gap: 6px`
+  //    又没在已测量态关掉 ⇒ 实际步距 = 牌宽+12，窄屏 38px 牌上等于两张之间空出一半牌宽。
+  for (const spot of m.spots) {
+    if (spot.cards.length < 2) continue;
+    const cardWidth = spot.cards[0]!.width;
+    const sorted = [...spot.cards].sort((a, b) => a.x - b.x);
+    for (let i = 1; i < sorted.length; i += 1) {
+      const delta = sorted[i]!.x - sorted[i - 1]!.x;
+      const limit = cardWidth * 0.6 + 3;
+      if (delta > limit) {
+        fail(
+          `座位 ${spot.seat} 的出牌堆被拉伸了：相邻两张牌左缘间距 ${delta.toFixed(1)}px > 紧凑上限 ` +
+            `${limit.toFixed(1)}px（牌宽 ${cardWidth.toFixed(1)}px，共 ${spot.cards.length} 张）—— ` +
+            '放得下就该紧凑叠排，不该摊满整行'
+        );
+      }
+    }
+  }
+
+  // ⑫ 「我」那条底栏**限宽并居中**（`max-w-sm` = 384px）。
+  //    窄毡面上它本来就整宽（判据自动成立），所以桌面场景另加一条「毡面必须比上限宽」——
+  //    少了它，这条判据在桌面宽度下会安静地空转。
+  if (viewportWidth >= 1000 && (m.felt === null || m.felt.width <= 424)) {
+    fail(
+      `这一屏是桌面宽度（${viewportWidth}px）却没验到「我」栏限宽：毡面宽 ` +
+        `${m.felt?.width.toFixed(1) ?? '—'}px 未超过上限 424px，⑫ 这条判据会空转`
+    );
+  }
+  if (m.seatBar !== null && m.felt !== null) {
+    if (m.seatBar.width > 385) {
+      fail(
+        `「我」那条底栏宽 ${m.seatBar.width.toFixed(1)}px，超过上限 384px：` +
+          '会横贯整幅毡面（名字长一点更明显）'
+      );
+    }
+    const barCenter = m.seatBar.x + m.seatBar.width / 2;
+    const feltCenter = m.felt.x + m.felt.width / 2;
+    if (Math.abs(barCenter - feltCenter) > 1) {
+      fail(
+        `「我」那条底栏没有居中（中心 ${barCenter.toFixed(1)} vs 毡面中心 ${feltCenter.toFixed(1)}）`
+      );
+    }
+  }
+
+  // ⑬ 阶段状态条**只许一行**：那一行是 `flex-wrap` 的，一旦折行，第二行就落进出牌区上方
+  //    （截图 #4 的同类问题）。判据用子元素的**竖直中线**：折行的表现就是某个 chip 的中线与别人错开。
+  if (m.statusChildren.length > 1) {
+    const centersY = m.statusChildren.map((child) => child.y + child.height / 2);
+    const spread = Math.max(...centersY) - Math.min(...centersY);
+    if (spread > 1) {
+      fail(
+        `阶段状态条折成了多行（子元素中线差 ${spread.toFixed(1)}px）：窄屏上第二行会压到出牌区上方`
+      );
+    }
+  }
+
   const rowHeight = m.history.rowHeight > 0 ? m.history.rowHeight : 24;
   const capacity = m.history.box === null ? 0 : Math.floor(m.history.box.height / rowHeight);
+  const wings = slot === undefined ? [] : m.spots.filter((spot) => spot.rect.width <= slot.width * 0.5);
+  const wingMid =
+    wings.length === 2
+      ? (Math.min(...wings.map((s) => s.rect.x + s.rect.width / 2)) +
+          Math.max(...wings.map((s) => s.rect.x + s.rect.width / 2))) /
+        2
+      : null;
+  const midDelta =
+    wingMid !== null && slot !== undefined ? wingMid - (slot.x + slot.width / 2) : null;
   const summary =
     `档位对齐最大差 ${worstDelta.toFixed(2)}px；历史容量 ${capacity} 行（已录 ${m.history.total} 条）；` +
-    `内容槽 ${slot?.height.toFixed(0) ?? '—'}px；出牌点张数 ${m.spots.map((spot) => `${spot.seat}:${spot.cards.length}`).join(' ') || '（本场景无出牌）'}`;
+    `内容槽 ${slot?.height.toFixed(0) ?? '—'}px；出牌点张数 ${m.spots.map((spot) => `${spot.seat}:${spot.cards.length}`).join(' ') || '（本场景无出牌）'}` +
+    `；中点偏差 ${midDelta === null ? '—' : `${midDelta.toFixed(1)}px`}` +
+    `；毡面 ${m.felt?.width.toFixed(0) ?? '—'}px / 「我」栏 ${m.seatBar?.width.toFixed(0) ?? '—'}px` +
+    `；状态条子元素 ${m.statusChildren.length} 个`;
   return { summary, problems };
 }
 
@@ -781,7 +958,7 @@ async function shoot(
     // 那张 PNG 正是「哪里不对」的证据，最后与文字一起报出来。
     const measurement = await evaluate<Measurement>(cdp, MEASURE);
     if (measurement === null) throw new Error(`${shot.file}：取不到版面测量结果（页面还没渲染完？）`);
-    const layout = assertLayout(measurement, shot.file);
+    const layout = assertLayout(measurement, shot.file, shot.size.width);
 
     const capture = (await cdp.send('Page.captureScreenshot', {
       format: 'png',
@@ -842,15 +1019,137 @@ async function driveTrick(
   }
 }
 
-async function runShot(
-  shot: Shot,
-  port: number,
-  stamp: number,
-  index: number
-): Promise<{ readonly path: string; readonly summary: string; readonly problems: readonly string[] }> {
-  const seats = await Promise.all(
-    [0, 1, 2].map((i) => claim(`验收${index}${i}-${stamp}`))
-  );
+/**
+ * 从手牌里找一条**合法**顺子（同门连续段），长度取找得到的最大值、上限 `want`。
+ *
+ * 层号口径用引擎的 `cardLevel`（跳过级牌、主牌门合并），但**判定一律回到引擎自己**
+ * （`isRun` + `classOfSet`）—— 这里写错只会「找不到」，不会造出非法的牌。
+ */
+function findRun(hand: readonly Card[], trump: TrumpModel, want: number): Card[] | null {
+  const groups = new Map<string, Map<number, Card[]>>();
+  for (const card of hand) {
+    const cls = cardClass(card, trump);
+    const level = cardLevel(card, trump);
+    const group = groups.get(cls) ?? new Map<number, Card[]>();
+    const bucket = group.get(level) ?? [];
+    bucket.push(card);
+    group.set(level, bucket);
+    groups.set(cls, group);
+  }
+  let best: Card[] = [];
+  for (const group of groups.values()) {
+    const levels = [...group.keys()].sort((a, b) => a - b);
+    // 一条链的起点必是「前一个层号不连续」处，所以走一遍连续段就够了（与 engine 的 segments 同构）
+    let i = 0;
+    while (i < levels.length) {
+      const chain: Card[] = [group.get(levels[i]!)![0]!];
+      let j = i;
+      while (j + 1 < levels.length && levels[j + 1] === levels[j]! + 1) {
+        j += 1;
+        chain.push(group.get(levels[j]!)![0]!);
+      }
+      if (chain.length > best.length) best = chain;
+      i = j + 1;
+    }
+  }
+  const picked = best.slice(0, want);
+  // 长度不达标就当没有：调用方靠这个 null 决定「整桌重发」，而不是拿一条 3 张的顺子顶替 5 张
+  if (picked.length < want) return null;
+  return isRun(picked, trump) && classOfSet(picked, trump) !== null ? picked : null;
+}
+
+/**
+ * 组合枚举 + **引擎判定**，找第一组合法的 `size` 张出牌。
+ *
+ * 为什么不自己写跟牌规则：跟牌有两条约束（该门够 ⇒ 必须全出该门且连续段分解字典序最大；
+ * 该门不够 ⇒ 必须先出完该门、其余自由垫），自己复述一遍迟早与引擎漂移 —— 这里只负责枚举，
+ * 合法性一律问 `checkPlay`（界面与 MCP 用的是同一份）。
+ */
+function findLegalCombo(
+  hand: readonly Card[],
+  size: number,
+  trump: TrumpModel,
+  lead: readonly Card[]
+): Card[] | null {
+  const n = hand.length;
+  if (size > n || size < 1) return null;
+  const idx = Array.from({ length: size }, (_, i) => i);
+  const picked: Card[] = [];
+  let tried = 0;
+  for (;;) {
+    picked.length = 0;
+    for (const i of idx) picked.push(hand[i]!);
+    tried += 1;
+    if (checkPlay(hand, picked, trump, lead) === null) return [...picked];
+    if (tried > 40_000) return null;
+    let k = size - 1;
+    while (k >= 0 && idx[k] === n - size + k) k -= 1;
+    if (k < 0) return null;
+    idx[k] += 1;
+    for (let j = k + 1; j < size; j += 1) idx[j] = idx[j - 1]! + 1;
+  }
+}
+
+/**
+ * 把局面推到「一墩三家各出 `runLength` 张」：庄家领出一条顺子，两家各跟同样张数。
+ *
+ * 为什么非要有这一条：`driveTrick` 只出**单张**，而单张会让 `computeClusterStep` 走早退分支
+ * （count ≤ 1 ⇒ 不写 `--step`、走 CSS 默认间距）—— 于是「多张出牌堆的宽度预算」这条路径
+ * 从来没有被任何守卫执行过：实测 5 张顺子把两簇挤到一起、还捅出毡面，而全部判据都是绿的。
+ *
+ * 埋底要**避开**那条顺子（顺子得留在手上领出）；三家固定各出 `runLength` 张，
+ * 所以三家都会渲染多张出牌堆 —— 这正是要量的东西。
+ */
+async function driveRunTrick(
+  code: string,
+  seats: readonly Credential[],
+  declarerSeat: number,
+  runLength: number
+): Promise<void> {
+  const declarer = seats[declarerSeat]!;
+  const opening = await viewOf(code, declarer.credential);
+  const deal = opening.view.deal;
+  const hand = opening.you?.hand ?? [];
+  if (deal === null || deal.trump === null || hand.length === 0) {
+    throw new Error('顺子场景：庄家还没有手牌视图');
+  }
+  const run = findRun(hand, deal.trump, runLength);
+  if (run === null) throw new Error(`顺子场景：庄家手上没有 ${runLength} 张顺子`);
+  const used = new Set(run.map(cardKey));
+  const rest = hand.filter((card) => !used.has(cardKey(card)));
+  if (rest.length < 3) throw new Error('顺子场景：顺子之外凑不够 3 张底牌');
+  await act(code, declarer.credential, { type: 'bury', cards: rest.slice(0, 3) });
+  await act(code, declarer.credential, { type: 'play', cards: run });
+
+  for (let step = 1; step < 3; step += 1) {
+    const turn = (await viewOf(code, declarer.credential)).view.deal?.playTurn ?? null;
+    if (turn === null) throw new Error(`顺子场景：跟第 ${step} 家时没有人轮得到`);
+    const state = await viewOf(code, seats[turn]!.credential);
+    const trump = state.view.deal?.trump ?? null;
+    const own = state.you?.hand ?? [];
+    if (trump === null || own.length === 0) {
+      throw new Error(`顺子场景：座位 ${turn} 看不到自己该出的牌`);
+    }
+    const lead = state.view.deal?.trick?.plays[0]?.cards ?? run;
+    const combo = findLegalCombo(own, run.length, trump, lead);
+    if (combo === null) {
+      throw new Error(`顺子场景：座位 ${turn} 找不到合法的 ${run.length} 张跟牌`);
+    }
+    await act(code, seats[turn]!.credential, { type: 'play', cards: combo });
+  }
+}
+
+/**
+ * 开一桌并把叫牌推到成交。**顺子场景要能整桌重来**（5 张顺子只有约 6% 的发牌里有），
+ * 所以「开桌 → 发牌 → 叫牌」从 `runShot` 里抽出来成为可重复调用的一步。
+ *
+ * `declarerSeat` 由发牌人现取（首副发牌人是随机的），而本脚本的叫牌模式都是「一叫两 pass」，
+ * 所以庄家 = 发牌人 = `order[0]`。
+ */
+async function setupTable(
+  seats: readonly Credential[],
+  bids: Shot['bids']
+): Promise<{ readonly code: string; readonly order: readonly Credential[]; readonly declarerSeat: number }> {
   const created = (await apiFetch(`${base}/api/tables`, {
     method: 'POST',
     headers: { authorization: `Bearer ${seats[0]!.credential}` }
@@ -866,19 +1165,66 @@ async function runShot(
   await act(code, seats[0]!.credential, { type: 'deal' });
 
   // 叫牌顺序：发牌人起顺时针 —— 从视图里取，首副发牌人是随机的
-  const dealer = (await viewOf(code, seats[0]!.credential)).view.deal?.dealerSeat ?? 0;
-  const order = [0, 1, 2].map((step) => seats[(dealer + step) % 3]!);
-
-  for (let i = 0; i < shot.bids.length; i += 1) {
-    const call = shot.bids[i]!;
+  const declarerSeat = (await viewOf(code, seats[0]!.credential)).view.deal?.dealerSeat ?? 0;
+  const order = [0, 1, 2].map((step) => seats[(declarerSeat + step) % 3]!);
+  for (let i = 0; i < bids.length; i += 1) {
     // 叫牌严格按座位轮转，超过三个人就绕回第一位（成交前那一轮 pass 会绕回来）
-    await act(code, order[i % 3]!.credential, { type: 'bid', call });
+    await act(code, order[i % 3]!.credential, { type: 'bid', call: bids[i]! });
   }
-  if (shot.trick !== undefined) {
-    await driveTrick(code, seats, dealer, shot.trick === 'two-played' ? 2 : 3);
+  return { code, order, declarerSeat };
+}
+
+async function runShot(
+  shot: Shot,
+  port: number,
+  stamp: number,
+  index: number
+): Promise<{ readonly path: string; readonly summary: string; readonly problems: readonly string[] }> {
+  const seats = await Promise.all(
+    [0, 1, 2].map((i) => claim(`验收${index}${i}-${stamp}`))
+  );
+  const runLength = shot.runLength ?? 5;
+  const attempts = shot.trick === 'run-clusters' ? RUN_ATTEMPTS : 1;
+  let table: Awaited<ReturnType<typeof setupTable>> | null = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const candidate = await setupTable(seats, shot.bids);
+    if (shot.trick !== 'run-clusters') {
+      table = candidate;
+      break;
+    }
+    // 顺子场景：庄家（= 发牌人 = 第一个叫牌人）手上得有 runLength 张顺子，否则整桌重发。
+    // 顺带核对「他确实是庄家」：庄家才有 20 张手牌（17 + 拿上来的底牌 3），
+    // 少了这一步，搜索会在 17 张上做而场景名说的是 20 张那一副。
+    const leader = candidate.order[0]!;
+    const view = await viewOf(candidate.code, leader.credential);
+    const deal = view.view.deal;
+    const viewHand = view.you?.hand ?? [];
+    if (deal === null || deal.trump === null || deal.phase !== 'bury' || viewHand.length < 20) {
+      throw new Error(
+        `顺子场景：第一个叫牌人不是庄家（阶段 ${deal?.phase ?? '—'}、手牌 ${viewHand.length} 张）：` +
+          '场景的 bids 必须是「一叫两 pass」'
+      );
+    }
+    if (findRun(viewHand, deal.trump, runLength) !== null) {
+      table = candidate;
+      break;
+    }
+    if (attempt === attempts) {
+      throw new Error(
+        `顺子场景：重发 ${attempts} 次都没等到一副有 ${runLength} 张顺子的牌（实测概率约 5.9%/副，` +
+          '这个上限不该撞上：真撞上了说明牌堆或规则变了）'
+      );
+    }
   }
-  const actor = order[shot.captureIndex]!;
-  return await shoot(shot, port, { code, credential: actor.credential });
+  if (table === null) throw new Error('顺子场景：没能开出可用的牌桌');
+
+  if (shot.trick === 'run-clusters') {
+    await driveRunTrick(table.code, seats, table.declarerSeat, runLength);
+  } else if (shot.trick !== undefined) {
+    await driveTrick(table.code, seats, table.declarerSeat, shot.trick === 'two-played' ? 2 : 3);
+  }
+  const actor = table.order[shot.captureIndex]!;
+  return await shoot(shot, port, { code: table.code, credential: actor.credential });
 }
 
 async function main(): Promise<void> {

@@ -236,10 +236,28 @@ button:disabled {
   --cw: 56px;
 }
 
-/* 已测量：间距由组件按**这一点可用的宽度预算**算出（放不下就叠起来，绝不与旁边那簇相撞 ——
-   见 `fan-layout.ts` 的 computeClusterStep）。负边距 = step - 牌宽，与手牌扇面同一套算法。 */
+/* 已测量：间距**只**由 `--step` 说 —— 所以 `gap` 必须在这里关掉。
+   旧版没关：负边距公式按「自己是唯一间距」算，而 flex 的 `gap: 6px` 照样生效，
+   于是实际步距 = `--step` + 6px。对方出牌点只有 38% 宽的预算盒，5 张顺子超盒约 24px，
+   而 `justify-content: center` 把超出部分向两边均分 —— 两簇在中带互叠、左簇捅出毡面
+   （实测：牌越出预算盒 5.8 / 7.4px；见 scripts/shot-auction.ts 的 ⑦）。 */
+.cluster[data-measured='true'] {
+  gap: 0;
+}
+
 .cluster[data-measured='true'] .card:not(:first-child) {
   margin-left: calc(var(--step, 0px) - var(--cw, 56px));
+}
+
+/* 未测量回退（SSR / 首帧 / 单张）：与测量后**同一档紧凑**（每张露出 60% ⇒ 负边距 -40% 牌宽），
+   否则首帧会先摊开再跳成叠排。这个 -0.4 与 `fan-layout.ts` 的 `CLUSTER_STRIP_RATIO`（0.6）
+   是同一件事的两半，改动必须一起改。比例本身与牌宽无关，所以窄屏（38px）不用另写一条。 */
+.cluster[data-measured='false'] {
+  gap: 0;
+}
+
+.cluster[data-measured='false'] .card:not(:first-child) {
+  margin-left: calc(var(--cw, 56px) * -0.4);
 }
 
 .cluster .card:nth-child(2) {
@@ -253,11 +271,6 @@ button:disabled {
 @media (max-width: 640px) {
   .cluster .card {
     --cw: 38px;
-  }
-
-  /* 窄屏上牌宽是 38px，所以「放得下」的判据也按 38 算；未测量时的回退间距与桌面一致 */
-  .cluster[data-measured='false'] .card:not(:first-child) {
-    margin-left: 0;
   }
 }
 

@@ -76,16 +76,28 @@ export function computeFanLayout(input: {
   return { step: strip, perRow, rows, override: true };
 }
 
-/** 出牌堆里相邻两张牌之间的空隙（与 `.cluster` 的 `gap: 6px` 同源） */
-export const CLUSTER_GAP = 6;
+/**
+ * 出牌堆里每张牌**露出的比例**（与手牌扇面同一套纪律：只收不放）。
+ *
+ * 0.6 = 相邻两张牌左缘相距 0.6 × 牌宽、叠掉 40%，两张牌的角标（点数 + 花色）都完整可读。
+ * 为什么不是「牌宽 + 空隙」那种摊开排法：同门的多张牌（顺子/连对）是**一个**组合，
+ * 摊开会被读成 N 张各自独立的牌；而己方出牌点跨整行宽，摊开时 5 张就横贯大半行 ——
+ * 宽度够用不等于该铺开。放不下时再由 `computeClusterStep` 一路收紧（只收，不放）。
+ */
+export const CLUSTER_STRIP_RATIO = 0.6;
 
 /**
  * 一簇**出牌堆**在给定宽度预算里的步距（相邻两张牌左边缘的间距）。
  *
  * 与手牌扇面共用同一套宽度口径（`rowWidth` / `minStrip`），但契约不同：手牌放不下时**切行**，
- * 而出牌堆不切行（一墩就是一排），所以它一路收到放得下为止 —— 真到了 `minStrip` 的可读下限
- * 还放不下，就允许再挤下去。取舍是明确的：**两簇相撞比一簇略挤更糟**（相撞时「谁出了什么」
+ * 而出牌堆不切行（一墩就是一排），所以它一路收到放得下为止 —— 真到了角标可读下限还放不下，
+ * 就允许再挤下去。取舍是明确的：**两簇相撞比一簇略挤更糟**（相撞时「谁出了什么」
  * 直接读不出来，而略挤只是角标变小）。
+ *
+ * **上限是紧凑步距（0.6 × 牌宽），不是「牌宽 + 空隙」**：早先这里返回 `牌宽 + CLUSTER_GAP`
+ * （放得下就摊开），实测下来是错的 —— 己方出牌点跨整行，5 张顺子于是摊满大半行（读起来像
+ * 5 张互不相干的牌），而对方出牌点只有 38% 宽。现在只有两个去向：**放得下 = 紧凑**，
+ * **放不下 = 收得更紧**。
  *
  * 为什么不写成 CSS 的百分比边距或 `clamp()`：绝对定位盒里 `width: auto` 是 shrink-to-fit，
  * 百分比边距会以**内容宽度**为包含块，于是标题与徽标会脱开牌堆、各处算各处的。这里由组件
@@ -102,7 +114,7 @@ export function computeClusterStep(input: {
   const budget = Math.max(0, input.budget);
   // 0/1 张、或还没测量：没有「相邻间距」可言，交给 `.cluster` 的默认 gap
   if (count <= 1 || cardWidth <= 0 || budget <= 0) return cardWidth;
-  const natural = cardWidth + CLUSTER_GAP;
+  const natural = cardWidth * CLUSTER_STRIP_RATIO;
   if (fits(count, cardWidth, natural, budget)) return natural;
   return Math.max(0, (budget - cardWidth) / (count - 1));
 }

@@ -38,7 +38,8 @@
  * 战报按需渲染（`active === 'report'` 才在 DOM 里），所以 ui-check 同样够不到它，判据也只能在这一层。
  *
  * 第六块是**「上一轮」回看**（`TrickReview`）：机器人出手只有 0.5–1.5 秒，收墩后赢家立刻领出，
- * 上一墩的三家出牌一眨眼就没了 —— 入口是状态条「第 N 轮」旁边那枚 chip，内容是 `trickHistory`
+ * 上一墩的三家出牌一眨眼就没了 —— 入口是状态条**最左**那枚「上一轮」（它取代了原来的「第 N 轮」
+ * chip：轮次号只有回看浮层的标题该说），内容是 `trickHistory`
  * 末项。它同样**默认关着**（`reviewOpen` 初值 false，SSR 里够不到），所以判据落在这里：
  * 入口必须 `pointer-events-auto`（外层是让开点击的信息条）、浮层必须是**毡面内**的
  * （`absolute`，不许 `fixed` —— 改成整屏就盖住手牌，而手牌必须一直可见可点）、
@@ -80,6 +81,8 @@ const verdictBadge = read('../src/lib/components/VerdictBadge.svelte');
 const levelTable = read('../src/lib/components/LevelTable.svelte');
 const replayPanel = read('../src/lib/components/ReplayPanel.svelte');
 const trickReview = read('../src/lib/components/TrickReview.svelte');
+/** 出牌堆的间距是「组件算步距 + CSS 负边距」两半拼的，所以两半都要守（见 clusterCssCheck） */
+const appCss = read('../src/app.css');
 
 /** 剥掉注释再断言：注释里提到旧写法不构成引用（同 page-source.test.ts 的理由） */
 function code(source: string): string {
@@ -1486,7 +1489,10 @@ function trickReviewCheck(
   const status = code(statusSource);
   const review = code(reviewSource);
 
-  // ① 入口：状态条上、收过墩才有、自己接回点击
+  // ① 入口：状态条上、收过墩才有、自己接回点击，且**站在整条最左**
+  if (!status.includes('上一轮</button')) {
+    return '状态条里没有「上一轮」回看入口：上一墩的牌又只剩毡面上那一瞬';
+  }
   if (!status.includes('onReviewTrick')) {
     return '状态条里没有「上一轮」回看入口（onReviewTrick）：上一墩的牌又只剩毡面上那一瞬';
   }
@@ -1496,16 +1502,22 @@ function trickReviewCheck(
   if (!status.includes('pointer-events-auto')) {
     return '「上一轮」入口缺 pointer-events-auto：外层让开点击，按钮会看得见点不到';
   }
-  // 折行的落点也是一条判据：这枚 chip 必须排在「庄已抓」**之后**（即状态条最后一项）。
-  // 375px 上这一条逼近可用宽度（定约与庄已抓都两位数时约 325px / 可用 335px），万一折行，
-  // 排在末尾时被挤到第二行的是这枚小 chip —— 落进左右两块出牌点之间的空带；排在前面的话，
-  // 被挤下去的是「庄已抓」那枚大字，正好压在左上那堆牌上。
-  const statusReviewAt = status.indexOf('上一轮');
-  const pointsAt = status.indexOf('庄已抓');
-  if (pointsAt < 0 || statusReviewAt < pointsAt) {
-    return '「上一轮」入口没有排在「庄已抓」之后：窄屏折行时被挤下去的是那枚大字，会压在左上那堆牌上';
+  // 位置与轮次号是同一条判据的两半：这枚入口**取代了原来的「第 N 轮」chip**，所以它必须是首项，
+  // 而「第 N 轮」必须消失。
+  // - 为什么删轮次号：它在这里没有信息量 —— 打到第几轮由毡面上那墩牌自己说明，唯一需要说清
+  //   轮次的地方是**回看浮层**的标题（「上一轮 · 第 N 轮」）；而它占的不是零成本，四项并列时
+  //   360px 上这一条会折行（实测折行；守卫见 shot 的 ⑬与下面的字数判据）。
+  // - 为什么必须是首项：入口排在末尾时，折行风险最高的那一项正好是它自己；删掉轮次号之后
+  //   三项（入口 + 定约 + 庄已抓）最坏情形约 262px，远在 375px 可用宽度 ~335px 之内。
+  const reviewEntryAt = status.indexOf('上一轮');
+  const contractChipAt = status.indexOf('定约');
+  if (contractChipAt < 0 || reviewEntryAt > contractChipAt) {
+    return '「上一轮」入口没有排在状态条首项：它要取代「第 N 轮」chip 站在最左（理由见 TableStatus 的注释）';
   }
-
+  if ((status.match(/轮/g) ?? []).length !== 1) {
+    return '状态条里又长出了「第 N 轮」chip（或轮次号换了个写法）：它这一条会把三项挤到折行，' +
+      '而轮次只有回看浮层的标题该说';
+  }
   // ② 状态归页面、默认关着、且浮层住在毡面里
   if (!page.includes('let reviewOpen = $state(false)')) {
     return '回看状态不是 `let reviewOpen = $state(false)`：默认必须关着（SSR 首帧不许有这一层）';
@@ -1517,7 +1529,9 @@ function trickReviewCheck(
   // 渲染位置：毡面开标签之后、操作条之前 —— 也就是毡面那一块版面的最后（DOM 里排在座位卡与出牌区后面，
   // 于是 `absolute inset-0` 的参照物是 `.felt` 自己，而不是 `<main>` 或操作条那一行）。
   // 真正的几何（375px 上不盖手牌、不压座位卡）由 tool-bridge 的 UI 走查量，这里只钉住结构。
-  const feltAt = page.indexOf('<div class="felt');
+  // 用正则而不是字面量：毡面的开标签会因为类名变长而被换行折开（`grid-cols-1` 那一版就是），
+  // 钉死单行写法会把这条守卫变成「格式守卫」。
+  const feltAt = page.search(/<div[^>]*class="felt\b/);
   const reviewAt = page.indexOf('<TrickReview');
   const barAt = page.indexOf('<ActionBar');
   if (feltAt < 0) return '牌桌页里找不到 .felt 容器：回看浮层的参照物不明';
@@ -1582,14 +1596,28 @@ test('反证：入口点不动 / 默认就开着 / 浮层整屏 / 丢掉让开�
       /trickHistory/
     ],
     [
-      '入口挪到「庄已抓」之前（折行落点会变）',
+      '入口被挪到末尾（不再是首项）',
       trickReviewCheck(
         page,
-        tableStatus.replace('{#if contract}', '<span>上一轮</span>\n  {#if contract}'),
+        // 把整块入口挪到文件末尾：剥掉注释后，「上一轮」就排在「定约」之后了
+        (() => {
+          const block = /\{#if canReview\}[\s\S]*?\{\/if\}/.exec(tableStatus)?.[0] ?? '';
+          return tableStatus.replace(block, '') + '\n' + block;
+        })(),
         trickReview,
         trickArea
       ),
-      /庄已抓/
+      /首项/
+    ],
+    [
+      '「第 N 轮」chip 又回来了',
+      trickReviewCheck(
+        page,
+        `<span>第 <b class="tabular-nums">{trickNo}</b> 轮</span>` + tableStatus,
+        trickReview,
+        trickArea
+      ),
+      /第 N 轮/
     ],
     [
       '回看默认就开着（SSR 首帧出现浮层）',
@@ -1599,9 +1627,10 @@ test('反证：入口点不动 / 默认就开着 / 浮层整屏 / 丢掉让开�
     [
       '浮层搬到毡面之外（渲染在 .felt 之前）',
       trickReviewCheck(
+        // 按开标签的**正则**注入（同上：不依赖它写成一行）
         page.replace(
-          '  <div class="felt relative',
-          '  <TrickReview {client} open={reviewOpen} />\n  <div class="felt relative'
+          /(<div[^>]*class="felt\b)/,
+          '<TrickReview {client} open={reviewOpen} />\n  $1'
         ),
         tableStatus,
         trickReview,
@@ -1638,4 +1667,67 @@ test('反证：入口点不动 / 默认就开着 / 浮层整屏 / 丢掉让开�
   for (const [name, problem, pattern] of cases) {
     assert.match(problem ?? '', pattern, `${name}：没有被判出来（守卫空转）`);
   }
+});
+
+/* ---------- 出牌堆的 CSS 契约（与 fan-layout.ts 的 CLUSTER_STRIP_RATIO 一体两面） ---------- */
+
+/**
+ * 为什么这一条落在 CSS 这一层：出牌堆的间距是「组件算步距 + CSS 负边距」两半拼出来的，
+ * 而**两半各错一次**正是截图 #1 的成因 ——
+ *
+ * ① 已测量时必须**关掉 flex 的 `gap`**：负边距公式 `calc(var(--step) - var(--cw))` 按
+ *    「自己是唯一间距」算，`gap: 6px` 不关就变成实际步距 `--step + 6px`。对方出牌点只有
+ *    38% 宽（窄屏 ≈119px），5 张顺子于是越出预算盒（实测 5.8 / 7.4px），而
+ *    `justify-content: center` 又把超出部分向两边均分 —— 两簇在中带互叠、左簇捅出毡面。
+ * ② 未测量（SSR / 首帧）的回退必须是**同一档紧凑**（`-0.4 × 牌宽`，即每张露出 60%）：
+ *    否则首帧先摊开、量完再跳成叠排。
+ *
+ * 几何本身由 `scripts/shot-auction.ts` 的 ⑦（牌不出预算）与 ⑩（间距不超紧凑上限）实测，
+ * 这里守的是「两半没有各说各的」。注入实验（删掉 `gap: 0` 那条规则）见下面的反证用例。
+ */
+function clusterCssCheck(css: string): string | null {
+  const src = code(css);
+  if (!/\.cluster\[data-measured='true'\]\s*\{[^}]*gap:\s*0/.test(src)) {
+    return '已测量的出牌堆没有关掉 flex 的 gap：实际步距会变成 --step + 6px（对方出牌点只有 38% 宽，牌堆会越出预算盒、两簇互叠）';
+  }
+  if (
+    !/\.cluster\[data-measured='true'\]\s+\.card:not\(:first-child\)\s*\{[^}]*margin-left:\s*calc\(var\(--step/.test(
+      src
+    )
+  ) {
+    return '出牌堆的已测量间距公式（margin-left: calc(var(--step) - var(--cw))）不在了';
+  }
+  if (
+    !/\.cluster\[data-measured='false'\]\s*\{[^}]*gap:\s*0/.test(src) ||
+    !/\.cluster\[data-measured='false'\]\s+\.card:not\(:first-child\)\s*\{[^}]*\*\s*-0\.4/.test(src)
+  ) {
+    return '出牌堆未测量的回退间距不是同一档紧凑（-0.4 × 牌宽）：首帧会先摊开、量完再跳成叠排';
+  }
+  return null;
+}
+
+test('出牌堆的 CSS 契约：已测量时关掉 gap，未测量时与测量后同档紧凑', () => {
+  const problem = clusterCssCheck(appCss);
+  assert.equal(problem, null, problem ?? '');
+});
+
+test('反证：gap 不关 / 回退改成摊开，都必须被判出来', () => {
+  assert.match(
+    clusterCssCheck(appCss.replace(/\.cluster\[data-measured='true'\]\s*\{[^}]*\}/, '')) ?? '',
+    /gap/,
+    '把「已测量关掉 gap」那条规则删掉没有被判出来（这条守卫在空转）'
+  );
+  assert.match(
+    clusterCssCheck(appCss.replace('calc(var(--cw, 56px) * -0.4)', '0')) ?? '',
+    /紧凑/,
+    '未测量的回退间距改回摊开没有被判出来'
+  );
+  assert.equal(
+    clusterCssCheck(`.cluster[data-measured='true'] { gap: 0 }
+.cluster[data-measured='true'] .card:not(:first-child) { margin-left: calc(var(--step, 0px) - var(--cw, 56px)); }
+.cluster[data-measured='false'] { gap: 0 }
+.cluster[data-measured='false'] .card:not(:first-child) { margin-left: calc(var(--cw, 56px) * -0.4); }`),
+    null,
+    '这条守卫对合规的最小片段也报错（过宽）'
+  );
 });

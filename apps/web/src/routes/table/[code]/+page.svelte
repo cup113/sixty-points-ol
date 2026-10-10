@@ -297,13 +297,21 @@
     </div>
   {/if}
 
-  <div class="felt relative grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)_auto] gap-2 p-3 sm:gap-3 sm:p-5">
+  <div
+    class="felt relative grid min-h-0 flex-1 grid-cols-1 grid-rows-[auto_minmax(0,1fr)_auto] gap-2 p-3 sm:gap-3 sm:p-5"
+  >
     <!-- 毡面 = **三行格**（见 ADR-0020）：`[顶行：两张对手卡][内容槽 1fr][底栏：我]`。
          为什么要结构化的三行、而不是各处自己写 `top-[4.5rem]` / `top-[5.5rem]` / `top-[22%]`：
          那些魔数各自算各自的偏移，谁也管不了谁 —— 手机短屏上「定约 / 庄已抓」会压到埋底槽位上、
          叫牌面板会压住座位卡、托盘会压住我的座位卡（截图里的 #3 #4 #5 就是这么来的）。
          三行格让「非座位层只能住在内容槽里」成为**结构**保证，而不是靠调数维持。
-         钩子 `data-felt-row` 供 `scripts/shot-auction.ts` 的实测断言定位（源码守卫看不见几何）。 -->
+         钩子 `data-felt-row` 供 `scripts/shot-auction.ts` 的实测断言定位（源码守卫看不见几何）。
+
+         `grid-cols-1`（= `minmax(0, 1fr)`）不是多余的：单列网格不给列模版时那一列是 `auto`，
+         内容比容器宽就会**把整条轨道撑宽** —— 埋底阶段实测撑到 352px（内容是 21rem 的埋底面板
+         加上外层 `px-2`），于是三行一起变宽：「我」那条底栏（`w-full`）跟着变成 352px 并右偏 5px，
+         居中判据直接不过。列模版钉成 `minmax(0, 1fr)` 之后轨道只能是容器宽度，
+         内容宽了就在槽里自己溢出，不再牵动另外两行。 -->
     <div data-felt-row="seats" class="flex items-start justify-between gap-2">
       <!-- 左＝下家、右＝上家；观战者没有「我」，两张卡都显示玩家名。
            这两张是**纯展示**：卡片上的「+ 机器人 / 请离」已撤到抽屉的「牌桌」页（ADR-0020）。 -->
@@ -344,7 +352,11 @@
       {/if}
     </div>
 
-    <!-- 第三行：「我」那一条底栏（一行装完身份）。观战者没有座位，这一行整行消失。 -->
+    <!-- 第三行：「我」那一条底栏（一行装完身份）。观战者没有座位，这一行整行消失。
+         `max-w-sm`（384px）+ `mx-auto`：栏里只有「庄冠 + 头像 + 名字 + 级别」这几样，
+         桌面端毡面 1080px 时让它整幅铺开既没必要、也不好看（实测宽 1080px）；
+         窄屏毡面本来就在 384px 以内，于是 `w-full` 仍然成立 —— 手机上零变化。
+         居中走 auto 边距（这一行是 flex 行），不靠再加一层嵌套。 -->
     <div data-felt-row="me" class="flex">
       {#if you !== null}
         <SeatCard
@@ -356,7 +368,7 @@
           isMe={seated}
           isTurn={isTurnAt(anchor)}
           isDeclarer={deal?.declarerSeat === anchor}
-          class="w-full"
+          class="mx-auto w-full max-w-sm"
         />
       {/if}
     </div>

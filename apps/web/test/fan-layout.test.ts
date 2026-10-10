@@ -2,12 +2,23 @@
  * 手牌扇形布局单测：核心是「任何机型都不裁切」与「角标始终可读」两条不变量，
  * 外加一条回归——旧的固定重叠规则在 375px 上必然溢出（正是要修的问题）。
  *
+ * 后半节是**出牌堆**（`computeClusterStep`）：它与手牌共用宽度口径，但契约不同
+ * （手牌放不下切行，出牌堆不切行），且这是「>1 张」才会走到的路径 ——
+ * 实测里 5 张顺子摊满整行 / 两簇互叠，而此前它**一条单测都没有**。
+ *
  * 沙箱内按包运行：node --test --test-isolation=none "test/*.test.ts"
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { BASE_STRIP_RATIO, computeFanLayout, minStrip, rowWidth } from '../src/lib/fan-layout.ts';
+import {
+  BASE_STRIP_RATIO,
+  CLUSTER_STRIP_RATIO,
+  computeClusterStep,
+  computeFanLayout,
+  minStrip,
+  rowWidth
+} from '../src/lib/fan-layout.ts';
 
 const EPS = 1e-6;
 
@@ -125,4 +136,68 @@ test('参数扫描：300..1500px × 1..20 张全部满足不变量', () => {
     }
   }
   assert.equal(checked, 2 * 121 * 20, '扫描规模应与预期一致');
+});
+
+/* ---------- 出牌堆（多张组合）：只收不放 ---------- */
+
+/**
+ * [场景, 出牌点预算宽度, 牌宽] —— 预算宽度按 `TrickArea` 的实际几何算出来：
+ * 三点是 `10% / 通栏 / 10%`，左右各占 38%，牌宽窄屏 38 / 桌面 56（`.cluster .card` 的 `--cw`）。
+ */
+const CLUSTER_BUDGETS: readonly [string, number, number][] = [
+  ['窄屏对方点（毡面 312 × 38%）', 312 * 0.38, 38],
+  ['窄屏我方点（通栏）', 312, 38],
+  ['桌面对方点（毡面 1080 × 38%）', 1080 * 0.38, 56],
+  ['桌面我方点（通栏）', 1080, 56]
+];
+
+test('出牌堆：步距不超过紧凑上限（放得下也不摊开）', () => {
+  // 「放得下就摊开」正是实测的缺陷：己方出牌点跨整行，5 张顺子于是摊满大半行
+  // （实测步距 50.0px，而紧凑上限是 38 × 0.6 = 22.8px）。上限与手牌同一套纪律：只收不放。
+  for (const [scene, budget, cardWidth] of CLUSTER_BUDGETS) {
+    for (let count = 2; count <= 12; count += 1) {
+      const step = computeClusterStep({ count, cardWidth, budget });
+      assert.ok(
+        step <= cardWidth * CLUSTER_STRIP_RATIO + EPS,
+        `${scene}：${count} 张的步距 ${step} 超过紧凑上限 ${cardWidth * CLUSTER_STRIP_RATIO}`
+      );
+    }
+  }
+});
+
+test('出牌堆：预算不小于一张牌宽时整堆必须放得下（放不下就收得更紧）', () => {
+  for (const [scene, budget, cardWidth] of CLUSTER_BUDGETS) {
+    for (let count = 2; count <= 12; count += 1) {
+      const step = computeClusterStep({ count, cardWidth, budget });
+      assert.ok(
+        rowWidth(count, cardWidth, step) <= budget + EPS,
+        `${scene}：${count} 张整堆宽 ${rowWidth(count, cardWidth, step)} 超出预算 ${budget}`
+      );
+    }
+  }
+});
+
+test('出牌堆：0/1 张与未测量不写内联间距（交给 CSS 回退值）', () => {
+  // 单张没有「相邻间距」可言；返回牌宽是给组件判断用的（`measured` 也要求 count > 1）
+  assert.equal(computeClusterStep({ count: 1, cardWidth: 56, budget: 410 }), 56);
+  assert.equal(computeClusterStep({ count: 0, cardWidth: 56, budget: 410 }), 56);
+  // 未测量（预算 0）与牌宽未测量：不要算出「0 间距」把牌全叠在一起
+  assert.equal(computeClusterStep({ count: 5, cardWidth: 56, budget: 0 }), 56);
+  assert.equal(computeClusterStep({ count: 5, cardWidth: 0, budget: 410 }), 0);
+});
+
+test('反证：旧的自然间距（牌宽 + 6）在窄屏对方出牌点里必然放不下', () => {
+  // 每次运行都重证「摊开这条老路走不通」，而不是只在一次性的注入实验里证过：
+  // 旧的 natural 是 牌宽 + CLUSTER_GAP(6)，CSS 的 gap:6px 又照样生效 ⇒ 实际步距 牌宽 + 12。
+  const cardWidth = 38;
+  const budget = 312 * 0.38;
+  const oldNatural = cardWidth + 6;
+  assert.ok(
+    rowWidth(5, cardWidth, oldNatural) > budget,
+    `旧的自然间距应当放不下（${rowWidth(5, cardWidth, oldNatural)} vs ${budget}）：这条反证失效了`
+  );
+  // 同一组输入下，新算法必须放得下
+  const step = computeClusterStep({ count: 5, cardWidth, budget });
+  assert.ok(rowWidth(5, cardWidth, step) <= budget + EPS, '新算法在窄屏对方点放不下 5 张');
+  assert.ok(step < oldNatural, '新算法的步距应当比旧的摊开间距更紧');
 });

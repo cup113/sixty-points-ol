@@ -280,11 +280,12 @@ function bidPanelMarkup(html: string): string {
 }
 
 /**
- * 「上一轮」回看入口那枚 chip 的开标签（状态条内、紧跟「第 N 轮」）。
+ * 「上一轮」回看入口那枚 chip 的开标签（状态条内、整条**最左** —— 它取代了原来的「第 N 轮」）。
  *
  * 它必须是 `pointer-events-auto`：整条状态条 `pointer-events-none`（横跨毡面，要让座位卡上的
  * 「+ 机器人」/「请离」点得到），少了这一句按钮就看得见点不到 —— `BuryPanel` 记过这个坑。
- * 形状判据的源码那一半在 `test/table-chrome.test.ts` 的 `trickReviewCheck`。
+ * 形状判据的源码那一半在 `test/table-chrome.test.ts` 的 `trickReviewCheck`（位置 + 「第 N 轮」
+ * 不许回来），几何那一半在 `scripts/shot-auction.ts` 的 ⑬（状态条不折行）。
  */
 function reviewEntry(html: string): string | null {
   return /<button[^>]*class="[^"]*pointer-events-auto[^"]*"[^>]*>上一轮<\/button>/.exec(html)?.[0] ?? null;
