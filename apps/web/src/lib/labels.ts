@@ -126,6 +126,37 @@ export function callText(call: BidCall): string {
 }
 
 /**
+ * 「距上一步」那个闹钟的**表面**：图标里直接写秒数，三档（ADR-0020 修订）。
+ *
+ * - `0..99` 秒：正常字号；
+ * - `100..999` 秒：小一档字号（三位数要塞进 22px 的圆里）；
+ * - `≥1000` 秒（约 17 分钟）：**不再写数**，改成一枚红色的「—」。
+ *
+ * 为什么 1000 秒之后不写数：那一刻它已经不是「谁想了多久」，而是「这张桌停住了」——
+ * 三位以上的秒数在一个小圆里既读不出精确值、也没有意义（真实牌局里这个数动辄上万秒）。
+ * 一枚红横杠把「停住了」说得更快，而且不占宽度。这是本项目**唯一**一处按时间升级的变色，
+ * 早先 ADR-0020 写过「不做任何催促色阶」，那条判断在「计时占一整枚药丸、宽度足够」的前提下成立，
+ * 改成图标之后不成立了：图标里没有第二个位置放「很久」这件事。
+ *
+ * 取值口径与 `formatElapsed` 一致（都是秒），差别只在呈现：药丸上写「12 分 34 秒」，
+ * 图标里只写「754」。完整那句仍然由 `formatElapsed` 提供，挂在 `title` / `aria-label` 上。
+ */
+export interface ClockFace {
+  readonly text: string;
+  readonly tone: 'plain' | 'long' | 'stale';
+}
+
+/** 图标不再写数、改红色横杠的秒数门槛（1000 秒 ≈ 16 分 40 秒） */
+export const CLOCK_STALE_SECONDS = 1000;
+
+export function clockFace(ageMs: number): ClockFace {
+  // 负数与非有限值一律当 0（与 `formatElapsed` 同一条纪律）：宁可显示「0」，也不许在牌面上出现 NaN
+  const seconds = Number.isFinite(ageMs) ? Math.max(0, Math.floor(ageMs / 1000)) : 0;
+  if (seconds >= CLOCK_STALE_SECONDS) return { text: '—', tone: 'stale' };
+  return { text: String(seconds), tone: seconds >= 100 ? 'long' : 'plain' };
+}
+
+/**
  * 时间上最后一次出手 —— 可能就是「不叫」。
  *
  * 与 `highestCall` 是两个概念：面板顶部的大字要的是**最高叫品**（将要成为定约的那个），

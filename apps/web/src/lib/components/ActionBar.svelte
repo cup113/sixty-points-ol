@@ -4,6 +4,7 @@
   import { SPECTATOR_LABEL_SEAT } from '$lib/role';
   import { whoLabel } from '$lib/labels';
   import ActionClock from './ActionClock.svelte';
+  import ActionTray from './ActionTray.svelte';
   import HelpPopover from './HelpPopover.svelte';
 
   let {
@@ -59,17 +60,25 @@
 
   /**
    * 只剩两类按钮：结算阶段的「结算详情 / 下一副 / 开新对局」。
-   * 出牌与埋底的动作控件（已选张数、出牌、清空、确认埋底）已搬进 `ActionTray` ——
-   * 它们只在「该你出手」时存在，挤在这一行里会让窄屏换行、并把整页高度顶来顶去。
+   * 出牌与埋底的动作控件住在 `ActionTray` 里，而**托盘就渲染在这一行**（问号右边那一格）——
+   * 它不是第二处落点，是同一个组件、同一行。两者不会同时出现：轮到谁动时这句 `status`
+   * 恰好是 null（见上），托盘才出现。
    */
   const gold =
     'rounded-lg bg-gold px-4 py-1.5 text-xs font-bold text-ink transition enabled:hover:brightness-110 disabled:opacity-30';
 </script>
 
 <!-- z-10：手牌容器在 DOM 里排在操作条之后，上浮的选中牌会盖到这一条上。
-     这里只剩信息（「?」与状态句），抬到牌面之上是为了让它们始终读得到；
-     `.play-btn` 的 z-20 仍在 ActionTray 里保着出牌键不被任何牌盖住。 -->
-<div class="relative z-10 flex min-h-[2.6rem] flex-wrap items-center gap-2 py-1.5">
+     这里放「?」、状态句 / 动作托盘、计时与结算按钮；抬到牌面之上是为了让它们始终读得到，
+     `.play-btn` 的 z-20 仍在 ActionTray 里保着出牌键不被任何牌盖住。
+
+     `min-h-[2.6rem]`（41.6px）不是随手写的：托盘（计数 + 出牌 + 清空）与那句状态句来回换内容时，
+     这一行的高度**必须不变** —— 毡面是 `flex-1`，行高一变毡面就跟着动。托盘的三个控件都在这条
+     线以内，所以「轮到我 / 轮空」之间毡面与手牌零回流。 -->
+<div
+  data-action-row="true"
+  class="relative z-10 flex min-h-[2.6rem] flex-wrap items-center gap-2 py-1.5"
+>
   <!-- 阶段说明只活在这里：所有常驻提示文案都已删除，正文与 /rules 教程同源 -->
   <HelpPopover align="left" placement="up" title={help.title} label="?">
     <ul class="list-disc space-y-1.5 pl-4">
@@ -82,13 +91,20 @@
     </a>
   </HelpPopover>
 
-  {#if status}
-    <span class="text-xs text-white/45">{status}</span>
-  {/if}
+  <!-- 中间那一格**占满剩下的宽度、内容居中**（`flex-1` + `justify-center`，子元素不设宽度）：
+       状态句与动作托盘都住在这里，于是宽屏上它们都落在整行的中间 —— 不会挤在「?」旁边
+       而让右半边空一大片。两者互斥（轮到我时状态句是 null，见上），所以这一格是「换内容」；
+       行高由外面的 `min-h-[2.6rem]` 钉住，毡面零回流。
+       `min-w-0` 让它在极窄屏上正常参与收缩，而不是把整行撑出容器。 -->
+  <div class="flex min-w-0 flex-1 items-center justify-center gap-2">
+    {#if status}
+      <span class="text-xs text-white/45">{status}</span>
+    {/if}
+    <ActionTray {client} />
+  </div>
 
   <!-- 距上一步多久：轮到自己时上面那句状态是 null，但计时照常显示 —— 那时它读作「你自己想了多久」。
-       `ml-auto` 把它推到这一条的右端：手机窄屏上「该你出手」时动作托盘正居中都悬在中间，
-       计时留在左端会被那张托盘压掉。 -->
+       `ml-auto` 把它推到这一条的右端（它是一枚 22px 的闹钟图标，不再占 ~110px）。 -->
   <ActionClock class="ml-auto" ageMs={client.table?.actionAgeMs ?? null} />
 
   {#if phase === 'scored'}

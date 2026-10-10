@@ -11,6 +11,10 @@
   /**
    * 只有「这一手归你动」时才存在：打牌轮到你、或埋底轮到庄家。
    * 观战者两样都不成立（`me` 为 null），不必再写一套分支。
+   *
+   * 它出现的那一刻，操作条上那句状态**一定**是 null（`ActionBar` 的 `status` 在
+   * 「叫牌轮到我 / 我埋底 / 我出牌」三种情况下都返回 null）—— 所以这一格是**换内容**，
+   * 不是叠内容：问号右边要么是别人在动的状态句，要么是这一套动作控件，不会同时出现两样。
    */
   const visible = $derived(
     deal !== null &&
@@ -39,56 +43,55 @@
   const count = 'whitespace-nowrap text-xs text-white/70';
 </script>
 
-<!-- 动作托盘 = 「轮到你了」的那一套控件，居**中**住在毡面与操作条之间那条常驻动作带里（ADR-0020）。
-     ① **在毡面之外**：它原先钉在操作条上沿（`bottom-full`，而那 40px 正好整根落在毡面的最后
-        40px 里）—— 手机 375px 上它与自己的座位卡竖直重叠 32px、水平重叠 84px（截图里的 #4）。
-        「把座位卡抬高」只是把同一块地方换个方式占掉，所以「毡面最后这条带归谁」必须明确：
-        **归托盘**。带子常驻（不分轮到自己还是轮空），所以切换时毡面与手牌零回流。
-     ② **单行不换行**（`flex-nowrap`）：早先是 `flex-wrap`，窄屏上「清空」与红字各自挤出一行，
+<!-- 动作托盘 = 「轮到你了」的那一套控件，**在操作条那一行里**（问号右边那一格，ADR-0020 修订）。
+     为什么从「毡面与操作条之间那条 44px 常驻带」搬回这一行：
+     ① 带子的理由是「轮到我 / 轮空之间零回流」，而这一行本来就 `min-h-[2.6rem]`（41.6px），
+        托盘的三个控件都在这条线以内 —— 于是零回流由**行高**保证，不必再占 44px 的空白；
+        那 44px 还给牌区（320px 短屏上正是出牌点竖向差 2px 就相撞的那点余量）。
+     ② 它不再浮着：**在流内**（不再 `absolute`），所以不可能压住毡面最后一行或「我」那条底栏
+        —— 截图 #4 那类重叠在结构上不成立（判据：托盘矩形必须落在这一行里、且与毡面零相交）。
+     ③ **单行不换行**（`flex-nowrap`）：早先是 `flex-wrap`，窄屏上「清空」与红字各自挤出一行，
         托盘被撑到近 180px 高，正好盖住手牌上半截。
-     ③ **`w-max`** 是宽度修理，不是排版偏好：居中 + 宽度 auto 时，shrink-to-fit 的可用宽度会
+     ④ **`w-max`** 是宽度修理，不是排版偏好：居中 + 宽度 auto 时，shrink-to-fit 的可用宽度会
         退化成内容的一半，flex 子项被压缩，而 CJK 可以在任意字间断行 ——「出 牌」「清 空」
         于是竖排成两行（计数自带 `whitespace-nowrap` 所以它断不了：截图里「已选 0 张」安然无恙、
         两个按钮都竖着，正是这条的证据）。宽度取 max-content 后没有负空间可分配；
         按钮自己再带 `whitespace-nowrap` 作第二道防线。**不加** `max-w-*` —— 一旦被上限钳住
-        就退回「压缩 ⇒ 换行」。
-     ④ `z-30`：压过上浮的选中牌与操作条。
-     它只出现在该你出手时，所以不会与「?」的弹层抢位置（弹层向上开、在左侧）。 -->
+        就退回「压缩 ⇒ 换行」。 -->
 {#if visible}
-  <div class="absolute inset-0 z-30 flex items-center justify-center">
-    <div
-      class="flex w-max flex-nowrap items-center gap-2 rounded-2xl bg-black/55 px-2.5 py-1 ring-1 ring-white/10 backdrop-blur-sm"
-      data-action-tray="true"
-    >
-      {#if deal?.phase === 'bury'}
-        <span class={count}>已选 <b class="tabular-nums text-gold">{selectedCount}</b> / 3</span>
-        <button
-          type="button"
-          class={gold}
-          disabled={selectedCount !== 3 || client.busy}
-          onclick={() => void client.bury()}
-        >
-          确认埋底
-        </button>
-      {:else}
-        <span class={count}>已选 <b class="tabular-nums text-gold">{selectedCount}</b> 张</span>
-        <button
-          type="button"
-          class={play}
-          disabled={selectedCount === 0 || client.playError !== null || client.busy}
-          onclick={() => void client.play()}
-        >
-          出 牌
-        </button>
-      {/if}
-      <button type="button" class={ghost} disabled={selectedCount === 0} onclick={() => client.clearSelection()}>
-        清空
+  <div
+    class="relative flex w-max flex-nowrap items-center gap-2 rounded-2xl bg-black/55 px-2.5 py-1 ring-1 ring-white/10 backdrop-blur-sm"
+    data-action-tray="true"
+  >
+    {#if deal?.phase === 'bury'}
+      <span class={count}>已选 <b class="tabular-nums text-gold">{selectedCount}</b> / 3</span>
+      <button
+        type="button"
+        class={gold}
+        disabled={selectedCount !== 3 || client.busy}
+        onclick={() => void client.bury()}
+      >
+        确认埋底
       </button>
-    </div>
+    {:else}
+      <span class={count}>已选 <b class="tabular-nums text-gold">{selectedCount}</b> 张</span>
+      <button
+        type="button"
+        class={play}
+        disabled={selectedCount === 0 || client.playError !== null || client.busy}
+        onclick={() => void client.play()}
+      >
+        出 牌
+      </button>
+    {/if}
+    <button type="button" class={ghost} disabled={selectedCount === 0} onclick={() => client.clearSelection()}>
+      清空
+    </button>
 
-    <!-- 不合法的选牌原因：**绝对定位浮在带子之上**，不进带子的流 ——
-         `playError` 是实时推导的（选到不合法的一组就立刻出现），若让它占一行，带子的高度就会
-         随选择来回变，窄屏上正好把手牌压掉。长句自己折行、向上长（那里是毡面的下缘）。 -->
+    <!-- 不合法的选牌原因：**绝对定位浮在托盘之上**，不进这一行的流 ——
+         `playError` 是实时推导的（选到不合法的一组就立刻出现），若让它占一行，这一行的高度就会
+         随选择来回变，窄屏上正好把手牌压掉。长句自己折行、向上长（那里是毡面的下缘，
+         与它今天的行为一致：它本来就是浮在毡面最后一行上的一条提示，几秒就消失）。 -->
     {#if client.playError}
       <span
         class="absolute bottom-full left-1/2 mb-1 w-max max-w-[min(92vw,22rem)] -translate-x-1/2 rounded-lg bg-black/70 px-2 py-1 text-center text-[11px] text-red-300 ring-1 ring-red-400/20"

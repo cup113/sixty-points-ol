@@ -26,10 +26,12 @@ import {
 import {
   BID_GLYPH,
   BID_TIER_LIMIT,
+  CLOCK_STALE_SECONDS,
   bidText,
   bidTiers,
   callText,
   changedLevelRows,
+  clockFace,
   contractText,
   followSuitCards,
   formatElapsed,
@@ -320,6 +322,42 @@ test('formatElapsed：秒 / 分秒 / 小时分三档，坏输入一律当 0', ()
   assert.equal(formatElapsed(-1), '0 秒');
   assert.equal(formatElapsed(Number.NaN), '0 秒');
   assert.equal(formatElapsed(Number.POSITIVE_INFINITY), '0 秒');
+});
+
+test('clockFace：闹钟里写数 / 小一档 / 红横杠三档，边界逐个数', () => {
+  // 一位与两位数：正常字号
+  assert.deepEqual(clockFace(0), { text: '0', tone: 'plain' });
+  assert.deepEqual(clockFace(999), { text: '0', tone: 'plain' });
+  assert.deepEqual(clockFace(1_000), { text: '1', tone: 'plain' });
+  assert.deepEqual(clockFace(99_000), { text: '99', tone: 'plain' });
+  // 三位数：小一档（三个字符要塞进 22px 的圆里）—— 边界是 100 秒
+  assert.deepEqual(clockFace(99_999), { text: '99', tone: 'plain' }, '99.999 秒还不算三位数');
+  assert.deepEqual(clockFace(100_000), { text: '100', tone: 'long' });
+  assert.deepEqual(clockFace(999_000), { text: '999', tone: 'long' });
+  // 满 1000 秒（约 16 分 40 秒）之后不再写数：它在说「这张桌停住了」
+  assert.deepEqual(clockFace(999_999), { text: '999', tone: 'long' }, '999.999 秒还是 999');
+  assert.deepEqual(clockFace(1_000_000), { text: '—', tone: 'stale' });
+  assert.deepEqual(clockFace(86_400_000), { text: '—', tone: 'stale' }, '一整天也还是那枚横杠');
+  // 坏输入与负数：牌面上绝不出现负数或 NaN（与 formatElapsed 同一条纪律）
+  assert.deepEqual(clockFace(-1), { text: '0', tone: 'plain' });
+  assert.deepEqual(clockFace(Number.NaN), { text: '0', tone: 'plain' });
+  // 门槛常量与这一档自洽：改了常量而忘了改判定，这一条会红
+  assert.equal(CLOCK_STALE_SECONDS, 1000, '红横杠的门槛被改了：CONTEXT.md 与 ADR-0020 的说明要同步');
+  assert.equal(clockFace(CLOCK_STALE_SECONDS * 1000).tone, 'stale');
+  assert.equal(clockFace(CLOCK_STALE_SECONDS * 1000 - 1).tone, 'long');
+});
+
+test('反证：三档必须真的分得开（挪门槛 / 去掉小一档都要被判出来）', () => {
+  // 这条反证是**永久**的：它把「三档确实互不相同」每次运行都重证一遍，
+  // 而不是只在写这段代码时的那一次注入实验里证过。
+  const tones = new Set([clockFace(5_000).tone, clockFace(500_000).tone, clockFace(5_000_000).tone]);
+  assert.equal(tones.size, 3, '三档没有真的分开：小一档或红横杠那一档失效了');
+  assert.notEqual(
+    clockFace(500_000).text.length,
+    clockFace(5_000).text.length,
+    '三位数与一位数没有可区分的长度差：小一档的字号就没有意义了'
+  );
+  assert.equal(clockFace(5_000_000).text, '—', '很久没动的桌子没有写成横杠');
 });
 
 test('trickSideBadge：只说这 N 分归庄方还是闲方', () => {  // 庄家座位 2 赢了这一墩 → 庄；其余两个座位都是闲家一方 → 闲

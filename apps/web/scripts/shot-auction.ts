@@ -341,6 +341,16 @@ const DESKTOP = { width: 1280, height: 900 };
  */
 const MOBILE_NARROW = { width: 360, height: 780 };
 
+/**
+ * 最窄机型（320×640，老 iPhone SE 那档）：**不是可有可无的第三档**。
+ *
+ * 信息须整幅横贯、三格分布（左回看入口 + 中定约·级牌 + 右庄已抓），而它的三块都是有下限的
+ * 内容 —— 实测窄屏 264px（还没算级牌）、360px 内宽 312px 才刚放得下。320px 上内宽只有 272px，
+ * 于是「三格互不相叠、且中间那格在中线上」这条判据**只在这里才可能红**：
+ * 360 与 390 上它会安静地全绿。级牌并入定约那格之后会再宽约 16px，所以这一屏是必需的。
+ */
+const MOBILE_MIN = { width: 320, height: 640 };
+
 function sceneFor(captureIndex: 0 | 1 | 2, bids: Shot['bids']): Pick<Shot, 'captureIndex' | 'bids'> {
   return { captureIndex, bids };
 }
@@ -448,6 +458,14 @@ const SHOTS: readonly Shot[] = [
     runLength: 5,
     mode: 'viewport',
     size: DESKTOP
+  },
+  {
+    file: '13-narrow-rail-320',
+    label: '最窄机型 320px、收过墩：信息须三格（上一轮 / 40♣ · 2 / 庄已抓 N 分）互不相叠、都落在毡面内',
+    ...sceneFor(0, [{ points: 40, strain: 'C' }, 'pass', 'pass']),
+    trick: 'three-clusters',
+    mode: 'viewport',
+    size: MOBILE_MIN
   }
 ];
 
@@ -457,6 +475,13 @@ const SHOTS: readonly Shot[] = [
  * 所以 5 张顺子的场景必须整桌重发；上限 120 次时一次都撞不上的概率约 0.07%。
  */
 const RUN_ATTEMPTS = 120;
+
+/**
+ * 「我」那条底栏的宽度上限（CSS 是 `max-w-3xs` = `--container-3xs` = 16rem = 256px）。
+ * 桌面端毡面 1080px，不封顶就横贯整幅；256px 下名字列约 124px ≈ 8 个汉字，
+ * 更长的名字按设计走 `truncate`（见 `+page.svelte` 那一行的注释）。
+ */
+const SEAT_BAR_MAX = 256;
 
 async function joinTarget(port: number): Promise<{ id: string; wsUrl: string }> {
   const response = await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' });
@@ -528,9 +553,9 @@ interface Measurement {
     readonly review: boolean;
     readonly rect: Rect;
   }[];
-  /** 毡面与操作条之间那条**常驻动作带**（托盘住在里面，所以它必须落在毡面之外） */
-  readonly band: Rect | null;
-  /** 动作托盘：只在「这一手归你动」时存在 */
+  /** 操作条那一行（`data-action-row`）：托盘现在住在它里面，所以它必须与毡面零相交 */
+  readonly actionRow: Rect | null;
+  /** 动作托盘：只在「这一手归你动」时存在（现在在操作条那一行里，不再是一条独立的带） */
   readonly tray: Rect | null;
   /**
    * 阶段状态条那一行（`TableStatus` 根节点）与它的直接子元素。
@@ -538,7 +563,12 @@ interface Measurement {
    * （第 N 轮是小 chip、定约/庄已抓是大字），只有「折到第二行」才会让中线错开。
    */
   readonly statusRow: Rect | null;
-  readonly statusChildren: readonly Rect[];
+  /**
+   * 信息须那块**类表格**的四个值格（`data-status-cell="review|contract|level|points"`）。
+   * 它们必须都落在毡面内、互不相叠，而**整块必须居中在毡面中线上** ——
+   * 四个值格的宽度不等（按钮 / `40♣` / `2` / `0 分`），若靠左或靠右排，整块就会偏。
+   */
+  readonly statusCells: readonly { readonly name: string; readonly rect: Rect }[];
   /** 「我」那条底栏（`SeatCard` 的 `bar` 形态）：限宽与居中都在它身上量 */
   readonly seatBar: Rect | null;
 }
@@ -578,13 +608,13 @@ const MEASURE = `(() => {
       review: el.hasAttribute('data-trick-review'),
       rect: rect(el)
     })),
-    band: one('[data-action-band]'),
+    actionRow: one('[data-action-row]'),
     tray: one('[data-action-tray]'),
     statusRow: one('[data-status-row]'),
-    statusChildren: (() => {
-      const el = document.querySelector('[data-status-row]');
-      return el === null ? [] : [...el.children].map(rect);
-    })(),
+    statusCells: [...document.querySelectorAll('[data-status-cell]')].map((el) => ({
+      name: el.getAttribute('data-status-cell') ?? '',
+      rect: rect(el)
+    })),
     seatBar: one('[data-seat-bar]')
   };
 })()`;
@@ -668,12 +698,13 @@ function assertLayout(
     }
   }
 
-  // ③ 毡面必须是三行格 —— 非座位层只能住在内容槽里
+  // ③ 毡面必须是四行格 —— 信息须 / 顶卡 / 内容槽 / 我的底栏
   const names = m.feltRows.map((row) => row.name);
-  if (JSON.stringify(names) !== JSON.stringify(['seats', 'slot', 'me'])) {
-    fail(`毡面不是「顶卡 / 内容槽 / 我的底栏」三行格（实际 [${names.join(', ')}]）`);
+  if (JSON.stringify(names) !== JSON.stringify(['rail', 'seats', 'slot', 'me'])) {
+    fail(`毡面不是「信息须 / 顶卡 / 内容槽 / 我的底栏」四行格（实际 [${names.join(', ')}]）`);
   }
-  const slot = m.feltRows[1]?.rect;
+  const rail = m.feltRows[0]?.rect;
+  const slot = m.feltRows[2]?.rect;
   if (slot === undefined) fail('毡面里找不到内容槽那一行（缺 [data-felt-row="slot"]）');
 
   // ④ 三行互不相交
@@ -714,12 +745,12 @@ function assertLayout(
     }
   }
 
-  // ⑥ 动作带必须在毡面**之外**（托盘进毡面就是 #4：压住「我」那条底栏）
-  if (m.band === null) {
-    fail('毡面与操作条之间没有常驻动作带（缺 [data-action-band]）');
+  // ⑥ 操作条那一行必须在毡面**之外**（它现在装着动作托盘 —— 托盘进毡面就是 #4：压住「我」那条底栏）
+  if (m.actionRow === null) {
+    fail('页面里找不到操作条那一行（缺 [data-action-row]）');
   } else if (m.felt !== null) {
-    const area = overlapArea(m.band, m.felt);
-    if (area > 0) fail(`动作带压在毡面上 ${area.toFixed(0)}px²（托盘会盖住「我」那条底栏）`);
+    const area = overlapArea(m.actionRow, m.felt);
+    if (area > 0) fail(`操作条压在毡面上 ${area.toFixed(0)}px²（那一行里的托盘会盖住「我」那条底栏）`);
   }
 
   // ⑦ 出牌区的各点互不相交；每张牌都在自己那一点的预算里，且不同点的牌互相不叠。
@@ -758,13 +789,15 @@ function assertLayout(
     }
   }
 
-  // ⑧ 托盘必须整个落在动作带里 —— 这是 #4（托盘压住「我」那条底栏）的结构化判据：
-  //    托盘 ⊆ 动作带，且动作带 ∩ 毡面 = ∅ ⇒ 托盘 ∩ 毡面 = ∅。
+  // ⑧ 托盘必须整个落在操作条那一行里 —— 这是 #4（托盘压住「我」那条底栏）的结构化判据：
+  //    托盘 ⊆ 操作条行，且操作条行 ∩ 毡面 = ∅ ⇒ 托盘 ∩ 毡面 = ∅。
+  //    （唯一有意压在毡面上的东西是那枚**错误气泡**：它 `absolute` 浮在行上方、几秒即散，
+  //      所以它不在这条判据的范围内 —— 判的是托盘本体。）
   if (m.tray !== null) {
-    if (m.band === null) {
-      fail('动作托盘出现了，但没有动作带可容纳它（托盘又会压在毡面上）');
-    } else if (!contains(m.band, m.tray)) {
-      fail(`动作托盘越出了动作带（托盘 ${boxOf(m.tray)} 不在带 ${boxOf(m.band)} 里）`);
+    if (m.actionRow === null) {
+      fail('动作托盘出现了，但页面上没有操作条那一行可容纳它（托盘又会压在毡面上）');
+    } else if (!contains(m.actionRow, m.tray)) {
+      fail(`动作托盘越出了操作条那一行（托盘 ${boxOf(m.tray)} 不在行 ${boxOf(m.actionRow)} 里）`);
     }
   }
 
@@ -827,19 +860,19 @@ function assertLayout(
     }
   }
 
-  // ⑫ 「我」那条底栏**限宽并居中**（`max-w-sm` = 384px）。
+  // ⑫ 「我」那条底栏**限宽并居中**（`max-w-3xs` = 16rem = 256px）。
   //    窄毡面上它本来就整宽（判据自动成立），所以桌面场景另加一条「毡面必须比上限宽」——
   //    少了它，这条判据在桌面宽度下会安静地空转。
-  if (viewportWidth >= 1000 && (m.felt === null || m.felt.width <= 424)) {
+  if (viewportWidth >= 1000 && (m.felt === null || m.felt.width <= SEAT_BAR_MAX + 40)) {
     fail(
       `这一屏是桌面宽度（${viewportWidth}px）却没验到「我」栏限宽：毡面宽 ` +
-        `${m.felt?.width.toFixed(1) ?? '—'}px 未超过上限 424px，⑫ 这条判据会空转`
+        `${m.felt?.width.toFixed(1) ?? '—'}px 未超过上限 ${SEAT_BAR_MAX + 40}px，⑫ 这条判据会空转`
     );
   }
   if (m.seatBar !== null && m.felt !== null) {
-    if (m.seatBar.width > 385) {
+    if (m.seatBar.width > SEAT_BAR_MAX + 1) {
       fail(
-        `「我」那条底栏宽 ${m.seatBar.width.toFixed(1)}px，超过上限 384px：` +
+        `「我」那条底栏宽 ${m.seatBar.width.toFixed(1)}px，超过上限 ${SEAT_BAR_MAX}px：` +
           '会横贯整幅毡面（名字长一点更明显）'
       );
     }
@@ -852,14 +885,70 @@ function assertLayout(
     }
   }
 
-  // ⑬ 阶段状态条**只许一行**：那一行是 `flex-wrap` 的，一旦折行，第二行就落进出牌区上方
-  //    （截图 #4 的同类问题）。判据用子元素的**竖直中线**：折行的表现就是某个 chip 的中线与别人错开。
-  if (m.statusChildren.length > 1) {
-    const centersY = m.statusChildren.map((child) => child.y + child.height / 2);
+  // ⑬ 信息须那块表**只许两行**（表头 + 值）：值格里的数字一旦被挤到换行，这一条就会变三行、
+   //    把毡面顶部撑高。判据是四个值格的**竖直中线必须齐平** ——
+  //    标签在表头那行、值在下面那行，所以齐平就意味着四个值格真的在同一行里。
+  if (m.statusCells.length > 1) {
+    const centersY = m.statusCells.map((cell) => cell.rect.y + cell.rect.height / 2);
     const spread = Math.max(...centersY) - Math.min(...centersY);
     if (spread > 1) {
       fail(
-        `阶段状态条折成了多行（子元素中线差 ${spread.toFixed(1)}px）：窄屏上第二行会压到出牌区上方`
+        `信息须的四个值格没有排在同一个表行里（中线差 ${spread.toFixed(1)}px）：` +
+          '某一格的数字被挤得换了行，毡面顶部会多出一行'
+      );
+    }
+  }
+
+  // ⑭ 信息须那块表的几何（ADR-0020 修订）：各值格都在毡面内、互不相叠、**整块居中在中线上**。
+  //    三条约束各对应一次真实的坏法：
+  //    - 「都在毡面内 / 互不相叠」＝ 窄屏放不下时四列会挤在一起（320px 上实测过：药丸版把
+  //      「庄已抓」挤成竖排两行）；
+  //    - 「整块居中」＝ 四格的宽度天然不等（按钮 / `40♣` / `2` / `0 分`），靠左排就会偏 ——
+  //      而它上面写的是这一副最该稳的两个数。
+  if (m.felt !== null && m.statusCells.length === 4 && m.statusRow !== null) {
+    const feltCenter = m.felt.x + m.felt.width / 2;
+    const rowCenter = m.statusRow.x + m.statusRow.width / 2;
+    if (Math.abs(rowCenter - feltCenter) > 1) {
+      fail(
+        `信息须那块表没居中（中心 ${rowCenter.toFixed(1)} vs 毡面中心 ${feltCenter.toFixed(1)}）：` +
+          '它要 `mx-auto` + 内容宽度，靠左排会在宽屏上歪到一边'
+      );
+    }
+    for (const cell of m.statusCells) {
+      if (!contains(m.felt, cell.rect)) {
+        fail(
+          `信息须的「${cell.name}」格越出了毡面（${boxOf(cell.rect)} 不在 ${boxOf(m.felt)} 里）：` +
+            '四列必须都落在毡面的内边距之内'
+        );
+      }
+    }
+    for (let i = 0; i < m.statusCells.length; i += 1) {
+      for (let j = i + 1; j < m.statusCells.length; j += 1) {
+        const a = m.statusCells[i]!;
+        const b = m.statusCells[j]!;
+        const area = overlapArea(a.rect, b.rect);
+        if (area > 0) {
+          fail(
+            `信息须的「${a.name}」与「${b.name}」两格叠了 ${area.toFixed(0)}px²` +
+              `（${boxOf(a.rect)} 与 ${boxOf(b.rect)}）：这一屏太窄，列宽 / 内边距要各收一档`
+          );
+        }
+      }
+    }
+    // 行数 = 这一块的高度 / 一格的高度：两行（表头 + 值）是形状，三行说明有格被挤换了行。
+    const cellHeight = Math.max(...m.statusCells.map((cell) => cell.rect.height));
+    const rows = cellHeight > 0 ? Math.round(m.statusRow.height / cellHeight) : 0;
+    if (rows > 2) {
+      fail(
+        `信息须那块表长到了 ${rows} 行（表头 + 值应为 2 行，实测高 ${m.statusRow.height.toFixed(1)}px、` +
+          `一格高 ${cellHeight.toFixed(1)}px）：窄屏上又折行了`
+      );
+    }
+    // 它必须真的**在信息须那一行里**（不是在毡面上自由漂浮的一层）
+    if (rail !== undefined && !contains(rail, m.statusRow)) {
+      fail(
+        `信息须那块表不在 [data-felt-row="rail"] 那一行里（表 ${boxOf(m.statusRow)} 不在 ` +
+          `${boxOf(rail)} 里）：它必须由毡面的行给出位置，不能自己算偏移`
       );
     }
   }
@@ -880,7 +969,7 @@ function assertLayout(
     `内容槽 ${slot?.height.toFixed(0) ?? '—'}px；出牌点张数 ${m.spots.map((spot) => `${spot.seat}:${spot.cards.length}`).join(' ') || '（本场景无出牌）'}` +
     `；中点偏差 ${midDelta === null ? '—' : `${midDelta.toFixed(1)}px`}` +
     `；毡面 ${m.felt?.width.toFixed(0) ?? '—'}px / 「我」栏 ${m.seatBar?.width.toFixed(0) ?? '—'}px` +
-    `；状态条子元素 ${m.statusChildren.length} 个`;
+    `；状态条 ${m.statusRow?.width.toFixed(0) ?? '—'}×${m.statusRow?.height.toFixed(0) ?? '—'}px（${m.statusCells.length} 格）`;
   return { summary, problems };
 }
 

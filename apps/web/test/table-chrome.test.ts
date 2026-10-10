@@ -351,25 +351,40 @@ test('横跨一层的覆盖层必须让开点击（否则它盖住的东西看�
    * 住在**内容槽里**：槽自己 `relative min-h-0` 把它们的上下界框死，于是「两个层各算各的
    * 偏移而互相压住」在结构上不可能（截图里的 #3 #5 正是那样来的）。
    *
-   * 判据用**顺序**表达：毡面三个行钩子按 seats → slot → me 出现，且每个层组件都出现在
-   * slot 与 me 之间（即都住在内容槽里）。真正的像素由 `scripts/shot-auction.ts` 实测。
+   * 判据用**顺序**表达：毡面四个行钩子按 rail → seats → slot → me 出现，且每个层组件都出现在
+   * 它该住的那一行里（信息须在 rail、其余在 slot）。真正的像素由 `scripts/shot-auction.ts` 实测。
    */
   const feltRowIndex = (name: string): number => code(page).indexOf(`data-felt-row="${name}"`);
+  const rows = ['rail', 'seats', 'slot', 'me'] as const;
   assert.deepEqual(
-    ['seats', 'slot', 'me'].map(feltRowIndex).every((at, index, all) => at > 0 && (index === 0 || at > all[index - 1]!)),
+    rows.map(feltRowIndex).every((at, index, all) => at > 0 && (index === 0 || at > all[index - 1]!)),
     true,
-    `毡面不是「顶卡 / 内容槽 / 我的底栏」三行格（钩子位置：${['seats', 'slot', 'me'].map(feltRowIndex).join(', ')}）`
+    `毡面不是「信息须 / 顶卡 / 内容槽 / 我的底栏」四行格（钩子位置：${rows.map(feltRowIndex).join(', ')}）`
   );
-  const slotAt = feltRowIndex('slot');
+  const railAt = feltRowIndex('rail');
+  const slotsAt = feltRowIndex('slot');
   const meAt = feltRowIndex('me');
-  for (const layer of ['LobbyPanel', 'TableStatus', 'BuryPanel', 'BidPanel', 'TrickArea'] as const) {
+  // 信息须那一行里只有 TableStatus（台面级信息：定约 / 级牌 / 庄已抓 / 回溯）
+  const railBlock = code(page).slice(railAt, slotsAt);
+  assert.ok(
+    /<TableStatus\b/.test(railBlock) && !/<(LobbyPanel|BuryPanel|BidPanel|TrickArea)\b/.test(railBlock),
+    '信息须那一行里住进了「打这一墩」的层：它只放台面级信息，内容槽才是那些层的地方'
+  );
+  for (const layer of ['LobbyPanel', 'BuryPanel', 'BidPanel', 'TrickArea'] as const) {
     const at = code(page).indexOf(`<${layer}`);
     assert.ok(
-      at > slotAt && at < meAt,
-      `${layer} 不在内容槽里（位置 ${at}，内容槽 ${slotAt}–${meAt}）：它又成了各算各的偏移层，` +
+      at > slotsAt && at < meAt,
+      `${layer} 不在内容槽里（位置 ${at}，内容槽 ${slotsAt}–${meAt}）：它又成了各算各的偏移层，` +
         '会与别的层压在一起 —— 必须住在 data-felt-row="slot" 里'
     );
   }
+  // 反过来：台面级信息（TableStatus）不许再回到内容槽里（那正是牌区上方悬着一层的旧形状）
+  const slotBlock = code(page).slice(slotsAt, meAt);
+  assert.equal(
+    /<TableStatus\b/.test(slotBlock),
+    false,
+    'TableStatus 又出现在内容槽里：它该住在信息须那一行（rail），否则牌区上方又悬着一层'
+  );
 
   // 让开之后，可点的控件必须自己接回来，否则连邀请码 / 开始第一副 / 规则演示都点不动了
   for (const [name, source, minimum] of [
@@ -435,64 +450,124 @@ test('动作按钮都要在有请求在飞时禁用（慢网下防双击），�
  * 阶段状态条（定约 / 庄已抓）与埋底面板必须同属**一个**列容器，两者自己都不许定位。
  *
  * 早先两者各定各的（状态条 `top-[5.5rem]`、埋底面板 `top-[12%]`），手机短屏上「定约 / 庄已抓」
- * 正好压在暗底槽位上 —— 两处各算各的位置，谁也管不了谁。ADR-0020 之后更进一层：这个列容器
- * 住在毡面的**内容槽**里（`data-felt-row="slot"`），所以它连 `absolute` 都不该有 ——
- * 上下界由内容槽给，偏移量一个都不需要。这条在无浏览器的环境里只能落到源头上。
+ * 正好压在暗底槽位上 —— 两处各算各的位置，谁也管不了谁。
+ *
+ * ADR-0020 修订之后，这条判据问的是**两样东西各自住在哪一行**：
+ * - **信息须**（`TableStatus`）住在毡面第一行（`data-felt-row="rail"`）—— 它是台面级信息
+ *   （定约 / 级牌 / 庄已抓 / 回溯），所以从内容槽里搬了出去；
+ * - **埋底面板**住在内容槽里（`data-felt-row="slot"`）。
+ * 两者都**不许自己写偏移**：位置由行给出。这条在无浏览器的环境里只能落到源头上
+ * （真实像素由 `scripts/shot-auction.ts` 量）。
  */
 function phaseStatusFlow(pageSource: string, statusSource: string, burySource: string): string | null {
   const src = code(pageSource);
-  const flow =
-    /<div class="([^"]*)"[^>]*>\s*<TableStatus \{view\} \/>\s*<BuryPanel \{client\} \/>/.exec(src);
-  if (flow === null) {
-    return '牌桌页没有把状态条与埋底面板放进同一个列容器（各定各的位置，短屏上就会重叠）';
+  const railAt = src.indexOf('data-felt-row="rail"');
+  const slotsAt = src.indexOf('data-felt-row="slot"');
+  const meAt = src.indexOf('data-felt-row="me"');
+  if (railAt < 0 || slotsAt < 0 || meAt < 0) {
+    return '毡面缺行钩子（rail / slot / me）：信息须、内容槽与底栏都必须由行给出位置';
   }
-  const cls = flow[1] ?? '';
-  if (/\babsolute\b/.test(cls)) {
-    return '状态条/埋底面板的列容器又绝对定位了：它住在内容槽里，上下界由槽给，不需要任何偏移';
+  if (!(railAt < slotsAt && slotsAt < meAt)) {
+    return `毡面的行序不对（rail ${railAt} / slot ${slotsAt} / me ${meAt}）：信息须在顶卡之上、内容槽居中、底栏在最后`;
   }
-  if (/\btop-\[|\bbottom-\[/.test(cls)) {
-    return `列容器又自己写了偏移（${cls}）：内容槽已经框定了上下界，魔数偏移正是「两处各算各的」的来源`;
+  const railBlock = src.slice(railAt, slotsAt);
+  if (!/<TableStatus\b/.test(railBlock)) {
+    return 'TableStatus 不在信息须那一行里：它要么回到了内容槽（牌区上方又悬着一层），要么被渲染了两处';
   }
-  if (/\bpointer-events-none\b/.test(cls)) {
-    return '列容器还在让开点击：它不再横跨毡面（只在内容槽里），让开点击会让底牌行点不动';
+  const slotBlock = src.slice(slotsAt, meAt);
+  if (!/<BuryPanel\b/.test(slotBlock)) {
+    return 'BuryPanel 不在内容槽里：埋底面板必须住在 data-felt-row="slot" 里';
   }
-  if (/\babsolute\b/.test(code(statusSource))) return 'TableStatus 自己绝对定位：它和埋底面板会各算各的位置';
-  if (/\babsolute\b/.test(code(burySource))) return 'BuryPanel 自己绝对定位：它和状态条会各算各的位置';
+  if (/<TableStatus\b/.test(slotBlock)) {
+    return 'TableStatus 又出现在了内容槽里：它会与埋底面板各算各的位置（正是短屏上重叠的来源）';
+  }
+  // 两者都不许绝对定位 —— 位置由行给，不需要任何偏移
+  if (/\babsolute\b/.test(code(statusSource))) {
+    return 'TableStatus 自己绝对定位：它住在信息须那一行里，不该再算偏移';
+  }
+  if (/\babsolute\b/.test(code(burySource))) {
+    return 'BuryPanel 自己绝对定位：它住在内容槽里，不该再算偏移';
+  }
+  if (/\btop-\[|\bbottom-\[/.test(code(statusSource))) {
+    return 'TableStatus 里出现了魔数偏移：信息须的位置由毡面的行给出';
+  }
   return null;
 }
 
-/** 状态条字号自检：定约 / 庄已抓要有大号数字，且不许回到 10px 的小号 chip */
+/**
+ * 数值那一档自检：定约 / 级牌 / 庄已抓必须共用**同一档大号数字**（`num`），且那一档里不许
+ * 出现 10px 小字。
+ *
+ * 这条判据的形状随 ADR-0020 修订变过一次：早先整条是并排的小 chip，所以当时**禁止整块出现
+ * 10px**；现在它是一张类表格（表头 10px 小字 + 值 20/24px 大号），于是判据改成
+ * 「**值那一档**必须是大号、且三格共用同一个 token」—— 表头的小字不再算违规，而
+ * 「数字缩回小字」这件事仍然逃不掉（`num` 里出现 10px、或缺 text-2xl 都会红）。
+ */
 function statusTypeCheck(statusSource: string): string | null {
   const src = code(statusSource);
-  if (!/text-2xl/.test(src)) return '定约 / 庄已抓的数字没有 text-2xl：又缩回不显眼的小字了';
-  if (/text-\[10px\]/.test(src)) return '状态条里又出现了 10px 小字（整条被缩回小 chip）';
+  const num = /const num = '([^']*)'/.exec(src)?.[1];
+  if (num === undefined) return '信息须里找不到数值那一档（const num）：定约 / 级牌 / 庄已抓没有共同的字号来源';
+  if (!num.includes('text-2xl')) return '数值那一档没有 text-2xl：定约 / 级牌 / 庄已抓又缩回小字了';
+  if (/text-\[10px\]/.test(num)) return '数值那一档里出现了 10px 小字（大字被缩回了小 chip）';
+  const uses = src.split('class={num}').length - 1;
+  if (uses < 3) {
+    return `只有 ${uses} 处用 num：定约 / 级牌 / 庄已抓三个值必须共用同一档大号数字`;
+  }
+  if (!/data-status-cell="contract"/.test(src)) {
+    return '信息须里没有「定约」值格（data-status-cell="contract"）：定约必须一直在牌面上';
+  }
   return null;
 }
+
+test('定约 / 级牌 / 庄已抓共用同一档大号数字（不再是小号 chip）', () => {
+  const problem = statusTypeCheck(tableStatus);
+  assert.equal(problem, null, problem ?? '');
+});
+
+test('反证：旧的 10px chip 版面、以及数字缩回小字，都必须被判出来', () => {
+  const OLD_STATUS = `<div class="flex flex-wrap justify-center gap-1.5 px-2 text-[10px] sm:text-[11px]">
+  <span class="rounded-full bg-black/35 px-2.5 py-1">第 <b>{trickNo}</b> 轮</span>
+  <span class="rounded-full bg-black/35 px-2.5 py-1">定约</span>
+</div>`;
+  assert.match(statusTypeCheck(OLD_STATUS) ?? '', /数值那一档/, '旧版面没有被判出来');
+  // 数值那一档被降成小字：这正是要抓的回潮
+  assert.match(
+    statusTypeCheck(tableStatus.replace("const num = 'text-xl font-black", "const num = 'text-[10px] font-black")) ?? '',
+    /10px/,
+    '数值那一档被改成 10px 没有被判出来'
+  );
+  // 三格里少用了一次 num（某一格自己写了别的字号）
+  assert.match(
+    statusTypeCheck(tableStatus.replace('<b class={num}>{declarerPoints}</b>', '<b>{declarerPoints}</b>')) ?? '',
+    /num/,
+    '有值格不再共用 num 没有被判出来'
+  );
+});
 
 test('埋底阶段：状态条与暗底槽位同列流，短屏也不重叠', () => {
   const problem = phaseStatusFlow(page, tableStatus, buryPanel);
   assert.equal(problem, null, problem ?? '');
 });
 
-test('反证：各自绝对定位的旧版面必须被判出来', () => {
+test('反证：状态条回内容槽 / 自己绝对定位的旧版面必须被判出来', () => {
   const OLD_PAGE = `<TableStatus {view} />\n<BuryPanel {client} />`;
   assert.ok(
     phaseStatusFlow(OLD_PAGE, tableStatus, buryPanel) !== null,
-    '旧版面（没有同列容器）被判为合规：这条守卫是空转的'
+    '旧版面（状态条与埋底面板挤在一起）被判为合规：这条守卫是空转的'
   );
   assert.ok(
     phaseStatusFlow(page, '<div class="absolute top-[5.5rem]">状态条</div>', buryPanel) !== null,
     '状态条自己绝对定位被判为合规'
   );
-  // 列容器自己又写上偏移（或又让开点击）—— 两者都说明它没有「住进内容槽」
-  const offset = code(page).replace(
-    '<div class="flex flex-col items-center gap-3 px-2 pt-1">',
-    '<div class="pointer-events-none absolute inset-x-0 top-[4.5rem] flex flex-col items-center gap-3 px-2">'
+  // 把 TableStatus 从信息须那一行挪回内容槽（旧形状）：牌区上方又会悬着一层
+  const backToSlot = code(page).replace(
+    '{#if view !== null}\n        <TableStatus {view} onReviewTrick={() => (reviewOpen = true)} />',
+    ''
   );
   assert.match(
-    phaseStatusFlow(offset, tableStatus, buryPanel) ?? '',
-    /绝对定位|偏移/,
-    '列容器回到「自己算偏移」的旧形状没有被判出来'
+    phaseStatusFlow(`${backToSlot}\n<div data-felt-row="slot"><TableStatus {view} /><BuryPanel {client} /></div>`, tableStatus, buryPanel) ?? '',
+    /内容槽|不在信息须/,
+    'TableStatus 回到内容槽没有被判出来'
   );
 });
 
@@ -506,7 +581,7 @@ test('反证：旧的 10px chip 版面必须被判出来', () => {
   <span class="rounded-full bg-black/35 px-2.5 py-1">第 <b>{trickNo}</b> 轮</span>
   <span class="rounded-full bg-black/35 px-2.5 py-1">定约</span>
 </div>`;
-  assert.match(statusTypeCheck(OLD_STATUS) ?? '', /text-2xl/, '旧版面没有被判出来');
+  assert.match(statusTypeCheck(OLD_STATUS) ?? '', /数值那一档/, '旧版面没有被判出来');
 });
 
 test('埋底面板不再写标题行，也不写底牌说明句（钩子留着给 ui-check）', () => {
@@ -527,51 +602,63 @@ test('埋底面板不再写标题行，也不写底牌说明句（钩子留着�
 /* ---------- 出牌阶段：动作托盘、赢墩徽标、跟牌蓝框 ---------- */
 
 /**
- * 动作控件（已选张数 / 出牌 / 清空 / 确认埋底）必须活在**独立的一层**里，而且那一层住在
- * 毡面**之外**的那条常驻动作带上（ADR-0020）。每条要求都对应一次真实返工：
+ * 动作控件（已选张数 / 出牌 / 清空 / 确认埋底）住在**操作条那一行**里（ADR-0020 修订）。
+ * 每条要求都对应一次真实返工：
  *
- * ① 页面必须有一条 `data-action-band` 的常驻带，且 `ActionTray` 在它**里面** ——
- *    托盘原先钉在操作条上沿（`bottom-full`），而那 40px 整根落在毡面的最后 40px 里：
+ * ① **在流内**：`ActionTray` 渲染在 `ActionBar` 那一行里（`data-action-row`），自己**不许**
+ *    `absolute` / `inset-0` / `z-30`。早先它是「毡面与操作条之间那条 44px 常驻带」里的漂浮层；
+ *    再早先它钉在操作条上沿（`bottom-full`），而那 40px 整根落在毡面的最后 40px 里：
  *    手机 375px 上与自己的座位卡竖直重叠 32px、水平重叠 84px（截图里的 #4）。
- *    「抬高座位卡」只是把同一块地方换个方式占掉，所以这一带必须明确归属：**归托盘**。
- * ② 带子排在 `<ActionBar` **之前** —— 带在操作条之上、毡面之下；顺序反了托盘会跑到操作条下面。
- * ③ 托盘铺满带子并居中（`absolute inset-0` + `items-center justify-center`）；带子自己有高度，
- *    所以「轮到我 / 轮空」之间切换时毡面与手牌**零回流**。
+ *    在流内之后，「浮起来压住毡面」在结构上不可能（几何判据见 shot 的 ⑥/⑧）。
+ * ② **零回流靠行高**：那一行必须 `min-h-[2.6rem]` —— 托盘与状态句来回换内容时行高不变，
+ *    而毡面是 `flex-1`，行高一变毡面就跟着动。这是撤掉动作带的**前提**，所以要钉住。
+ * ③ **中间那一格 `flex-1` + 居中**：状态句与托盘互斥地住在同一格里，宽屏上它们因此落在行中间
+ *    （早先托盘在带子里居中、状态句在最左，是两个不同的位置）。
  * ④ `flex-nowrap`：早先是 `flex-wrap`，窄屏上「清空」与红字各自挤出一行，托盘被撑到近 180px 高。
- * ⑤ `z-30`：压过上浮的选中牌。
- * ⑥ `w-max` + 每个 class 常量的 `whitespace-nowrap`：居中 + 宽度 auto 时 shrink-to-fit 的可用
- *    宽度会退化成内容的一半，子项被压缩后 CJK 会竖排（「出 牌」写成两行 —— 截图里那一次返工）。
- * ⑦ 旧锚不许回来：`bottom-full` / `-translate-y-1/2`（那就又是「悬在毡面最后 40px 里」）。
+ * ⑤ `w-max` + 每个 class 常量的 `whitespace-nowrap`：宽度被压成半个容器时 shrink-to-fit 会让
+ *    子项压缩，CJK 于是竖排（「出 牌」写成两行 —— 截图里那一次返工）。
+ * ⑥ 旧锚不许回来：`bottom-full` / `-translate-y-1/2`。
  */
 function trayCoupling(pageSource: string, barSource: string, traySource: string): string | null {
-  const pageSrc = code(pageSource);
-  if (!/<div[^>]*data-action-band="true"[^>]*>[\s\S]*?<ActionTray\b/.test(pageSrc)) {
-    return '牌桌页没有把 ActionTray 放进那条常驻动作带（缺 data-action-band，或托盘不在它里面）：托盘会回到毡面里压住「我」那条底栏';
-  }
-  const bandAt = pageSrc.indexOf('data-action-band');
-  const barAt = pageSrc.indexOf('<ActionBar');
-  if (barAt < 0 || bandAt > barAt) {
-    return '动作带没有排在操作条之前：带子在操作条之上、毡面之下，顺序反了托盘会跑到操作条下面';
-  }
+  const bar = code(barSource);
   const tray = code(traySource);
-  /**
-   * 两层：外层是**铺满动作带**的那一层（`absolute inset-0` + 居中 + z-30），内层是带
-   * `data-action-tray` 的内容盒（`w-max` + 不换行）。分开查是因为每一条判据只属于其中一层 ——
-   * 混在一起查会让「根节点丢掉 w-max」与「外层回到旧锚」互相蒙混过去。
-   */
-  const layer = /<div[^>]*class="([^"]*)"[^>]*>\s*<div[^>]*data-action-tray/.exec(tray)?.[1] ?? '';
-  const root = /<div[^>]*data-action-tray="true"[^>]*>/.exec(tray)?.[0] ?? '';
-  // 旧锚先查：它是这一版要修的东西，报出来的就该是它（而不是被下一条「缺少 inset-0」遮住）
-  if (layer.includes('bottom-full')) {
-    return 'ActionTray 外层又用 bottom-full 钉在操作条上了：那 40px 整根落在毡面里，会盖住「我」那条底栏';
+  // ① 落点：托盘在 ActionBar 里（页面自己不再有第二个落点 —— 那条动作带已经撤掉）
+  if (/data-action-band/.test(code(pageSource))) {
+    return '牌桌页又有了一条独立动作带（data-action-band）：托盘应当住在操作条那一行里（那 44px 已经还给牌区）';
   }
-  if (layer.includes('-translate-y-1/2') || layer.includes('top-1/2')) {
-    return 'ActionTray 外层又垂直居中悬在操作条上了：应当铺满「毡面之外那条动作带」';
+  if (!/<ActionTray\b/.test(bar)) {
+    return 'ActionBar 里没有渲染 ActionTray：动作控件又没了落点（或又被挪回毡面里）';
   }
-  for (const cls of ['absolute', 'inset-0', 'items-center', 'justify-center', 'z-30']) {
-    if (!layer.includes(cls)) {
-      return `ActionTray 外层缺少 ${cls}：它不再铺满动作带（要么回毡面，要么不再居中）`;
+  if (!/<div[^>]*data-action-row="true"[^>]*>[\s\S]*?<ActionTray\b/.test(bar)) {
+    return 'ActionTray 不在带 `data-action-row` 的那一行里：它会浮起来压住毡面最后一行';
+  }
+  // ② 行高：托盘与状态句换内容时毡面零回流的前提
+  if (!/min-h-\[2\.6rem\]/.test(bar)) {
+    return '操作条那一行丢了 min-h-[2.6rem]：托盘与状态句换内容时行高会变，毡面跟着动';
+  }
+  // ③ 中间那一格：占满剩余宽度 + 内容居中
+  const middle = /<div class="([^"]*)"[^>]*>\s*\{#if status\}[\s\S]*?<ActionTray\b/.exec(bar)?.[1] ?? '';
+  if (middle === '') {
+    return '操作条里找不到「状态句 / 托盘」那一格：两者必须住在同一个占位格里（互斥地换内容）';
+  }
+  for (const cls of ['flex-1', 'justify-center', 'items-center']) {
+    if (!middle.includes(cls)) {
+      return `中间那一格缺少 ${cls}：宽屏上状态句与托盘会挤在「?」旁边，右半边空一大片`;
     }
+  }
+  if (!middle.includes('min-w-0')) {
+    return '中间那一格缺少 min-w-0：极窄屏上它会把整行撑出容器';
+  }
+  // ④⑤ 托盘自己的形状
+  const root = /<div[^>]*data-action-tray="true"[^>]*>/.exec(tray)?.[0] ?? '';
+  if (root === '') return 'ActionTray 丢了 data-action-tray 钩子：ui-check 靠它认出这一层';
+  for (const cls of ['absolute', 'inset-0', 'z-30']) {
+    if (root.includes(cls)) {
+      return `ActionTray 又浮起来了（根节点带 ${cls}）：它必须留在操作条那一行的流里（否则会压住毡面最后一行）`;
+    }
+  }
+  if (root.includes('bottom-full') || root.includes('-translate-y-1/2')) {
+    return 'ActionTray 又回到旧锚（bottom-full / 垂直居中）：那就又是「悬在毡面最后 40px 里」';
   }
   if (!tray.includes('flex-nowrap')) {
     return 'ActionTray 缺少 flex-nowrap：窄屏上「清空」与红字会各自挤出一行，把托盘撑高压住手牌';
@@ -582,9 +669,7 @@ function trayCoupling(pageSource: string, barSource: string, traySource: string)
   if (/(^|[\s"'])w-full\b/.test(tray)) {
     return 'ActionTray 里出现了 w-full：错误提示一旦占满一行就会把托盘撑成两行（它必须绝对定位浮在上方）';
   }
-  // ⑥ 宽度：居中 + 宽度 auto 时 shrink-to-fit 的可用宽度会退化成内容的一半，flex 子项于是被压缩，
-  //    而 CJK 可以在任意字间断行 ——「出 牌」「清 空」就竖排成两行了。取**根开标签**判断：
-  //    只扫全文会被错误气泡那枚 w-max 蒙混过去。
+  // 取**根开标签**判断宽度：只扫全文会被错误气泡那枚 w-max 蒙混过去
   if (!root.includes('w-max')) {
     return 'ActionTray 的根节点缺少 w-max：宽度会被压成半个容器，子项被压缩后「出 牌」会竖排';
   }
@@ -595,7 +680,6 @@ function trayCoupling(pageSource: string, barSource: string, traySource: string)
       return `ActionTray 的 ${name} 缺 whitespace-nowrap：被压缩时中文会在任意字间断行（「确认埋底」写成两行）`;
     }
   }
-  if (!tray.includes('data-action-tray')) return 'ActionTray 丢了 data-action-tray 钩子：ui-check 靠它认出这一层';
   for (const gone of ['client.play(', 'client.bury(', '已选']) {
     if (code(barSource).includes(gone)) {
       return `ActionBar 里又出现了 ${gone}：动作控件必须只在 ActionTray（否则窄屏换行会顶动整页）`;
@@ -634,15 +718,15 @@ function followMarkCheck(pageSource: string, fanSource: string): string | null {
   return null;
 }
 
-test('出牌阶段：动作控件住在毡面之外那条常驻动作带里，操作条只剩信息', () => {
+test('出牌阶段：动作控件住在操作条那一行里，且不再是一条独立的动作带', () => {
   const problem = trayCoupling(page, actionBar, actionTray);
   assert.equal(problem, null, problem ?? '');
 });
 
-test('反证：托盘回毡面、丢掉动作带、垂直居中、允许换行、错误提示占整行，都必须被判出来', () => {
+test('反证：托盘浮起来 / 回到旧锚 / 行动格不居中 / 行高丢了 / 允许换行，都必须被判出来', () => {
   assert.ok(
     trayCoupling(page, actionBar, '<div class="flex gap-2">出 牌</div>') !== null,
-    '流内托盘被判为合规：这条守卫是空转的'
+    '没有 data-action-tray 钩子的托盘被判为合规：这条守卫是空转的'
   );
   assert.ok(
     trayCoupling(
@@ -653,19 +737,47 @@ test('反证：托盘回毡面、丢掉动作带、垂直居中、允许换行�
     '操作条里重新长出动作控件被判为合规'
   );
   assert.ok(
-    trayCoupling('<ActionBar {client} />\n<ActionTray {client} />', actionBar, actionTray) !== null,
-    '没有动作带（托盘会回毡面）被判为合规'
+    trayCoupling(page, '<ActionBar {client} />\n<ActionTray {client} />', actionTray) !== null,
+    '托盘不在操作条那一行里（页面上第二个落点）被判为合规'
   );
-  // 带子排在操作条之后：托盘会跑到操作条下面
-  const BAND_BELOW = '<ActionBar {client} />\n<div data-action-band="true"></div>\n<ActionTray {client} />';
+  // 那条 44px 动作带不许回来：它是被这一版撤掉的
   assert.match(
-    trayCoupling(BAND_BELOW, actionBar, actionTray) ?? '',
+    trayCoupling(
+      `<div data-action-band="true"><ActionTray {client} /></div>\n${page}`,
+      actionBar,
+      actionTray
+    ) ?? '',
     /动作带/,
-    '动作带排到操作条之后没有被判出来'
+    '动作带回潮（页面里又有 data-action-band）没有被判出来'
   );
-  // 截图里那一次：悬在操作条上方 → 整根落在毡面最后 40px 里，压住「我」那条底栏。
-  // 从**真实托盘**改一个字，这样它只会踩中这一条规则（用极简字面量当反例时，先撞上的往往是别的检查）。
-  const OLD_ANCHOR = actionTray.replace('absolute inset-0', 'absolute bottom-full');
+  // 中间那一格不再居中：宽屏上状态句与托盘又会挤到「?」旁边
+  assert.match(
+    trayCoupling(
+      page,
+      actionBar.replace('flex min-w-0 flex-1 items-center justify-center gap-2', 'flex gap-2'),
+      actionTray
+    ) ?? '',
+    /flex-1|justify-center/,
+    '中间那一格不再占满并居中没有被判出来'
+  );
+  // 行高：托盘与状态句换内容时毡面会跟着动
+  assert.match(
+    trayCoupling(page, actionBar.replace(' min-h-[2.6rem]', ''), actionTray) ?? '',
+    /min-h/,
+    '操作条丢掉 min-h-[2.6rem] 没有被判出来'
+  );
+  // 截图里那一次：托盘浮回毡面里（整根落在最后 40px 上，压住「我」那条底栏）
+  const FLOATING = actionTray.replace(
+    'relative flex w-max flex-nowrap',
+    'absolute inset-0 z-30 flex w-max flex-nowrap'
+  );
+  assert.match(
+    trayCoupling(page, actionBar, FLOATING) ?? '',
+    /浮起来/,
+    '托盘又变成漂浮的一层没有被判出来'
+  );
+  // 更早那一次：钉在操作条上沿
+  const OLD_ANCHOR = actionTray.replace('relative flex w-max', 'relative bottom-full flex w-max');
   assert.match(
     trayCoupling(page, actionBar, OLD_ANCHOR) ?? '',
     /bottom-full/,
@@ -738,8 +850,12 @@ test('反证：标记接错来源 / 入参不对时必须被判出来', () => {
 /**
  * 计时的数据来源必须是**负载里的年龄**（服务端算的），不是浏览器自己「页面打开到现在」：
  * 后者在刷新/重连后会从 0 重来，把「这桌已经卡了 5 分钟」显示成「刚动过」。
- * 判据两条：操作条渲染了 `ActionClock` 并把 `client.table.actionAgeMs` 传进去；
- * 计时组件真的在走（`setInterval`），初值来自 prop（`formatElapsed(ageMs)`）。
+ *
+ * ADR-0020 修订后它是一枚**闹钟图标**、秒数写在圆里，所以判据多了两条：
+ * ③ 表面必须来自 `labels.ts` 的 `clockFace`（`0..99` 正常 / `100..999` 小一档 / `≥1000` 红横杠），
+ *    完整那句 `formatElapsed` 挂到 `title` 与 `aria-label` 上 —— 图标里放不下「距上一步 12 分 34 秒」；
+ * ④ `data-clock-face` 挂在**那个看得见的数字**上：ui-check 靠它断言圆里的数字真的在跳
+ *    （只查 `title` 的话，冻住的时钟照样能过）。
  */
 function clockWiring(barSource: string, clockSource: string): string | null {
   const bar = code(barSource);
@@ -751,9 +867,20 @@ function clockWiring(barSource: string, clockSource: string): string | null {
     return '计时没有靠 ml-auto 停在操作条右端：它该像牌桌上的钟一样待在一边，而不是挤在「?」与状态句中间';
   }
   const clock = code(clockSource);
-  if (!clock.includes('formatElapsed')) return '计时组件没有用 formatElapsed 写时长';
+  // 要的是**调用**（`clockFace(...)`），不是标识符：`import { clockFace }` 一直都在，
+  // 只查标识符的话「把调用换掉、自己拼表面」会被 import 蒙混过去（反证用例正是这么踩的）。
+  if (!/clockFace\(/.test(clock)) {
+    return '计时组件没有调用 clockFace：三档表面（写数 / 小一档 / 红横杠）会各写各的';
+  }
+  if (!clock.includes('formatElapsed')) return '计时组件没有用 formatElapsed 写完整那句时长';
+  if (!/title=\{phrase\}/.test(clock) || !/aria-label=\{phrase\}/.test(clock)) {
+    return '完整那句「距上一步 …」没有挂到 title / aria-label 上：图标里只剩一个数字，读屏与鼠标都读不到它是什么意思';
+  }
   if (!clock.includes('setInterval')) return '计时组件不会走时（缺 setInterval）：那只是一张静止的截图';
   if (!clock.includes('data-action-clock')) return '计时组件丢了 data-action-clock 钩子：ui-check 靠它认这个元素';
+  if (!clock.includes('data-clock-face')) {
+    return '计时组件丢了 data-clock-face 钩子：ui-check 再也无法断言圆里的数字真的在跳';
+  }
   if (!/elapsed !== null/.test(clock)) return '计时组件在还没有牌局（ageMs 为 null）时也会渲染：大厅里没有「上个动作」可说';
   return null;
 }
@@ -763,7 +890,7 @@ test('「距上一步」计时读负载里的年龄，并且真的在走', () =>
   assert.equal(problem, null, problem ?? '');
 });
 
-test('反证：计时不渲染 / 从页面打开计时 / 不走时，都必须被判出来', () => {
+test('反证：计时不渲染 / 从页面打开计时 / 不走时 / 丢掉看得见的数字，都必须被判出来', () => {
   assert.ok(
     clockWiring('<div class="flex">?</div>', actionClock) !== null,
     '操作条里没有计时被判为合规'
@@ -782,6 +909,24 @@ test('反证：计时不渲染 / 从页面打开计时 / 不走时，都必须�
       '<span data-action-clock="true">{formatElapsed(elapsed)}</span>'
     ) !== null,
     '计时没有停在操作条右端被判为合规'
+  );
+  assert.match(
+    clockWiring(actionBar, actionClock.replace('data-clock-face="true"', '')) ?? '',
+    /data-clock-face/,
+    '丢掉「看得见的数字」那个钩子没有被判出来'
+  );
+  assert.match(
+    clockWiring(
+      actionBar,
+      actionClock.replaceAll('title={phrase}', '').replaceAll('aria-label={phrase}', '')
+    ) ?? '',
+    /title|aria-label/,
+    '完整那句时长没挂到 title / aria-label 上没有被判出来'
+  );
+  assert.match(
+    clockWiring(actionBar, actionClock.replace('clockFace(elapsed)', 'formatElapsed(elapsed)')) ?? '',
+    /clockFace/,
+    '不用 clockFace 而自己拼表面没有被判出来'
   );
 });
 
@@ -1489,34 +1634,53 @@ function trickReviewCheck(
   const status = code(statusSource);
   const review = code(reviewSource);
 
-  // ① 入口：状态条上、收过墩才有、自己接回点击，且**站在整条最左**
+  // ① 入口：信息须「回溯」那一格里、收过墩才**能点**、可点时自己接回点击
   if (!status.includes('上一轮</button')) {
-    return '状态条里没有「上一轮」回看入口：上一墩的牌又只剩毡面上那一瞬';
+    return '信息须里没有「上一轮」回看入口：上一墩的牌又只剩毡面上那一瞬';
   }
   if (!status.includes('onReviewTrick')) {
-    return '状态条里没有「上一轮」回看入口（onReviewTrick）：上一墩的牌又只剩毡面上那一瞬';
+    return '信息须里没有「上一轮」回看入口（onReviewTrick）：上一墩的牌又只剩毡面上那一瞬';
   }
   if (!status.includes('trickHistory')) {
-    return '「上一轮」入口不看 trickHistory：还没收过墩（叫牌/埋底/刚换副）也会出现这个按钮';
+    return '「上一轮」入口不看 trickHistory：还没收过墩（叫牌/埋底/刚换副）也会**可点**';
   }
   if (!status.includes('pointer-events-auto')) {
     return '「上一轮」入口缺 pointer-events-auto：外层让开点击，按钮会看得见点不到';
   }
-  // 位置与轮次号是同一条判据的两半：这枚入口**取代了原来的「第 N 轮」chip**，所以它必须是首项，
-  // 而「第 N 轮」必须消失。
-  // - 为什么删轮次号：它在这里没有信息量 —— 打到第几轮由毡面上那墩牌自己说明，唯一需要说清
-  //   轮次的地方是**回看浮层**的标题（「上一轮 · 第 N 轮」）；而它占的不是零成本，四项并列时
-  //   360px 上这一条会折行（实测折行；守卫见 shot 的 ⑬与下面的字数判据）。
-  // - 为什么必须是首项：入口排在末尾时，折行风险最高的那一项正好是它自己；删掉轮次号之后
-  //   三项（入口 + 定约 + 庄已抓）最坏情形约 262px，远在 375px 可用宽度 ~335px 之内。
-  const reviewEntryAt = status.indexOf('上一轮');
-  const contractChipAt = status.indexOf('定约');
-  if (contractChipAt < 0 || reviewEntryAt > contractChipAt) {
-    return '「上一轮」入口没有排在状态条首项：它要取代「第 N 轮」chip 站在最左（理由见 TableStatus 的注释）';
+  // 首轮那颗灰按钮（用户明确要的）：`disabled` 必须绑在 `!canReview` 上 ——
+  // 少了它，要么第一轮那一格空着（四列表格缺一角），要么指向一墩不存在的牌。
+  if (!/disabled=\{!canReview\}/.test(status)) {
+    return '「上一轮」按钮没有绑 `disabled={!canReview}`：第一轮那颗灰按钮（或收墩后该能点）会失效';
+  }
+  // 位置：这张表的**列序**就是这一条的形状（回溯 → 定约 → 级牌 → 庄已抓），
+  // 而且值格必须与表头同序 —— 否则「回溯」那一格会跑到右边去。
+  // 为什么删掉了「第 N 轮」：它在这里没有信息量 —— 打到第几轮由毡面上那墩牌自己说明，
+  // 唯一需要说清轮次的地方是**回看浮层**的标题（「上一轮 · 第 N 轮」）。
+  const heads = ['回溯', '定约', '级牌', '庄已抓'];
+  let cursor = -1;
+  for (const name of heads) {
+    const at = status.indexOf(name);
+    if (at < 0 || at < cursor) {
+      return `信息须的表头不是「${heads.join(' / ')}」这个顺序（缺「${name}」或位置不对）`;
+    }
+    cursor = at;
+  }
+  const cellAt = ['review', 'contract', 'level', 'points'].map((name) =>
+    status.indexOf(`data-status-cell="${name}"`)
+  );
+  if (cellAt.some((at, index) => at < 0 || (index > 0 && at < cellAt[index - 1]!))) {
+    return '信息须的值格与表头不同序（review → contract → level → points）：回溯那一格会跑到右边';
+  }
+  // 「回溯」那一格必须**装的就是这枚按钮**：按格子切片来判断，而不是数它后面多少字符 ——
+  // 窗口写小了会在加了注释之后悄悄失效（而反证用例全都拿真实源码跑，于是会一起假绿）。
+  const reviewCellAt = status.indexOf('data-status-cell="review"');
+  const reviewCellEnd = status.indexOf('</td>', reviewCellAt);
+  const reviewCell = reviewCellAt < 0 ? '' : status.slice(reviewCellAt, reviewCellEnd < 0 ? undefined : reviewCellEnd);
+  if (!/上一轮<\/button\s*>/.test(reviewCell)) {
+    return '「上一轮」按钮不在「回溯」那一格里：它会被算进别的列（或那一列空着）';
   }
   if ((status.match(/轮/g) ?? []).length !== 1) {
-    return '状态条里又长出了「第 N 轮」chip（或轮次号换了个写法）：它这一条会把三项挤到折行，' +
-      '而轮次只有回看浮层的标题该说';
+    return '信息须里又长出了「第 N 轮」（或轮次号换了个写法）：轮次只有回看浮层的标题该说';
   }
   // ② 状态归页面、默认关着、且浮层住在毡面里
   if (!page.includes('let reviewOpen = $state(false)')) {
@@ -1578,12 +1742,12 @@ function trickReviewCheck(
   return null;
 }
 
-test('「上一轮」回看：入口在状态条上、浮层只在毡面内、复用同一份牌面与徽标', () => {
+test('「上一轮」回看：入口在信息须的「回溯」格里、浮层只在毡面内、复用同一份牌面与徽标', () => {
   const problem = trickReviewCheck(page, tableStatus, trickReview, trickArea);
   assert.equal(problem, null, problem ?? '');
 });
 
-test('反证：入口点不动 / 默认就开着 / 浮层整屏 / 丢掉让开点击 / 自拼牌堆 / 少了关闭路径 / 第二份「上一轮」，都必须被判出来', () => {
+test('反证：入口点不动 / 表头乱序 / 按钮跑出回溯格 / 默认就开着 / 浮层整屏 / 丢掉让开点击 / 自拼牌堆 / 少了关闭路径 / 第二份「上一轮」，都必须被判出来', () => {
   const cases: readonly (readonly [string, string | null, RegExp])[] = [
     [
       '入口丢掉 pointer-events-auto',
@@ -1596,18 +1760,35 @@ test('反证：入口点不动 / 默认就开着 / 浮层整屏 / 丢掉让开�
       /trickHistory/
     ],
     [
-      '入口被挪到末尾（不再是首项）',
+      '首轮那颗灰按钮丢了 disabled 绑定',
+      trickReviewCheck(page, tableStatus.replace('disabled={!canReview}', ''), trickReview, trickArea),
+      /disabled/
+    ],
+    [
+      '表头乱序（庄已抓跑到定约前面）',
       trickReviewCheck(
         page,
-        // 把整块入口挪到文件末尾：剥掉注释后，「上一轮」就排在「定约」之后了
+        tableStatus
+          .replace('>级牌</th>', '>级牌X</th>')
+          .replace('>庄已抓</th>', '>级牌</th>')
+          .replace('>级牌X</th>', '>庄已抓</th>'),
+        trickReview,
+        trickArea
+      ),
+      /表头/
+    ],
+    [
+      '「上一轮」按钮被挪出「回溯」那一格',
+      trickReviewCheck(
+        page,
         (() => {
-          const block = /\{#if canReview\}[\s\S]*?\{\/if\}/.exec(tableStatus)?.[0] ?? '';
+          const block = /<button[\s\S]*?上一轮<\/button\s*>/.exec(tableStatus)?.[0] ?? '';
           return tableStatus.replace(block, '') + '\n' + block;
         })(),
         trickReview,
         trickArea
       ),
-      /首项/
+      /回溯/
     ],
     [
       '「第 N 轮」chip 又回来了',

@@ -33,19 +33,22 @@
  *    的同一页不能出现它。这一条同时守着引擎 personalView 的规则（拿上来的底牌只给庄家）。
  *    埋底页也不再写「埋底 · 选 3 张扣入暗底 / 庄家埋底中」与底牌说明句（说明归「?」、动作提示归
  *    操作条），并且定约/庄已抓必须是大号数字 —— 这两条一起抓「文案与字号又回潮」。
- * 7b. **出牌阶段**（真的把牌打出去）：动作控件活在**毡面之外**那条常驻动作带（`data-action-band`）里 ——
- *    外层铺满带子并居中（`absolute inset-0` + `items-center justify-center` + `z-30`），
- *    内层是 `w-max` + `flex-nowrap` 的内容盒（`data-action-tray`）。旧锚（`bottom-full` / 垂直居中）
- *    是这一版要修的东西：它让托盘整根落在毡面的最后 40px 里，压住「我」那条底栏（截图里的 #4）；
- *    丢掉 `w-max` 则宽度被压成半个容器、子项被压缩，中文按钮会竖排（每个按钮还要自带 nowrap）。
- *    操作条只剩「?」、状态句与右端的计时。
+ * 7b. **出牌阶段**（真的把牌打出去）：动作控件住在**操作条那一行**里（`data-action-row`，
+ *    问号右边那一格）—— 它必须**在流内**（不许 `absolute` / `inset-0` / `z-30`：那正是早先
+ *    那条 44px 动作带里的漂浮层，一旦浮起来就会压住毡面最后一行）、单行（`flex-nowrap`）
+ *    且宽度取 max-content（`w-max`；被压缩时中文按钮会竖排，每个按钮还要自带 nowrap）。
+ *    那一行用 `min-h-[2.6rem]` 保证「轮到我 / 轮空」之间零回流。中间那一格 `flex-1` + 居中：
+ *    状态句与托盘互斥地住在同一格里（轮到我时状态句是 null），宽屏上它们因此都落在行中间。
  *    跟牌时手牌把**领出那一门**标成蓝框（数量必须等于该门在手里的张数，期望值从 `/view` 现算，
  *    不写死花色）；**没轮到的人也照样有蓝框**（拟选，ADR-0021），但他没有托盘 ——
  *    这正是「拟选」在出货页面上的证据。收墩后的徽标只说「庄 +N 分 / 闲 +N 分」，
- *    并且收墩那一刻状态条上多出一枚「上一轮」回看入口（bot 出手太快时靠它把上一墩三家出的牌
- *    找回来；浮层默认关着，所以这里同时断言 SSR 首帧里没有 `data-trick-review`）。
+ *    并且信息须「回溯」格里那枚「上一轮」按钮在收墩前是**灰的（disabled）**、收墩后可点
+ *    （bot 出手太快时靠它把上一墩三家出的牌找回来；浮层默认关着，所以这里同时断言
+ *    SSR 首帧里没有 `data-trick-review`）。
  * 7c. **「距上一步」计时**：未发牌的大厅页没有它（还没有牌局动作）；发牌后玩家页与观战页都有，
  *    并且**真的在走** —— 取两次（中间等 1.2 秒）秒数必须变大、且增幅合理（抓「冻住的时钟」与单位错）。
+ *    它现在是一枚闹钟图标、秒数写在圆里：`title` 上那句完整文案与圆里那个数字**都要**跟着走
+ *    （只查 title 的话，冻住的时钟照样能过）。
  * 8. 观战页面：满座第 4 个人看到的是公共信息 —— 不得出现开局/叫牌/埋底按钮，也不得渲染任何牌面。
  * 9. **页头只留必要信息**：`← 大厅`、邀请码，外加右上角那枚**桌况簇**（观战人数含 0 常显；
  *    在座给「离座」、不在座给「改名」+ 有空座才给「入座」）—— 战报/教程/叫牌/底牌/结算详情
@@ -280,22 +283,37 @@ function bidPanelMarkup(html: string): string {
 }
 
 /**
- * 「上一轮」回看入口那枚 chip 的开标签（状态条内、整条**最左** —— 它取代了原来的「第 N 轮」）。
+ * 信息须「回溯」格里那枚「上一轮」按钮：**它一直在**，只有「能不能点」会变。
  *
- * 它必须是 `pointer-events-auto`：整条状态条 `pointer-events-none`（横跨毡面，要让座位卡上的
- * 「+ 机器人」/「请离」点得到），少了这一句按钮就看得见点不到 —— `BuryPanel` 记过这个坑。
- * 形状判据的源码那一半在 `test/table-chrome.test.ts` 的 `trickReviewCheck`（位置 + 「第 N 轮」
- * 不许回来），几何那一半在 `scripts/shot-auction.ts` 的 ⑬（状态条不折行）。
+ * 两个状态各有判据（两个都抓过一次真实缺陷）：
+ * - 收过墩 ⇒ 必须**可点**：它自己 `pointer-events-auto`（整块须是 `pointer-events-none`，
+ *   横跨毡面要让座位卡上的「+ 机器人」/「请离」点得到），少了这一句按钮会看得见点不到
+ *   —— `BuryPanel` 记过这个坑；
+ * - 还没收墩（第一轮）⇒ 必须是 `disabled` 的灰按钮：整格空着会让四列表格缺一角
+ *   （「空出一块太怪」），而它同时预告了「这里能回看上一轮」。
+ *
+ * 抓不到直接抛：按钮消失了不是「跳过一个可选项」，是缺陷。
+ * 形状判据的源码那一半在 `test/table-chrome.test.ts` 的 `trickReviewCheck`，
+ * 几何那一半在 `scripts/shot-auction.ts` 的 ⑭（那张表不折行、居中）。
  */
-function reviewEntry(html: string): string | null {
-  return /<button[^>]*class="[^"]*pointer-events-auto[^"]*"[^>]*>上一轮<\/button>/.exec(html)?.[0] ?? null;
+function reviewButton(
+  html: string,
+  where: string
+): { readonly tag: string; readonly disabled: boolean } {
+  const tag = /<button[^>]*>上一轮<\/button>/.exec(html)?.[0];
+  assert(tag !== undefined, `${where}：信息须的「回溯」格里没有「上一轮」按钮（它应当一直在，没轮到就禁用）`);
+  return { tag, disabled: /\bdisabled\b/.test(tag) };
 }
 
-/** 定约状态块的 HTML 片段：从金色描边的容器起取一段（只为断言那个数字的字号够大） */
+/**
+ * 信息须里「定约」那一格的值（`data-status-cell="contract"`）的 HTML 切片：
+ * 只为断言那个数字的字号够大（值必须是大号，不能缩回小字）。
+ *
+ * 早先这里抓的是 `ring-gold/25`（定约是一枚独立的金色描边药丸）—— 那条须改成**类表格**之后，
+ * 定约是「定约」表头下面的一个值格，描边移到了整块上（ADR-0020 修订）。
+ */
 function contractMarkup(html: string): string {
-  const start = html.indexOf('ring-gold/25');
-  assert(start >= 0, '页面里找不到定约状态块（ring-gold/25）：定约与庄已抓必须一直在牌面上');
-  return html.slice(start, start + 500);
+  return statusCellMarkup(html, 'contract');
 }
 
 /** 数表头格：`<thead` 也以 `<th` 开头，所以正则必须带定界符（空格或 `>`） */
@@ -304,13 +322,31 @@ function thCount(html: string): number {
 }
 
 /**
- * 动作托盘**外层**的开标签切片：它铺满毡面之外那条常驻动作带（见 ActionTray 的注释），
- * 所以守卫照这里抓：`absolute inset-0` + 居中（`items-center justify-center`）+ `z-30`。
- * 少了任何一条，那一层就会走形 —— 而**旧锚**（`bottom-full` / `top-1/2 -translate-y-1/2`）
- * 是这一版要修的东西：它让托盘整根落在毡面的最后 40px 里，压住「我」那条底栏（截图里的 #4）。
+ * 动作托盘内容盒（`data-action-tray`）的**开标签切片**（ADR-0020 修订）。
+ *
+ * 托盘现在住在操作条那一行里（`data-action-row`），所以它必须**不是**绝对定位 ——
+ * 早先它是钉在「毡面与操作条之间那条 44px 常驻带」里的一个漂浮层
+ * （`absolute inset-0` + 居中 + `z-30`），而那 44px 已经还给牌区。
+ * 形状判据的源码那一半在 `test/table-chrome.test.ts` 的 `trayRowCheck`。
  */
 function actionTrayMarkup(html: string): string | null {
-  return /<div[^>]*class="[^"]*absolute[^"]*inset-0[^"]*"[^>]*>\s*<div[^>]*data-action-tray="true"/.exec(html)?.[0] ?? null;
+  return /<div[^>]*data-action-tray="true"[^>]*>/.exec(html)?.[0] ?? null;
+}
+
+/**
+ * 信息须那张表里某一格的值（`data-status-cell="<name>"`）的 HTML 切片。
+ *
+ * 抓不到直接抛：定约 / 级牌 / 庄已抓这三样必须一直在牌面上，没了就是缺陷（不是可跳过的情况）。
+ * 早先这里抓的是 `ring-gold/25`（定约是一枚独立的描边药丸）—— 那条须改成类表格之后，
+ * 定约是「定约」表头下面的一个值格，描边移到了整块上。
+ */
+function statusCellMarkup(html: string, name: string): string {
+  const start = html.indexOf(`data-status-cell="${name}"`);
+  assert(
+    start >= 0,
+    `页面里找不到信息须的「${name}」值格（data-status-cell="${name}"）：定约 / 级牌 / 庄已抓必须一直在牌面上`
+  );
+  return html.slice(start, start + 400);
 }
 
 /**
@@ -322,13 +358,28 @@ function actionTrayBlock(html: string): string | null {
 }
 
 /**
- * 页面上的「距上一步」计时 → 秒数。抓不到直接抛：守卫绝不静默跳过。
+ * 页面上的「距上一步」计时 → 秒数。抓的是**完整那句话**（`距上一步 12 秒`）——
+ * 它现在挂在图标的 `title` / `aria-label` 上（图标里只写秒数，见 ActionClock）。
+ * 抓不到直接抛：守卫绝不静默跳过。
  * 三档都要认（`12 秒` / `1 分 05 秒` / `2 小时 03 分`），否则等久了守卫会假红。
  */
 function clockSeconds(html: string, where: string): number {
   const match = /距上一步 (?:(\d+) 小时 )?(?:(\d+) 分 )?(\d+) 秒/.exec(html);
   assert(match !== null, `${where}：找不到「距上一步」计时（时钟不见了，或文案/格式变了）`);
   return Number(match[1] ?? 0) * 3600 + Number(match[2] ?? 0) * 60 + Number(match[3]);
+}
+
+/**
+ * 闹钟图标圆里那个**看得见的**数字（`data-clock-face`）。
+ *
+ * 为什么要单独抓它：`clockSeconds` 读的是 `title`，而属性写在那儿不代表**圆里的数字**也在跳
+ * —— 这一条正是抓「时钟冻住」的那一半。`≥1000` 秒时它写的是红横杠（那时不写数，
+ * 见 labels.ts 的 `clockFace`），所以这里按字符取，不做数字转换。
+ */
+function clockFaceText(html: string, where: string): string {
+  const match = /data-clock-face="true"[^>]*>([^<]*)</.exec(html);
+  assert(match !== null, `${where}：找不到计时图标里的数字（data-clock-face 不见了）`);
+  return (match[1] ?? '').trim();
 }
 
 /** `/api/tables/<code>/view` 的载荷（在座拿到个人视图；牌面就是引擎的 Card 对象） */
@@ -396,18 +447,19 @@ async function main(): Promise<void> {
     '未开局页面：常驻的「牌桌」页不见了（改名入口应当始终在页面上）'
   );
 
-  // 4) 毡面必须是**三行格**：
-  //    ① 顶行两张对手卡（`.felt` 的第一行，`flex justify-between`，卡宽 w-36 / sm:w-44）；
-  //    ② 内容槽（`data-felt-row="slot"`，`min-h-0`，非座位层只能住在它里面）；
-  //    ③ 底行的「我」那条底栏（`data-seat-bar="true"`，跨宽一行）。
+  // 4) 毡面必须是**四行格**（ADR-0020 及其修订）：
+  //    ① 信息须（`data-felt-row="rail"`：定约 / 级牌 / 庄已抓 / 回溯那张类表格，No deal 时整块不渲染）；
+  //    ② 顶行两张对手卡（`flex justify-between`，卡宽 w-36 / sm:w-44）；
+  //    ③ 内容槽（`data-felt-row="slot"`，`min-h-0`，非座位层只能住在它里面）；
+  //    ④ 底行的「我」那条底栏（`data-seat-bar="true"`，限宽 256px 居中）。
   //
   //    为什么不再断言「三张卡钉在四角且类是 absolute」：那是旧形状，三个 `top-*` 各算各的偏移，
   //    于是手机短屏上状态条压住埋底槽位、叫牌面板压住座位卡、托盘压住我的卡（ADR-0020）。
-  //    现在「非座位层不会与座位行重叠」由三行格**结构**保证，几何由 shot 脚本实测。
+  //    现在「非座位层不会与座位行重叠」由四行格**结构**保证，几何由 shot 脚本实测。
   const feltRows = [...lobby.matchAll(/data-felt-row="([a-z]+)"/g)].map((match) => match[1]);
   assert(
-    JSON.stringify(feltRows) === JSON.stringify(['seats', 'slot', 'me']),
-    `毡面不是「顶卡 / 内容槽 / 我的底栏」三行格，实际 [${feltRows.join(', ')}]`
+    JSON.stringify(feltRows) === JSON.stringify(['rail', 'seats', 'slot', 'me']),
+    `毡面不是「信息须 / 顶卡 / 内容槽 / 我的底栏」四行格，实际 [${feltRows.join(', ')}]`
   );
   const topRow = /<div[^>]*data-felt-row="seats"[\s\S]*?(?=<div[^>]*data-felt-row="slot")/.exec(lobby)?.[0] ?? '';
   const topCards = classAttrs(topRow).filter((value) => value.includes('rounded-2xl'));
@@ -524,9 +576,16 @@ async function main(): Promise<void> {
     '未发牌的大厅页出现了「距上一步」计时：这一桌还没有任何牌局动作'
   );
   const beforeWait = clockSeconds(auction, '叫牌页面');
+  const beforeFace = clockFaceText(auction, '叫牌页面');
   assert(beforeWait < 60, `刚发完牌就显示等了 ${beforeWait} 秒：计时没有从动作那一刻起算`);
+  assert(
+    beforeFace === String(beforeWait),
+    `图标里的数字与那句话对不上：圆里写「${beforeFace}」，那句话读作 ${beforeWait} 秒`
+  );
   await new Promise((resolve) => setTimeout(resolve, 1200));
-  const afterWait = clockSeconds(await page(`/table/${code}`, players[0]!.credential), '叫牌页面（1.2 秒后）');
+  const laterPage = await page(`/table/${code}`, players[0]!.credential);
+  const afterWait = clockSeconds(laterPage, '叫牌页面（1.2 秒后）');
+  const afterFace = clockFaceText(laterPage, '叫牌页面（1.2 秒后）');
   assert(
     afterWait > beforeWait,
     `计时没有在走：1.2 秒前是 ${beforeWait} 秒，之后还是 ${afterWait} 秒（时钟冻住了？）`
@@ -534,6 +593,11 @@ async function main(): Promise<void> {
   assert(
     afterWait - beforeWait <= 5,
     `计时跳得太快：1.2 秒里从 ${beforeWait} 秒变成 ${afterWait} 秒（单位错了？）`
+  );
+  // 圆里那个**看得见的**数字也要跟着走 —— 只查 title 的话，冻住的时钟照样能过
+  assert(
+    afterFace !== beforeFace && afterFace === String(afterWait),
+    `图标圆里的数字没有跟着走（前「${beforeFace}」后「${afterFace}」，那句话读到 ${afterWait} 秒）`
   );
   // 5b) 叫牌面板：还没人叫时有顶部大字位；头部只写「第 N 副」（发牌人文案已删 ——
   //     「发牌」这个词本身对新手不透明，谁先叫由轮次 chip 说清楚）。
@@ -626,15 +690,23 @@ async function main(): Promise<void> {
   for (const gone of ['你拿上来的底牌', '选 3 张扣入暗底', '庄家埋底中']) {
     assert(!bury.includes(gone), `埋底页面仍在写「${gone}」：这句已删`);
   }
-  // 6d) 定约与庄已抓是**大号金数字**（小号 chip 被判为不显眼）
+  // 6d) 定约 / 级牌 / 庄已抓三个值都是**大号金数字**（小号 chip 被判为不显眼）
   const statusBlock = contractMarkup(bury);
   assert(
     statusBlock.includes('text-2xl'),
     `定约数字又缩回小号了（缺 text-2xl）：${statusBlock.slice(0, 120)}`
   );
+  // 「庄已抓」那一格：按**值格切片**判断（早先是「庄已抓」三个字往后数 200 字符 ——
+  // 表格形状下那段距离里还有表头与另外两格，窗口判据会假红也会假绿）。
+  const pointsCell = statusCellMarkup(bury, 'points');
   assert(
-    /庄已抓[\s\S]{0,200}?text-2xl/.test(bury),
-    '「庄已抓」的分数不是大号数字（缺 text-2xl）'
+    pointsCell.includes('text-2xl'),
+    `「庄已抓」的分数不是大号数字（缺 text-2xl）：${pointsCell.slice(0, 120)}`
+  );
+  const levelCell = statusCellMarkup(bury, 'level');
+  assert(
+    levelCell.includes('text-2xl'),
+    `「级牌」那一格不是大号数字（缺 text-2xl）：${levelCell.slice(0, 120)}`
   );
 
   // 6b) 闲家看不到底牌：同一页没有底牌行，也没有任何标记
@@ -679,12 +751,12 @@ async function main(): Promise<void> {
   assertNoRemovedHints(watching, '观战页面');
   assertNoCompassLabels(watching, '观战页面');
   assertNoPositionMix(watching, '观战页面');
-  // 观战者：毡面同样只有**两张对手卡 + 一条「我」的底栏**吗？不 —— 观战者没有座位，
-  // 所以底栏整行消失，只剩顶行那两张对手卡（见 `+page.svelte` 的第三行注释）。
+  // 观战者：毡面的**行**一个不少（四行），但最后那一行里没有东西 —— 观战者没有座位，
+  // 所以「我」那条底栏不渲染（行本身留着，行的顺序因此对谁都不变；空的 auto 行高度为 0）。
   const watchFeltRows = [...watching.matchAll(/data-felt-row="([a-z]+)"/g)].map((match) => match[1]);
   assert(
-    JSON.stringify(watchFeltRows) === JSON.stringify(['seats', 'slot', 'me']),
-    `观战页面的毡面不是三行格（实际 [${watchFeltRows.join(', ')}]）：毡面的结构对谁都不该变`
+    JSON.stringify(watchFeltRows) === JSON.stringify(['rail', 'seats', 'slot', 'me']),
+    `观战页面的毡面不是四行格（实际 [${watchFeltRows.join(', ')}]）：行的顺序对谁都不该变`
   );
   const watchTopRow =
     /<div[^>]*data-felt-row="seats"[\s\S]*?(?=<div[^>]*data-felt-row="slot")/.exec(watching)?.[0] ?? '';
@@ -746,30 +818,29 @@ async function main(): Promise<void> {
   const tray = actionTrayMarkup(follower);
   assert(
     tray !== null,
-    '跟牌者页面没有**在动作带里**的动作托盘：托盘要么丢了，要么回到「钉在操作条上方」的旧锚'
+    '跟牌者页面没有动作托盘（`data-action-tray`）：托盘要么丢了，要么被包回了别的层'
   );
-  // 形状守卫：外层铺满**毡面之外**那条动作带（absolute inset-0 + 居中 + z-30）。旧锚（bottom-full /
-  // 垂直居中）是这一版要修的东西 —— 那 40px 整根落在毡面的最后 40px 里，压住「我」那条底栏。
-  for (const cls of ['absolute', 'inset-0', 'items-center', 'justify-center', 'z-30']) {
-    assert(
-      tray.includes(cls),
-      `动作托盘外层缺少 ${cls}：它不再铺满动作带（要么回毡面压住底栏，要么不再居中）——${tray.slice(0, 160)}`
-    );
-  }
+  // 形状守卫：托盘**在流内**、单行、宽度取 max-content。旧形状（外层 `absolute inset-0` +
+  // 居中 + z-30，钉在操作条上方那条 44px 带子里）已经撤掉（ADR-0020 修订）——
+  // 它现在住在操作条那一行里，所以**必须不是**绝对定位：一旦浮起来就会压住毡面最后一行。
+  assert(
+    !tray.includes('absolute') && !tray.includes('inset-0') && !tray.includes('z-30'),
+    `动作托盘又变成漂浮的一层（absolute / inset-0 / z-30）：它会压住毡面最后一行（「我」那条底栏）——${tray.slice(0, 160)}`
+  );
   assert(
     !tray.includes('bottom-full') && !tray.includes('-translate-y-1/2'),
     `动作托盘又回到旧锚（bottom-full / 垂直居中）了：它会压在毡面的最后 40px 里盖住「我」那条底栏 ——${tray.slice(0, 160)}`
   );
-  // 宽度：居中 + 宽度 auto 时 shrink-to-fit 只有半个容器可用，flex 子项被压缩，
+  // 宽度：宽度 auto 时 shrink-to-fit 只有半个容器可用，flex 子项被压缩，
   // 而 CJK 可以在任意字间断行 ——「出 牌」「清 空」于是竖排（截图里那次返工）。
   assert(
     follower.includes('w-max'),
     `动作托盘的根节点缺少 w-max：宽度会被压成半个容器，子项被压缩后「出 牌」会竖排 ——${tray.slice(0, 160)}`
   );
-  // 带子本身必须是常驻的一行：它不分轮到自己还是轮空，所以「轮到我 / 轮空」之间零回流
+  // 操作条那一行：托盘住在它里面，所以它必须带钩子、且与毡面零相交（几何那半在 shot 里量）
   assert(
-    /data-action-band="true"/.test(follower),
-    '页面里没有那条常驻动作带（data-action-band）：托盘会回到毡面里'
+    /data-action-row="true"/.test(follower),
+    '页面里没有操作条那一行的钩子（data-action-row）：托盘没了落点'
   );
   const trayBlock = actionTrayBlock(follower);
   assert(trayBlock !== null, '取不到动作托盘的整块 HTML（data-action-tray 那一层）');
@@ -791,8 +862,13 @@ async function main(): Promise<void> {
   for (const gone of ['上一轮 · 赢墩', '赢墩 +']) {
     assert(!follower.includes(gone), `出牌页面还在写「${gone}」：徽标只报这 N 分归庄方还是闲方`);
   }
-  // 还没收墩 ⇒ 没有「上一轮」可回看：入口必须还没出现（否则它指向一墩不存在的牌）
-  assert(!reviewEntry(follower), '还没收墩就跟牌者的页面上出现了「上一轮」回看入口');
+  // 还没收墩 ⇒ 没有「上一轮」可回看：那枚按钮必须**在**（表格不缺一角），但必须是禁用的灰按钮
+  const earlyReview = reviewButton(follower, '跟牌者页面（首轮）');
+  assert(earlyReview.disabled, '还没收墩时「上一轮」按钮是可点的：它指向一墩不存在的牌');
+  assert(
+    !earlyReview.tag.includes('pointer-events-auto'),
+    '还没收墩时那枚灰按钮还带着 pointer-events-auto：它会让禁用态看起来像能点'
+  );
   const marks = (follower.match(/data-marked="true"/g) ?? []).length;
   assert(
     marks === expectedMarks,
@@ -838,13 +914,18 @@ async function main(): Promise<void> {
   assert(!afterTrick.includes('赢墩'), '收墩后的徽标里又出现了「赢墩」');
   // 收墩后必须能回看这一墩：bot 出手只有 0.5–1.5 秒，赢家立刻领出下一轮，毡面出牌区只剩当前墩
   // —— 上一墩的三家出牌只有这枚入口找得回来（浮层本身是客户端那一帧才渲染的，见源码守卫）。
-  assert(reviewEntry(afterTrick) !== null, '收墩后毡面上没有「上一轮」回看入口（或它点不动）');
+  const lateReview = reviewButton(afterTrick, '收墩后');
+  assert(!lateReview.disabled, '收墩后「上一轮」按钮仍然是禁用的：回看入口点不动了');
+  assert(
+    lateReview.tag.includes('pointer-events-auto'),
+    '收墩后的「上一轮」按钮缺 pointer-events-auto：整块须让开点击，按钮会看得见点不到'
+  );
   assert(
     !afterTrick.includes('data-trick-review'),
     '回看浮层出现在 SSR 首帧：它默认应当是关闭的（否则每次进桌都盖住毡面）'
   );
   console.log(
-    '出牌阶段：动作托盘住在**毡面之外**那条常驻动作带里（铺满带子、居中、z-30）；'
+    '出牌阶段：动作托盘住在操作条那一行里（在流内、单行、宽度 max-content —— 不再有 44px 动作带）；'
       + `跟牌蓝框 ${marks} 处 = 下家领出门张数；收墩徽标「${badge[0]}」；`
       + '收墩后状态条上出现「上一轮」回看入口（浮层默认关着）'
   );
