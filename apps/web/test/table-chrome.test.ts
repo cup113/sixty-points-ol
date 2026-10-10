@@ -68,7 +68,7 @@ const seatCard = read('../src/lib/components/SeatCard.svelte');
 const seatActions = read('../src/lib/components/SeatActions.svelte');
 const tableHeaderActions = read('../src/lib/components/TableHeaderActions.svelte');
 const lobbyPanel = read('../src/lib/components/LobbyPanel.svelte');
-const tableStatus = read('../src/lib/components/TableStatus.svelte');
+const infoRail = read('../src/lib/components/InfoRail.svelte');
 const actionBar = read('../src/lib/components/ActionBar.svelte');
 const actionTray = read('../src/lib/components/ActionTray.svelte');
 const actionClock = read('../src/lib/components/ActionClock.svelte');
@@ -364,10 +364,10 @@ test('横跨一层的覆盖层必须让开点击（否则它盖住的东西看�
   const railAt = feltRowIndex('rail');
   const slotsAt = feltRowIndex('slot');
   const meAt = feltRowIndex('me');
-  // 信息须那一行里只有 TableStatus（台面级信息：定约 / 级牌 / 庄已抓 / 回溯）
+  // 信息须那一行里只有 InfoRail（台面级信息：定约 / 级牌 / 庄已抓 / 回溯）
   const railBlock = code(page).slice(railAt, slotsAt);
   assert.ok(
-    /<TableStatus\b/.test(railBlock) && !/<(LobbyPanel|BuryPanel|BidPanel|TrickArea)\b/.test(railBlock),
+    /<InfoRail\b/.test(railBlock) && !/<(LobbyPanel|BuryPanel|BidPanel|TrickArea)\b/.test(railBlock),
     '信息须那一行里住进了「打这一墩」的层：它只放台面级信息，内容槽才是那些层的地方'
   );
   for (const layer of ['LobbyPanel', 'BuryPanel', 'BidPanel', 'TrickArea'] as const) {
@@ -378,12 +378,12 @@ test('横跨一层的覆盖层必须让开点击（否则它盖住的东西看�
         '会与别的层压在一起 —— 必须住在 data-felt-row="slot" 里'
     );
   }
-  // 反过来：台面级信息（TableStatus）不许再回到内容槽里（那正是牌区上方悬着一层的旧形状）
+  // 反过来：台面级信息（InfoRail）不许再回到内容槽里（那正是牌区上方悬着一层的旧形状）
   const slotBlock = code(page).slice(slotsAt, meAt);
   assert.equal(
-    /<TableStatus\b/.test(slotBlock),
+    /<InfoRail\b/.test(slotBlock),
     false,
-    'TableStatus 又出现在内容槽里：它该住在信息须那一行（rail），否则牌区上方又悬着一层'
+    'InfoRail 又出现在内容槽里：它该住在信息须那一行（rail），否则牌区上方又悬着一层'
   );
 
   // 让开之后，可点的控件必须自己接回来，否则连邀请码 / 开始第一副 / 规则演示都点不动了
@@ -399,7 +399,7 @@ test('横跨一层的覆盖层必须让开点击（否则它盖住的东西看�
   for (const [name, source, needle] of [
     ['LobbyPanel.svelte', lobbyPanel, 'InviteCode'],
     ['LobbyPanel.svelte', lobbyPanel, '开始第一副'],
-    ['TableStatus.svelte', tableStatus, '定约'],
+    ['InfoRail.svelte', infoRail, '定约'],
     ['BuryPanel.svelte', buryPanel, 'data-taken-kitty']
   ] as const) {
     assert.ok(source.includes(needle), `${name} 里少了「${needle}」`);
@@ -453,13 +453,13 @@ test('动作按钮都要在有请求在飞时禁用（慢网下防双击），�
  * 正好压在暗底槽位上 —— 两处各算各的位置，谁也管不了谁。
  *
  * ADR-0020 修订之后，这条判据问的是**两样东西各自住在哪一行**：
- * - **信息须**（`TableStatus`）住在毡面第一行（`data-felt-row="rail"`）—— 它是台面级信息
+ * - **信息须**（`InfoRail`）住在毡面第一行（`data-felt-row="rail"`）—— 它是台面级信息
  *   （定约 / 级牌 / 庄已抓 / 回溯），所以从内容槽里搬了出去；
  * - **埋底面板**住在内容槽里（`data-felt-row="slot"`）。
  * 两者都**不许自己写偏移**：位置由行给出。这条在无浏览器的环境里只能落到源头上
  * （真实像素由 `scripts/shot-auction.ts` 量）。
  */
-function phaseStatusFlow(pageSource: string, statusSource: string, burySource: string): string | null {
+function railRowFlow(pageSource: string, statusSource: string, burySource: string): string | null {
   const src = code(pageSource);
   const railAt = src.indexOf('data-felt-row="rail"');
   const slotsAt = src.indexOf('data-felt-row="slot"');
@@ -471,25 +471,25 @@ function phaseStatusFlow(pageSource: string, statusSource: string, burySource: s
     return `毡面的行序不对（rail ${railAt} / slot ${slotsAt} / me ${meAt}）：信息须在顶卡之上、内容槽居中、底栏在最后`;
   }
   const railBlock = src.slice(railAt, slotsAt);
-  if (!/<TableStatus\b/.test(railBlock)) {
-    return 'TableStatus 不在信息须那一行里：它要么回到了内容槽（牌区上方又悬着一层），要么被渲染了两处';
+  if (!/<InfoRail\b/.test(railBlock)) {
+    return 'InfoRail 不在信息须那一行里：它要么回到了内容槽（牌区上方又悬着一层），要么被渲染了两处';
   }
   const slotBlock = src.slice(slotsAt, meAt);
   if (!/<BuryPanel\b/.test(slotBlock)) {
     return 'BuryPanel 不在内容槽里：埋底面板必须住在 data-felt-row="slot" 里';
   }
-  if (/<TableStatus\b/.test(slotBlock)) {
-    return 'TableStatus 又出现在了内容槽里：它会与埋底面板各算各的位置（正是短屏上重叠的来源）';
+  if (/<InfoRail\b/.test(slotBlock)) {
+    return 'InfoRail 又出现在了内容槽里：它会与埋底面板各算各的位置（正是短屏上重叠的来源）';
   }
   // 两者都不许绝对定位 —— 位置由行给，不需要任何偏移
   if (/\babsolute\b/.test(code(statusSource))) {
-    return 'TableStatus 自己绝对定位：它住在信息须那一行里，不该再算偏移';
+    return 'InfoRail 自己绝对定位：它住在信息须那一行里，不该再算偏移';
   }
   if (/\babsolute\b/.test(code(burySource))) {
     return 'BuryPanel 自己绝对定位：它住在内容槽里，不该再算偏移';
   }
   if (/\btop-\[|\bbottom-\[/.test(code(statusSource))) {
-    return 'TableStatus 里出现了魔数偏移：信息须的位置由毡面的行给出';
+    return 'InfoRail 里出现了魔数偏移：信息须的位置由毡面的行给出';
   }
   return null;
 }
@@ -503,7 +503,7 @@ function phaseStatusFlow(pageSource: string, statusSource: string, burySource: s
  * 「**值那一档**必须是大号、且三格共用同一个 token」—— 表头的小字不再算违规，而
  * 「数字缩回小字」这件事仍然逃不掉（`num` 里出现 10px、或缺 text-2xl 都会红）。
  */
-function statusTypeCheck(statusSource: string): string | null {
+function railTypeCheck(statusSource: string): string | null {
   const src = code(statusSource);
   const num = /const num = '([^']*)'/.exec(src)?.[1];
   if (num === undefined) return '信息须里找不到数值那一档（const num）：定约 / 级牌 / 庄已抓没有共同的字号来源';
@@ -513,14 +513,14 @@ function statusTypeCheck(statusSource: string): string | null {
   if (uses < 3) {
     return `只有 ${uses} 处用 num：定约 / 级牌 / 庄已抓三个值必须共用同一档大号数字`;
   }
-  if (!/data-status-cell="contract"/.test(src)) {
-    return '信息须里没有「定约」值格（data-status-cell="contract"）：定约必须一直在牌面上';
+  if (!/data-rail-cell="contract"/.test(src)) {
+    return '信息须里没有「定约」值格（data-rail-cell="contract"）：定约必须一直在牌面上';
   }
   return null;
 }
 
 test('定约 / 级牌 / 庄已抓共用同一档大号数字（不再是小号 chip）', () => {
-  const problem = statusTypeCheck(tableStatus);
+  const problem = railTypeCheck(infoRail);
   assert.equal(problem, null, problem ?? '');
 });
 
@@ -529,50 +529,50 @@ test('反证：旧的 10px chip 版面、以及数字缩回小字，都必须被
   <span class="rounded-full bg-black/35 px-2.5 py-1">第 <b>{trickNo}</b> 轮</span>
   <span class="rounded-full bg-black/35 px-2.5 py-1">定约</span>
 </div>`;
-  assert.match(statusTypeCheck(OLD_STATUS) ?? '', /数值那一档/, '旧版面没有被判出来');
+  assert.match(railTypeCheck(OLD_STATUS) ?? '', /数值那一档/, '旧版面没有被判出来');
   // 数值那一档被降成小字：这正是要抓的回潮
   assert.match(
-    statusTypeCheck(tableStatus.replace("const num = 'text-xl font-black", "const num = 'text-[10px] font-black")) ?? '',
+    railTypeCheck(infoRail.replace("const num = 'text-xl font-black", "const num = 'text-[10px] font-black")) ?? '',
     /10px/,
     '数值那一档被改成 10px 没有被判出来'
   );
   // 三格里少用了一次 num（某一格自己写了别的字号）
   assert.match(
-    statusTypeCheck(tableStatus.replace('<b class={num}>{declarerPoints}</b>', '<b>{declarerPoints}</b>')) ?? '',
+    railTypeCheck(infoRail.replace('<b class={num}>{declarerPoints}</b>', '<b>{declarerPoints}</b>')) ?? '',
     /num/,
     '有值格不再共用 num 没有被判出来'
   );
 });
 
 test('埋底阶段：状态条与暗底槽位同列流，短屏也不重叠', () => {
-  const problem = phaseStatusFlow(page, tableStatus, buryPanel);
+  const problem = railRowFlow(page, infoRail, buryPanel);
   assert.equal(problem, null, problem ?? '');
 });
 
 test('反证：状态条回内容槽 / 自己绝对定位的旧版面必须被判出来', () => {
-  const OLD_PAGE = `<TableStatus {view} />\n<BuryPanel {client} />`;
+  const OLD_PAGE = `<InfoRail {view} />\n<BuryPanel {client} />`;
   assert.ok(
-    phaseStatusFlow(OLD_PAGE, tableStatus, buryPanel) !== null,
+    railRowFlow(OLD_PAGE, infoRail, buryPanel) !== null,
     '旧版面（状态条与埋底面板挤在一起）被判为合规：这条守卫是空转的'
   );
   assert.ok(
-    phaseStatusFlow(page, '<div class="absolute top-[5.5rem]">状态条</div>', buryPanel) !== null,
+    railRowFlow(page, '<div class="absolute top-[5.5rem]">状态条</div>', buryPanel) !== null,
     '状态条自己绝对定位被判为合规'
   );
-  // 把 TableStatus 从信息须那一行挪回内容槽（旧形状）：牌区上方又会悬着一层
+  // 把 InfoRail 从信息须那一行挪回内容槽（旧形状）：牌区上方又会悬着一层
   const backToSlot = code(page).replace(
-    '{#if view !== null}\n        <TableStatus {view} onReviewTrick={() => (reviewOpen = true)} />',
+    '{#if view !== null}\n        <InfoRail {view} onReviewTrick={() => (reviewOpen = true)} />',
     ''
   );
   assert.match(
-    phaseStatusFlow(`${backToSlot}\n<div data-felt-row="slot"><TableStatus {view} /><BuryPanel {client} /></div>`, tableStatus, buryPanel) ?? '',
+    railRowFlow(`${backToSlot}\n<div data-felt-row="slot"><InfoRail {view} /><BuryPanel {client} /></div>`, infoRail, buryPanel) ?? '',
     /内容槽|不在信息须/,
-    'TableStatus 回到内容槽没有被判出来'
+    'InfoRail 回到内容槽没有被判出来'
   );
 });
 
 test('定约与庄已抓是大号数字（不再是小号 chip）', () => {
-  const problem = statusTypeCheck(tableStatus);
+  const problem = railTypeCheck(infoRail);
   assert.equal(problem, null, problem ?? '');
 });
 
@@ -581,7 +581,137 @@ test('反证：旧的 10px chip 版面必须被判出来', () => {
   <span class="rounded-full bg-black/35 px-2.5 py-1">第 <b>{trickNo}</b> 轮</span>
   <span class="rounded-full bg-black/35 px-2.5 py-1">定约</span>
 </div>`;
-  assert.match(statusTypeCheck(OLD_STATUS) ?? '', /数值那一档/, '旧版面没有被判出来');
+  assert.match(railTypeCheck(OLD_STATUS) ?? '', /数值那一档/, '旧版面没有被判出来');
+});
+
+/**
+ * 信息须那两格的**排版纪律**（两条都来自真机截图反馈，各对应一次真实缺陷）：
+ *
+ * ① **表头 11px + 上边距 6px**：早先表头 10px（手机上偏小）、上下内边距各 2px，
+ *    第一行贴着整块的圆角边线 —— 「第一行太挤了」。表头是这张表**唯一**的说明
+ *    （`回溯 / 定约 / 级牌 / 庄已抓` 四个词没有别的解释），读不清就等于表头不存在。
+ * ② **不许折行**：`25` 与「分」之间是可断行处（数字与表意文字之间允许断行），
+ *    320px 上这条被挤到 229px 时列宽不够，「分」掉到了第二行。
+ *    `whitespace-nowrap` 去掉那个断点，而「到底放不放得下」由 `shot-auction.ts` 的 ⑭b
+ *    当场量（不换行需要多宽 vs 这一格真有多宽）—— 所以 nowrap 不是把问题藏起来，
+ *    而是把「悄悄折行」换成「量得到放不下」。
+ */
+function railBoxCheck(railSource: string): string | null {
+  const src = code(railSource);
+  const head = /const head = '([^']*)'/.exec(src)?.[1];
+  if (head === undefined) return '信息须里找不到表头那一档（const head）：表头的字号与留白没有来源';
+  if (head.includes('text-[10px]')) return '信息须表头又回到 10px 了：手机上读不清，等于表头不存在';
+  if (!head.includes('text-[11px]')) {
+    return `信息须表头的字号不是 11px（${head}）：表头是这张表唯一的说明`;
+  }
+  const padTop = /(?:^|\s)pt-(\d+(?:\.\d+)?)/.exec(head)?.[1];
+  if (padTop === undefined || Number(padTop) < 1.5) {
+    return '信息须表头的上边距不到 6px（缺 pt-1.5）：第一行会贴着整块的上边线（真机反馈过「太挤」）';
+  }
+  if (!head.includes('whitespace-nowrap')) {
+    return '信息须表头没有 whitespace-nowrap：表头文字会折成两行，整块跟着长高';
+  }
+  const cell = /const cell = '([^']*)'/.exec(src)?.[1];
+  if (cell === undefined) return '信息须里找不到值格那一档（const cell）';
+  if (!cell.includes('whitespace-nowrap')) {
+    return '信息须的值格没有 whitespace-nowrap：数字与「分」之间会断行（真机截图：25 下面单独一行「分」）';
+  }
+  return null;
+}
+
+test('信息须：表头 11px + 上边距 6px，两行都不许折行（「分」不掉下来）', () => {
+  const problem = railBoxCheck(infoRail);
+  assert.equal(problem, null, problem ?? '');
+});
+
+test('反证：表头缩回 10px / 上边距贴边 / 去掉 nowrap，都必须被判出来', () => {
+  // 注入一律打在**剥掉注释的源码**上（`code()`）：这几句话在注释里也出现过，
+  // 直接 replace 会打着注释、然后被 `code()` 剥掉 —— 那样反证会「看起来通过、其实没注入」。
+  const src = code(infoRail);
+  assert.match(
+    railBoxCheck(src.replace('text-[11px]', 'text-[10px]')) ?? '',
+    /10px/,
+    '表头缩回 10px 没有被判出来'
+  );
+  assert.match(
+    railBoxCheck(src.replace('pt-1.5 pb-0.5', 'py-0.5')) ?? '',
+    /上边距/,
+    '表头上下都只留 2px（第一行贴边）没有被判出来'
+  );
+  assert.match(
+    railBoxCheck(src.replaceAll('whitespace-nowrap', '')) ?? '',
+    /whitespace-nowrap/,
+    '去掉 nowrap（「分」可以掉到第二行）没有被判出来'
+  );
+  assert.match(
+    railBoxCheck(src.replace("const cell = 'whitespace-nowrap", "const cell = '")) ?? '',
+    /whitespace-nowrap/,
+    '只去掉值格的 nowrap 没有被判出来'
+  );
+  assert.equal(
+    railBoxCheck(`<table data-info-rail="true"><tr><th class="pt-1.5 text-[11px] whitespace-nowrap">回溯</th></tr></table>
+<script>const head = 'pt-1.5 pb-0.5 text-[11px] whitespace-nowrap'; const cell = 'whitespace-nowrap';</script>`),
+    null,
+    '这条守卫对合规的最小片段也报错（过宽）'
+  );
+});
+
+/**
+ * 毡面的**一个宽度尺度**：顶部信息须与底部「我」那条底栏必须取同一个变量（`--rail-w`）。
+ *
+ * 为什么值得一条守卫：两块一上一下、同宽居中才读得出是一个台面框，而**宽度不等不会报任何错**
+ * —— 早先信息须按内容撑到 229–238px、底栏固定 256px，差 18–27px，只有肉眼在真机上才看得出来。
+ * 变量本身也必须存在：`width: var(--rail-w)` 在变量丢了的时候会退化成 `auto`，
+ * 两块又各自按内容撑开，而且谁都不会报错（出货样式表那一半由 `scripts/ui-check.ts` 断言）。
+ */
+function railScaleCheck(railSource: string, pageSource: string, cssSource: string): string | null {
+  if (!code(railSource).includes('w-[var(--rail-w)]')) {
+    return '信息须没有按 --rail-w 取宽（缺 w-[var(--rail-w)]）：它会按内容撑宽，与底栏对不齐';
+  }
+  if (!code(pageSource).includes('max-w-[var(--rail-w)]')) {
+    return '「我」那条底栏没有按 --rail-w 取宽（缺 max-w-[var(--rail-w)]）：两块又不是同一个尺度了';
+  }
+  if (!/--rail-w:\s*16rem/.test(code(cssSource)) || !/--rail-w:\s*18rem/.test(code(cssSource))) {
+    return (
+      'app.css 里缺 --rail-w 的一档值（基准 16rem / sm 18rem）：两处的 width 会一起退化成 auto，' +
+      '或者桌面档放不下最宽的内容（100♣ / 100 分，数字在 sm 上长到 24px）'
+    );
+  }
+  return null;
+}
+
+test('信息须与「我」那条底栏取毡面的同一个宽度尺度（--rail-w）', () => {
+  const problem = railScaleCheck(infoRail, page, appCss);
+  assert.equal(problem, null, problem ?? '');
+});
+
+test('反证：任何一处不走 --rail-w / 变量没定义，都必须被判出来', () => {
+  // 同样打在剥掉注释的源码上：`+page.svelte` 的说明文字里就写着那个类名，
+  // 直接注入会打在注释上（`code()` 一剥就没了），反证于是假通过。
+  assert.match(
+    railScaleCheck(code(infoRail).replace('w-[var(--rail-w)]', 'w-auto'), page, appCss) ?? '',
+    /--rail-w/,
+    '信息须自己写宽度没有被判出来'
+  );
+  assert.match(
+    railScaleCheck(infoRail, code(page).replace('max-w-[var(--rail-w)]', 'max-w-3xs'), appCss) ?? '',
+    /--rail-w/,
+    '底栏自己写宽度没有被判出来'
+  );
+  assert.match(
+    railScaleCheck(infoRail, page, code(appCss).replace('--rail-w: 16rem', '')) ?? '',
+    /--rail-w/,
+    'app.css 里丢掉 --rail-w 没有被判出来'
+  );
+  assert.equal(
+    railScaleCheck(
+      '<table class="w-[var(--rail-w)]"></table>',
+      '<div class="max-w-[var(--rail-w)]"></div>',
+      ':root { --rail-w: 16rem } @media (min-width: 640px) { :root { --rail-w: 18rem } }'
+    ),
+    null,
+    '这条守卫对合规的最小片段也报错（过宽）'
+  );
 });
 
 test('埋底面板不再写标题行，也不写底牌说明句（钩子留着给 ui-check）', () => {
@@ -1613,7 +1743,7 @@ test('座位卡上的名字不许被裁剪：机器人名字曾在卡上只剩�
 /**
  * 「上一轮」回看：入口 / 层级 / 复用 / 关闭路径 / 唯一定义，五组判据各有一次真实缺陷对应。
  *
- * - **入口**（`TableStatus`）：收过墩才出现，且必须 `pointer-events-auto` —— 整条状态条是
+ * - **入口**（`InfoRail`）：收过墩才出现，且必须 `pointer-events-auto` —— 整条状态条是
  *   `pointer-events-none`（横跨毡面，要让座位卡上的按钮点得到），少了这一句按钮就看得见点不到
  *   （`BuryPanel` 记过这个坑）。
  * - **状态归页面、默认关着**：`reviewOpen` 初值 false ⇒ SSR 首帧里没有这一层；且它必须住在
@@ -1666,14 +1796,14 @@ function trickReviewCheck(
     cursor = at;
   }
   const cellAt = ['review', 'contract', 'level', 'points'].map((name) =>
-    status.indexOf(`data-status-cell="${name}"`)
+    status.indexOf(`data-rail-cell="${name}"`)
   );
   if (cellAt.some((at, index) => at < 0 || (index > 0 && at < cellAt[index - 1]!))) {
     return '信息须的值格与表头不同序（review → contract → level → points）：回溯那一格会跑到右边';
   }
   // 「回溯」那一格必须**装的就是这枚按钮**：按格子切片来判断，而不是数它后面多少字符 ——
   // 窗口写小了会在加了注释之后悄悄失效（而反证用例全都拿真实源码跑，于是会一起假绿）。
-  const reviewCellAt = status.indexOf('data-status-cell="review"');
+  const reviewCellAt = status.indexOf('data-rail-cell="review"');
   const reviewCellEnd = status.indexOf('</td>', reviewCellAt);
   const reviewCell = reviewCellAt < 0 ? '' : status.slice(reviewCellAt, reviewCellEnd < 0 ? undefined : reviewCellEnd);
   if (!/上一轮<\/button\s*>/.test(reviewCell)) {
@@ -1743,7 +1873,7 @@ function trickReviewCheck(
 }
 
 test('「上一轮」回看：入口在信息须的「回溯」格里、浮层只在毡面内、复用同一份牌面与徽标', () => {
-  const problem = trickReviewCheck(page, tableStatus, trickReview, trickArea);
+  const problem = trickReviewCheck(page, infoRail, trickReview, trickArea);
   assert.equal(problem, null, problem ?? '');
 });
 
@@ -1751,24 +1881,24 @@ test('反证：入口点不动 / 表头乱序 / 按钮跑出回溯格 / 默认�
   const cases: readonly (readonly [string, string | null, RegExp])[] = [
     [
       '入口丢掉 pointer-events-auto',
-      trickReviewCheck(page, tableStatus.replaceAll('pointer-events-auto', 'pointer-events-none'), trickReview, trickArea),
+      trickReviewCheck(page, infoRail.replaceAll('pointer-events-auto', 'pointer-events-none'), trickReview, trickArea),
       /pointer-events-auto/
     ],
     [
       '入口不看 trickHistory',
-      trickReviewCheck(page, tableStatus.replaceAll('trickHistory', 'hands'), trickReview, trickArea),
+      trickReviewCheck(page, infoRail.replaceAll('trickHistory', 'hands'), trickReview, trickArea),
       /trickHistory/
     ],
     [
       '首轮那颗灰按钮丢了 disabled 绑定',
-      trickReviewCheck(page, tableStatus.replace('disabled={!canReview}', ''), trickReview, trickArea),
+      trickReviewCheck(page, infoRail.replace('disabled={!canReview}', ''), trickReview, trickArea),
       /disabled/
     ],
     [
       '表头乱序（庄已抓跑到定约前面）',
       trickReviewCheck(
         page,
-        tableStatus
+        infoRail
           .replace('>级牌</th>', '>级牌X</th>')
           .replace('>庄已抓</th>', '>级牌</th>')
           .replace('>级牌X</th>', '>庄已抓</th>'),
@@ -1782,8 +1912,8 @@ test('反证：入口点不动 / 表头乱序 / 按钮跑出回溯格 / 默认�
       trickReviewCheck(
         page,
         (() => {
-          const block = /<button[\s\S]*?上一轮<\/button\s*>/.exec(tableStatus)?.[0] ?? '';
-          return tableStatus.replace(block, '') + '\n' + block;
+          const block = /<button[\s\S]*?上一轮<\/button\s*>/.exec(infoRail)?.[0] ?? '';
+          return infoRail.replace(block, '') + '\n' + block;
         })(),
         trickReview,
         trickArea
@@ -1794,7 +1924,7 @@ test('反证：入口点不动 / 表头乱序 / 按钮跑出回溯格 / 默认�
       '「第 N 轮」chip 又回来了',
       trickReviewCheck(
         page,
-        `<span>第 <b class="tabular-nums">{trickNo}</b> 轮</span>` + tableStatus,
+        `<span>第 <b class="tabular-nums">{trickNo}</b> 轮</span>` + infoRail,
         trickReview,
         trickArea
       ),
@@ -1802,7 +1932,7 @@ test('反证：入口点不动 / 表头乱序 / 按钮跑出回溯格 / 默认�
     ],
     [
       '回看默认就开着（SSR 首帧出现浮层）',
-      trickReviewCheck(page.replace('let reviewOpen = $state(false)', 'let reviewOpen = $state(true)'), tableStatus, trickReview, trickArea),
+      trickReviewCheck(page.replace('let reviewOpen = $state(false)', 'let reviewOpen = $state(true)'), infoRail, trickReview, trickArea),
       /默认必须关着/
     ],
     [
@@ -1813,7 +1943,7 @@ test('反证：入口点不动 / 表头乱序 / 按钮跑出回溯格 / 默认�
           /(<div[^>]*class="felt\b)/,
           '<TrickReview {client} open={reviewOpen} />\n  $1'
         ),
-        tableStatus,
+        infoRail,
         trickReview,
         trickArea
       ),
@@ -1821,27 +1951,27 @@ test('反证：入口点不动 / 表头乱序 / 按钮跑出回溯格 / 默认�
     ],
     [
       '浮层改成整屏 fixed（盖住手牌）',
-      trickReviewCheck(page, tableStatus, trickReview.replace('absolute inset-0 z-20', 'fixed inset-0 z-20'), trickArea),
+      trickReviewCheck(page, infoRail, trickReview.replace('absolute inset-0 z-20', 'fixed inset-0 z-20'), trickArea),
       /fixed/
     ],
     [
       '浮层根节点不再让开点击',
-      trickReviewCheck(page, tableStatus, trickReview.replace('pointer-events-none absolute inset-0', 'absolute inset-0'), trickArea),
+      trickReviewCheck(page, infoRail, trickReview.replace('pointer-events-none absolute inset-0', 'absolute inset-0'), trickArea),
       /pointer-events-none/
     ],
     [
       '浮层自己拼牌堆',
-      trickReviewCheck(page, tableStatus, trickReview + '\n<CardView card={play.cards[0]} />', trickArea),
+      trickReviewCheck(page, infoRail, trickReview + '\n<CardView card={play.cards[0]} />', trickArea),
       /CardView/
     ],
     [
       '少了 Esc 关闭',
-      trickReviewCheck(page, tableStatus, trickReview.replace(/Escape/g, 'Enter'), trickArea),
+      trickReviewCheck(page, infoRail, trickReview.replace(/Escape/g, 'Enter'), trickArea),
       /Esc/
     ],
     [
       '出牌区退回自己那一份「上一轮」',
-      trickReviewCheck(page, tableStatus, trickReview, trickArea.replace('lastCompletedTrick(deal)', 'deal.trickHistory[deal.trickHistory.length - 1]')),
+      trickReviewCheck(page, infoRail, trickReview, trickArea.replace('lastCompletedTrick(deal)', 'deal.trickHistory[deal.trickHistory.length - 1]')),
       /lastCompletedTrick/
     ]
   ];
@@ -1908,6 +2038,73 @@ test('反证：gap 不关 / 回退改成摊开，都必须被判出来', () => {
 .cluster[data-measured='true'] .card:not(:first-child) { margin-left: calc(var(--step, 0px) - var(--cw, 56px)); }
 .cluster[data-measured='false'] { gap: 0 }
 .cluster[data-measured='false'] .card:not(:first-child) { margin-left: calc(var(--cw, 56px) * -0.4); }`),
+    null,
+    '这条守卫对合规的最小片段也报错（过宽）'
+  );
+});
+
+/* ---------- 出牌点的宽度预算（两翼按张数自适应，两侧同宽） ---------- */
+
+/**
+ * 左右两个出牌点的宽度必须**按张数算出来**（`spotBox`，见 `fan-layout.ts`），不能再写死 38%。
+ *
+ * 为什么写死是错的：宽度是这一簇唯一的可支配资源，而「够不够」只由张数决定 ——
+ * 一张牌要一张牌宽，五张牌要 `牌宽 × 3.4`。写死 38% 时，少牌时盒子过宽（这一簇在盒内居中，
+ * 于是离中线远、桌面留出一大块空），多牌时又不够（≥9 张压过角标可读下限）。
+ *
+ * 两条要求缺一不可：① 宽度来自 `spotBox`；② 两翼取**同一个值**（两家张数的较大者）——
+ * 宽度不等就会把两翼的中点推出中线（几何判据是 `shot-auction.ts` 的 ⑨ / ⑰）。
+ */
+function spotWidthCheck(trickAreaSource: string): string | null {
+  const src = code(trickAreaSource);
+  if (!src.includes('spotBox(')) {
+    return '出牌点的宽度不按张数算（缺 spotBox(…)）：又会退回写死的 38%';
+  }
+  if (!/Math\.max\(\.\.\.counts\)/.test(src)) {
+    return '两翼没有取两家张数的较大者：宽度不等会让两翼的中点偏出中线';
+  }
+  if (/w-\[38%\]/.test(src)) {
+    return '出牌点里又出现了写死的 w-[38%]：宽度必须由张数算出来（内联样式）';
+  }
+  if (!/spot\.insetPct/.test(src) || !/spot\.widthPct/.test(src)) {
+    return '出牌点的位置没有用 spotBox 给的两个数（insetPct / widthPct）：内外两侧会各说各的';
+  }
+  return null;
+}
+
+test('两翼出牌点的宽度按张数自适应（spotBox），且两侧同宽', () => {
+  const problem = spotWidthCheck(trickArea);
+  assert.equal(problem, null, problem ?? '');
+});
+
+test('反证：写死 38% / 不取两家较大者 / 丢掉内缩，都必须被判出来', () => {
+  const src = code(trickArea);
+  assert.match(
+    spotWidthCheck(src.replace('spotBox(wingCount)', '{ widthPct: 38, insetPct: 10 }')) ?? '',
+    /spotBox/,
+    '宽度改回写死没有被判出来'
+  );
+  assert.match(
+    spotWidthCheck(src.replace('Math.max(...counts)', 'counts[0]')) ?? '',
+    /较大者/,
+    '两翼不取同一个宽度（各家算各家的）没有被判出来'
+  );
+  assert.match(
+    spotWidthCheck(`${src}\n<div class="absolute left-[10%] w-[38%] top-0"></div>`) ?? '',
+    /38%/,
+    '写死的 38% 又回来了没有被判出来'
+  );
+  assert.match(
+    spotWidthCheck(src.replace('spot.insetPct', '10')) ?? '',
+    /insetPct|widthPct/,
+    '出牌点的位置不取 spotBox 给的两个数没有被判出来'
+  );
+  assert.equal(
+    spotWidthCheck(
+      `const counts = plays.map((play) => play.cards.length);
+const spot = spotBox(Math.max(...counts));
+const style = \`left:\${spot.insetPct}%;width:\${spot.widthPct}%\`;`
+    ),
     null,
     '这条守卫对合规的最小片段也报错（过宽）'
   );

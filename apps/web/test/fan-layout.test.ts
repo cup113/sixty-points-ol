@@ -14,10 +14,14 @@ import test from 'node:test';
 import {
   BASE_STRIP_RATIO,
   CLUSTER_STRIP_RATIO,
+  SPOT_WIDTH_MAX,
+  SPOT_WIDTH_MIN,
   computeClusterStep,
   computeFanLayout,
   minStrip,
-  rowWidth
+  rowWidth,
+  spotBox,
+  spotWidthPct
 } from '../src/lib/fan-layout.ts';
 
 const EPS = 1e-6;
@@ -142,7 +146,9 @@ test('参数扫描：300..1500px × 1..20 张全部满足不变量', () => {
 
 /**
  * [场景, 出牌点预算宽度, 牌宽] —— 预算宽度按 `TrickArea` 的实际几何算出来：
- * 三点是 `10% / 通栏 / 10%`，左右各占 38%，牌宽窄屏 38 / 桌面 56（`.cluster .card` 的 `--cw`）。
+ * 三点是「两翼 + 一条通栏」，两翼各占**按张数算出来的**百分比（`spotBox`：一颗 30%、
+ * 五张 38%、八张及以上 44%），牌宽窄屏 38 / 桌面 56（`.cluster .card` 的 `--cw`）。
+ * 下面这四行按 38%（= 五张那一档，实测锚点）取，够覆盖出牌堆的宽度契约。
  */
 const CLUSTER_BUDGETS: readonly [string, number, number][] = [
   ['窄屏对方点（毡面 312 × 38%）', 312 * 0.38, 38],
@@ -200,4 +206,64 @@ test('反证：旧的自然间距（牌宽 + 6）在窄屏对方出牌点里必�
   const step = computeClusterStep({ count: 5, cardWidth, budget });
   assert.ok(rowWidth(5, cardWidth, step) <= budget + EPS, '新算法在窄屏对方点放不下 5 张');
   assert.ok(step < oldNatural, '新算法的步距应当比旧的摊开间距更紧');
+});
+
+/* ---------- 出牌点的宽度预算：两翼按张数自适应 ---------- */
+
+/**
+ * 宽度是这一簇唯一的可支配资源，而需要多少只由张数决定（`牌宽 × (0.6 × (n−1) + 1)`，
+ * 对 n 是线性的）。所以这里也按线性给：一颗 30%、五张 38%、八张及以上封顶 44%。
+ *
+ * 为什么五张那一档必须**正好**是 38%：那是实测锚点 —— 场景 11/12 量的就是 5 张顺子，
+ * 在 38% 的盒子里刚好维持紧凑叠排。曲线穿过它，而不是另起一个数。
+ */
+test('出牌点宽度：一颗牌 30%、五张 38%（实测锚点）、八张及以上 44% 封顶', () => {
+  assert.equal(spotWidthPct(1), SPOT_WIDTH_MIN);
+  assert.equal(spotWidthPct(5), 38);
+  assert.equal(spotWidthPct(8), SPOT_WIDTH_MAX);
+  for (const count of [9, 12, 20]) {
+    assert.equal(spotWidthPct(count), SPOT_WIDTH_MAX, `${count} 张应当封顶在 ${SPOT_WIDTH_MAX}%`);
+  }
+  assert.equal(spotWidthPct(0), SPOT_WIDTH_MIN, '0 张（还没出牌）按一颗牌算，不许算出 0 宽的盒子');
+  for (let count = 1; count <= 12; count += 1) {
+    assert.ok(
+      spotWidthPct(count + 1) >= spotWidthPct(count),
+      `${count} → ${count + 1} 张之间宽度回退了：牌更多反而盒子更窄`
+    );
+    assert.ok(spotWidthPct(count) <= SPOT_WIDTH_MAX && spotWidthPct(count) >= SPOT_WIDTH_MIN);
+  }
+});
+
+test('出牌点几何：内侧边缘恒在 48% / 52%，加上中间空带正好一条内容槽', () => {
+  for (let count = 1; count <= 12; count += 1) {
+    const box = spotBox(count);
+    assert.ok(
+      Math.abs(box.insetPct + box.widthPct - 48) < EPS,
+      `${count} 张：内侧边缘必须钉在 48%（实测 ${box.insetPct + box.widthPct}）——宽了就会顶到中线`
+    );
+    assert.ok(
+      Math.abs(2 * box.insetPct + 2 * box.widthPct + 4 - 100) < EPS,
+      `${count} 张：2 × 外缩 + 2 × 宽 + 中间空带必须正好是一条内容槽（互不相交的结构性保证）`
+    );
+    assert.ok(box.insetPct >= 3, `${count} 张：外侧只剩 ${box.insetPct}%，离毡面内缘太近`);
+  }
+});
+
+test('反证：写死 38% 的旧几何量不到「少牌更靠中间」这件事', () => {
+  // 旧版：一颗牌与八张牌拿到**一样**的盒子宽度，所以「按内容自适应」根本不存在。
+  const fixed = 38;
+  assert.ok(
+    spotWidthPct(8) - spotWidthPct(1) >= 10,
+    `8 张与 1 张的盒子宽度只差 ${spotWidthPct(8) - spotWidthPct(1)}%：等于又写死了（旧版是 ${fixed}%）`
+  );
+  // 一颗牌时盒子中心（在内容槽里的位置）应当比五张时更靠中间：33% vs 29%，两边都靠中线
+  const center = (count: number): number => {
+    const box = spotBox(count);
+    return box.insetPct + box.widthPct / 2;
+  };
+  assert.ok(center(1) > center(5), `一颗牌时盒子中心 ${center(1)}% 应当比五张时 ${center(5)}% 更靠中线`);
+  assert.ok(
+    Math.abs(38 - spotWidthPct(5)) < EPS,
+    '五张那一档不再是 38%：场景 11/12 量过的锚点漂了，需要重新实测'
+  );
 });

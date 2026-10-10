@@ -35,6 +35,7 @@ import {
   type Card,
   type TrumpModel
 } from '@sixty/engine';
+import { spotWidthPct } from '../src/lib/fan-layout.ts';
 
 const here = dirname(fileURLToPath(import.meta.url)); // apps/web/scripts
 const webRoot = resolve(here, '..'); // apps/web
@@ -344,10 +345,12 @@ const MOBILE_NARROW = { width: 360, height: 780 };
 /**
  * 最窄机型（320×640，老 iPhone SE 那档）：**不是可有可无的第三档**。
  *
- * 信息须整幅横贯、三格分布（左回看入口 + 中定约·级牌 + 右庄已抓），而它的三块都是有下限的
- * 内容 —— 实测窄屏 264px（还没算级牌）、360px 内宽 312px 才刚放得下。320px 上内宽只有 272px，
- * 于是「三格互不相叠、且中间那格在中线上」这条判据**只在这里才可能红**：
- * 360 与 390 上它会安静地全绿。级牌并入定约那格之后会再宽约 16px，所以这一屏是必需的。
+ * 三件事只有在这一屏上才可能红，360 与 390 上都会安静地全绿：
+ * ① 信息须是**定宽**一块（`--rail-w` = 256px），而毡面内宽只有 272px —— 边距只剩 8px，
+ *    「四列不折行、不越出毡面」这条判据在这里最紧（视口下限约 304px，320 是项目实测的最低机型）；
+ * ② 两翼出牌点的宽度是按内容槽的百分比算的，槽越窄、两个盒子越容易顶到一起
+ *    （撤掉动作带之前，两个对手的出牌点与「我」那一点在这里相交过 207px²）；
+ * ③ 5 张顺子在 38% 的盒子里要收到约 16px 的步距 —— 全项目最挤的一档。
  */
 const MOBILE_MIN = { width: 320, height: 640 };
 
@@ -415,7 +418,7 @@ const SHOTS: readonly Shot[] = [
   },
   {
     file: '08-contract-40nt-status',
-    label: '成交 40NT 后：状态条与顶部大字都写 NT（无主不再写成「无主」）',
+    label: '成交 40NT 后：信息须与顶部大字都写 NT（无主不再写成「无主」）',
     ...sceneFor(1, [
       { points: 40, strain: 'C' },
       { points: 40, strain: 'NT' },
@@ -452,7 +455,7 @@ const SHOTS: readonly Shot[] = [
   },
   {
     file: '12-desktop-run-five',
-    label: '桌面宽度下同一局面：两个对手出牌点的中点居中、「我」那条底栏限宽居中、状态条不折行',
+    label: '桌面宽度下同一局面：两个对手出牌点的中点居中、「我」那条底栏限宽居中、信息须不折行',
     ...sceneFor(0, [{ points: 40, strain: 'C' }, 'pass', 'pass']),
     trick: 'run-clusters',
     runLength: 5,
@@ -461,9 +464,19 @@ const SHOTS: readonly Shot[] = [
   },
   {
     file: '13-narrow-rail-320',
-    label: '最窄机型 320px、收过墩：信息须三格（上一轮 / 40♣ · 2 / 庄已抓 N 分）互不相叠、都落在毡面内',
+    label: '最窄机型 320px、收过墩：信息须四列（上一轮 / 40♣ / 2 / N 分）互不相叠、都与底栏同宽且落在毡面内',
     ...sceneFor(0, [{ points: 40, strain: 'C' }, 'pass', 'pass']),
     trick: 'three-clusters',
+    mode: 'viewport',
+    size: MOBILE_MIN
+  },
+  {
+    file: '14-narrow-run-five-320',
+    label:
+      '最窄机型 320px、三家各出 5 张顺子：两翼预算按 5 张取 38%、严格互不相撞、牌不出预算（多张出牌堆在最低机型上的回归）',
+    ...sceneFor(0, [{ points: 40, strain: 'C' }, 'pass', 'pass']),
+    trick: 'run-clusters',
+    runLength: 5,
     mode: 'viewport',
     size: MOBILE_MIN
   }
@@ -477,11 +490,46 @@ const SHOTS: readonly Shot[] = [
 const RUN_ATTEMPTS = 120;
 
 /**
- * 「我」那条底栏的宽度上限（CSS 是 `max-w-3xs` = `--container-3xs` = 16rem = 256px）。
- * 桌面端毡面 1080px，不封顶就横贯整幅；256px 下名字列约 124px ≈ 8 个汉字，
- * 更长的名字按设计走 `truncate`（见 `+page.svelte` 那一行的注释）。
+ * 毡面那条宽度尺度（`app.css` 的 `--rail-w`）的两个值：基准 16rem = 256px、
+ * `sm`（640px）以上 18rem = 288px。**两块**（顶部信息须与底部「我」底栏）都取它，
+ * 所以这一条判据从「底栏不超过 256px」升级成「**两块同宽**」（见 ⑯）——
+ * 早先信息须由内容撑到 229–238px、底栏 256px，一上一下差 18–27px，上下框对不齐，
+ * 而那正是「统一尺度」这条决定要治的东西，只量上限是量不到它的。
+ *
+ * 为什么有两个值：定宽必须容得下最宽的内容（`100♣ / 100 分`），而那是按数字字号算的 ——
+ * 值那一档在 `sm` 上从 20px 变成 24px。实测桌面场景里最紧的一格（「回溯」按钮）
+ * 在 256px 下只剩 **0.0px** 余量，所以桌面档加宽到 288px；基准档的账见 `app.css`。
  */
-const SEAT_BAR_MAX = 256;
+const RAIL_W_BASE = 256;
+const RAIL_W_SM = 288;
+
+/** 这一屏该用哪一档尺度（与 `app.css` 的媒体查询同一个断点） */
+function railScaleOf(viewportWidth: number): number {
+  return viewportWidth >= 640 ? RAIL_W_SM : RAIL_W_BASE;
+}
+
+/**
+ * 闹钟圆里的两档字号，**从 `ActionClock.svelte` 的源码里读出来**，不在这边另抄一份。
+ *
+ * 为什么要读源码而不是写死：这一条判据要量的是「三位数在那个小一档的字号下放不放得下
+ * 22px 的圆」，而那个字号是组件里的一个字面量。脚本里再抄一个 8px 的话，改组件时这里
+ * 会**安静地量着旧字号**（判据不红、也没意义）。读源码之后，改字号会立刻反映到测量里；
+ * 万一那行代码的形状变了（正则匹配不上），这里**报错退出**而不是退回一个默认值。
+ *
+ * 比对的是 `ActionClock` 里那行三元：
+ *   `face.tone === 'long' ? 'text-[9px]' : 'text-[10px]'`
+ */
+const CLOCK_TIERS: { readonly long: number; readonly plain: number } = (() => {
+  const source = readFileSync(resolve(webRoot, 'src/lib/components/ActionClock.svelte'), 'utf8');
+  const match = /face\.tone === 'long' \? 'text-\[([\d.]+)px\]' : 'text-\[([\d.]+)px\]'/.exec(source);
+  if (match === null) {
+    throw new Error(
+      'ActionClock.svelte 里读不出闹钟的两档字号（`size` 那行的形状变了）：' +
+        '⑮ 那条判据量的就是这两个字号，读不到就不能瞎猜一个默认值'
+    );
+  }
+  return { long: Number(match[1]), plain: Number(match[2]) };
+})();
 
 async function joinTarget(port: number): Promise<{ id: string; wsUrl: string }> {
   const response = await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' });
@@ -533,6 +581,26 @@ interface MeasuredSpot {
   readonly cards: readonly Rect[];
 }
 
+/**
+ * 信息须里的一格（表头 `th` 或值格 `td`）：
+ *
+ * - `needed`：把这一格的**内容原样**（`innerHTML`，带着字号 / 边距 / 按钮）塞进一个
+ *   `white-space: nowrap` 的探针里量出来的宽度 —— 也就是「不换行需要多宽」。
+ *   为什么不数文本行数：一格里混着 24px 的数字与 11px 的「分」，同一个行盒里两个
+ *   元素的盒子顶边本来就不一样，「按顶边数行」会把正常的一行判成两行。
+ * - `available`：这一格真正可用的内容宽度（格子宽 − 左右内边距）。
+ * - `padTop`：上内边距（表头那一行的留白，真机反馈过「第一行太挤」）。
+ *
+ * `needed > available` ⇒ 内容放不下：要么折行（「分」掉下来），要么被 nowrap 顶出去。
+ */
+interface RailCellBox {
+  readonly name: string;
+  readonly rect: Rect;
+  readonly needed: number;
+  readonly available: number;
+  readonly padTop: number;
+}
+
 interface Measurement {
   readonly panel: Rect | null;
   readonly rows: readonly MeasuredRow[];
@@ -558,19 +626,48 @@ interface Measurement {
   /** 动作托盘：只在「这一手归你动」时存在（现在在操作条那一行里，不再是一条独立的带） */
   readonly tray: Rect | null;
   /**
-   * 阶段状态条那一行（`TableStatus` 根节点）与它的直接子元素。
-   * 折行判据看子元素的**竖直中线**而不是高度阈值：一行里的 chip 高矮本来就不同
-   * （第 N 轮是小 chip、定约/庄已抓是大字），只有「折到第二行」才会让中线错开。
+   * 信息须那块**类表格**（`InfoRail` 根节点，`data-info-rail`）与它的直接子元素。
+   * 折行判据看子元素的**竖直中线**而不是高度阈值：一行里的格子高矮本来就不同
+   * （回溯那格是按钮、其余三格是大字），只有「折到第二行」才会让中线错开。
    */
-  readonly statusRow: Rect | null;
+  readonly railBlock: Rect | null;
   /**
-   * 信息须那块**类表格**的四个值格（`data-status-cell="review|contract|level|points"`）。
+   * 信息须那块**类表格**的四个值格（`data-rail-cell="review|contract|level|points"`）。
    * 它们必须都落在毡面内、互不相叠，而**整块必须居中在毡面中线上** ——
    * 四个值格的宽度不等（按钮 / `40♣` / `2` / `0 分`），若靠左或靠右排，整块就会偏。
    */
-  readonly statusCells: readonly { readonly name: string; readonly rect: Rect }[];
-  /** 「我」那条底栏（`SeatCard` 的 `bar` 形态）：限宽与居中都在它身上量 */
+  /**
+   * 信息须那张表的**四个值格**（`data-rail-cell="review|contract|level|points"`）与
+   * **四个表头格**（`th`）。它们必须都落在毡面内、互不相叠，而**整块必须居中在毡面中线上** ——
+   * 四个值格的宽度不等（按钮 / `40♣` / `2` / `0 分`），若靠左或靠右排，整块就会偏。
+   *
+   * 每一格还带两个宽度读数（`needed` / `available`）：真机上「庄已抓」那格的「分」
+   * 曾掉到第二行（窄屏把这条挤到 229px 时列宽不够），而「四格互不相叠」是量不到折行的 ——
+   * 折行只让那一行变高，格子之间照样不重叠（见 ⑭b）。
+   */
+  readonly railCells: readonly RailCellBox[];
+  readonly railHeads: readonly RailCellBox[];
+  /** 「我」那条底栏（`SeatCard` 的 `bar` 形态）：限宽、居中、与信息须同宽都在它身上量 */
   readonly seatBar: Rect | null;
+  /**
+   * 闹钟（`data-clock-face`）那枚圆里的读数：⑮ 用它量「三位数放不放得下」。
+   *
+   * `threeDigitsPx` 是**当场量出来的**：拿真实字体的字体族 / 字重 / 等宽数字，
+   * 在圆里临时插一个 `888` 的探针（`position:absolute; left:-9999px`，不影响版面）。
+   * `doubleSizePx` 是同一串数字在两倍字号下的宽度 —— 尺子是否真的按字号在量，靠它证。
+   */
+  readonly clock: {
+    /** 当下的档位（`data-clock-tone`：plain | long | stale） */
+    readonly tone: string;
+    /** 圆里那颗字**实际**算出来的字号 */
+    readonly liveFontPx: number;
+    /** 组件源码里的两档字号（`CLOCK_TIERS`） */
+    readonly tierPx: { readonly long: number; readonly plain: number };
+    readonly threeDigitsPx: number;
+    readonly doubleSizePx: number;
+    /** 圆的宽度（22px）：可用的就是它减去左右各 1px */
+    readonly circleWidth: number;
+  } | null;
 }
 
 const MEASURE = `(() => {
@@ -593,6 +690,23 @@ const MEASURE = `(() => {
     history.total = trs.length;
     history.rowHeight = trs.length === 0 ? 0 : trs[0].getBoundingClientRect().height;
   }
+  const cellInfo = (el) => {
+    const box = rect(el);
+    const cs = getComputedStyle(el);
+    const probe = document.createElement('span');
+    probe.style.cssText = 'position:absolute;left:-9999px;top:0;visibility:hidden;white-space:nowrap;';
+    probe.innerHTML = el.innerHTML;
+    el.appendChild(probe);
+    const needed = probe.getBoundingClientRect().width;
+    probe.remove();
+    return {
+      name: el.getAttribute('data-rail-cell') ?? (el.textContent ?? '').trim(),
+      rect: box,
+      needed,
+      available: box.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+      padTop: parseFloat(cs.paddingTop)
+    };
+  };
   return {
     panel: one('[data-bid-panel]'),
     rows,
@@ -610,12 +724,38 @@ const MEASURE = `(() => {
     })),
     actionRow: one('[data-action-row]'),
     tray: one('[data-action-tray]'),
-    statusRow: one('[data-status-row]'),
-    statusCells: [...document.querySelectorAll('[data-status-cell]')].map((el) => ({
-      name: el.getAttribute('data-status-cell') ?? '',
-      rect: rect(el)
-    })),
-    seatBar: one('[data-seat-bar]')
+    railBlock: one('[data-info-rail]'),
+    railCells: [...document.querySelectorAll('[data-rail-cell]')].map(cellInfo),
+    railHeads: [...document.querySelectorAll('[data-info-rail] th')].map(cellInfo),
+    seatBar: one('[data-seat-bar]'),
+    clock: (() => {
+      const face = document.querySelector('[data-clock-face="true"]');
+      if (face === null) return null;
+      const circle = face.parentElement;
+      const box = rect(circle);
+      const cs = getComputedStyle(face);
+      const holder = face.closest('[data-clock-tone]');
+      const tone = holder === null ? 'plain' : (holder.getAttribute('data-clock-tone') ?? 'plain');
+      const probe = (px, text) => {
+        const el = document.createElement('span');
+        el.style.cssText = 'position:absolute;left:-9999px;top:0;visibility:hidden;white-space:nowrap;'
+          + 'font-family:' + cs.fontFamily + ';font-weight:' + cs.fontWeight
+          + ';font-variant-numeric:tabular-nums;font-size:' + px + 'px;';
+        el.textContent = text;
+        circle.appendChild(el);
+        const width = el.getBoundingClientRect().width;
+        el.remove();
+        return width;
+      };
+      return {
+        tone,
+        liveFontPx: parseFloat(cs.fontSize),
+        tierPx: { long: ${CLOCK_TIERS.long}, plain: ${CLOCK_TIERS.plain} },
+        threeDigitsPx: probe(${CLOCK_TIERS.long}, '888'),
+        doubleSizePx: probe(${CLOCK_TIERS.long} * 2, '888'),
+        circleWidth: box.width
+      };
+    })()
   };
 })()`;
 
@@ -803,7 +943,7 @@ function assertLayout(
 
   // ⑨ 两个对手出牌点的**中点必须落在内容槽中线上**（截图 #2「两个对手牌中央的中点偏左」）。
   //    旧布局：左点 `left-0 w-[38%]`（中心 19%）+ 右点 `right-[20%] w-[38%]`（中心 61%）
-  //    ⇒ 中点 40%，整组偏左 10%（窄屏实测约 31px）—— 而「我」那一点与状态条都在中线上，
+  //    ⇒ 中点 40%，整组偏左 10%（窄屏实测约 31px）—— 而「我」那一点与信息须都在中线上，
   //    于是三家看起来是歪的。判据按「左右两翼 + 一条通栏」的分工认三个点：
   //    通栏那一条是我方点（`inset-x-0`），两翼各占 38%。
   if (slot !== undefined && m.spots.length === 3) {
@@ -836,6 +976,29 @@ function assertLayout(
             '只挪一边就会把中点推偏'
         );
       }
+
+      // ⑰ 两翼的宽度预算**按张数算**（`spotWidthPct`），而且**两侧同宽**。
+      //    宽度是这一簇唯一的可支配资源：写死 38% 时，少牌时盒子过宽（这一簇离中线远、
+      //    桌面空出一大块），多牌时又不够（≥9 张压过角标可读下限）。这一条把「实际量到的宽度」
+      //    与「按这一侧张数算出来的宽度」钉在一起 —— 只断言「互不相交」是量不到自适应有没有生效的。
+      for (const wing of wings) {
+        const expected = (slot.width * spotWidthPct(wing.cards.length)) / 100;
+        if (Math.abs(wing.rect.width - expected) > 1) {
+          fail(
+            `座位 ${wing.seat} 的出牌点宽 ${wing.rect.width.toFixed(1)}px，而按 ${wing.cards.length} 张算` +
+              `应当是 ${expected.toFixed(1)}px（内容槽 ${slot.width.toFixed(1)}px × ` +
+              `${spotWidthPct(wing.cards.length)}%）：两翼的宽度必须由张数算出来`
+          );
+        }
+      }
+      const sortedWings = [...wings].sort((a, b) => a.rect.x - b.rect.x);
+      const centerGap = sortedWings[1]!.rect.x - sortedWings[0]!.rect.right;
+      if (centerGap < slot.width * 0.03) {
+        fail(
+          `两个对手出牌点之间只剩 ${centerGap.toFixed(1)}px 空带（应当 ≥ 内容槽的 3% = ` +
+            `${(slot.width * 0.03).toFixed(1)}px）：宽度越界就会把两簇挤到一起`
+        );
+      }
     }
   }
 
@@ -860,19 +1023,20 @@ function assertLayout(
     }
   }
 
-  // ⑫ 「我」那条底栏**限宽并居中**（`max-w-3xs` = 16rem = 256px）。
+  // ⑫ 「我」那条底栏**限宽并居中**（`max-w-[var(--rail-w)]`：基准 256px、桌面 288px）。
   //    窄毡面上它本来就整宽（判据自动成立），所以桌面场景另加一条「毡面必须比上限宽」——
   //    少了它，这条判据在桌面宽度下会安静地空转。
-  if (viewportWidth >= 1000 && (m.felt === null || m.felt.width <= SEAT_BAR_MAX + 40)) {
+  const railScale = railScaleOf(viewportWidth);
+  if (viewportWidth >= 1000 && (m.felt === null || m.felt.width <= railScale + 40)) {
     fail(
       `这一屏是桌面宽度（${viewportWidth}px）却没验到「我」栏限宽：毡面宽 ` +
-        `${m.felt?.width.toFixed(1) ?? '—'}px 未超过上限 ${SEAT_BAR_MAX + 40}px，⑫ 这条判据会空转`
+        `${m.felt?.width.toFixed(1) ?? '—'}px 未超过上限 ${railScale + 40}px，⑫ 这条判据会空转`
     );
   }
   if (m.seatBar !== null && m.felt !== null) {
-    if (m.seatBar.width > SEAT_BAR_MAX + 1) {
+    if (m.seatBar.width > railScale + 1) {
       fail(
-        `「我」那条底栏宽 ${m.seatBar.width.toFixed(1)}px，超过上限 ${SEAT_BAR_MAX}px：` +
+        `「我」那条底栏宽 ${m.seatBar.width.toFixed(1)}px，超过这一屏的尺度 ${railScale}px：` +
           '会横贯整幅毡面（名字长一点更明显）'
       );
     }
@@ -888,8 +1052,8 @@ function assertLayout(
   // ⑬ 信息须那块表**只许两行**（表头 + 值）：值格里的数字一旦被挤到换行，这一条就会变三行、
    //    把毡面顶部撑高。判据是四个值格的**竖直中线必须齐平** ——
   //    标签在表头那行、值在下面那行，所以齐平就意味着四个值格真的在同一行里。
-  if (m.statusCells.length > 1) {
-    const centersY = m.statusCells.map((cell) => cell.rect.y + cell.rect.height / 2);
+  if (m.railCells.length > 1) {
+    const centersY = m.railCells.map((cell) => cell.rect.y + cell.rect.height / 2);
     const spread = Math.max(...centersY) - Math.min(...centersY);
     if (spread > 1) {
       fail(
@@ -905,16 +1069,16 @@ function assertLayout(
   //      「庄已抓」挤成竖排两行）；
   //    - 「整块居中」＝ 四格的宽度天然不等（按钮 / `40♣` / `2` / `0 分`），靠左排就会偏 ——
   //      而它上面写的是这一副最该稳的两个数。
-  if (m.felt !== null && m.statusCells.length === 4 && m.statusRow !== null) {
+  if (m.felt !== null && m.railCells.length === 4 && m.railBlock !== null) {
     const feltCenter = m.felt.x + m.felt.width / 2;
-    const rowCenter = m.statusRow.x + m.statusRow.width / 2;
+    const rowCenter = m.railBlock.x + m.railBlock.width / 2;
     if (Math.abs(rowCenter - feltCenter) > 1) {
       fail(
         `信息须那块表没居中（中心 ${rowCenter.toFixed(1)} vs 毡面中心 ${feltCenter.toFixed(1)}）：` +
-          '它要 `mx-auto` + 内容宽度，靠左排会在宽屏上歪到一边'
+          '它要 `mx-auto` + 与「我」那条底栏同一个尺度（`--rail-w`），靠左排会在宽屏上歪到一边'
       );
     }
-    for (const cell of m.statusCells) {
+    for (const cell of m.railCells) {
       if (!contains(m.felt, cell.rect)) {
         fail(
           `信息须的「${cell.name}」格越出了毡面（${boxOf(cell.rect)} 不在 ${boxOf(m.felt)} 里）：` +
@@ -922,10 +1086,10 @@ function assertLayout(
         );
       }
     }
-    for (let i = 0; i < m.statusCells.length; i += 1) {
-      for (let j = i + 1; j < m.statusCells.length; j += 1) {
-        const a = m.statusCells[i]!;
-        const b = m.statusCells[j]!;
+    for (let i = 0; i < m.railCells.length; i += 1) {
+      for (let j = i + 1; j < m.railCells.length; j += 1) {
+        const a = m.railCells[i]!;
+        const b = m.railCells[j]!;
         const area = overlapArea(a.rect, b.rect);
         if (area > 0) {
           fail(
@@ -935,26 +1099,124 @@ function assertLayout(
         }
       }
     }
-    // 行数 = 这一块的高度 / 一格的高度：两行（表头 + 值）是形状，三行说明有格被挤换了行。
-    const cellHeight = Math.max(...m.statusCells.map((cell) => cell.rect.height));
-    const rows = cellHeight > 0 ? Math.round(m.statusRow.height / cellHeight) : 0;
-    if (rows > 2) {
-      fail(
-        `信息须那块表长到了 ${rows} 行（表头 + 值应为 2 行，实测高 ${m.statusRow.height.toFixed(1)}px、` +
-          `一格高 ${cellHeight.toFixed(1)}px）：窄屏上又折行了`
-      );
+    // 两行的形状：四个值格必须**整体落在表头那一行下面**（表头在上、值在下）。
+    // 用「上下关系」而不是「块高 / 格高」估行数：后者是个比值，内边距一动就会漂
+    // （表头加了上边距之后它离 2 更近，再动几次就会假红）。
+    if (m.railHeads.length > 0) {
+      const headBottom = Math.max(...m.railHeads.map((head) => head.rect.bottom));
+      const valueTop = Math.min(...m.railCells.map((cell) => cell.rect.y));
+      if (valueTop < headBottom - 0.5) {
+        fail(
+          `信息须的表头与值没有分成两行（表头底 ${headBottom.toFixed(1)}px、值顶 ${valueTop.toFixed(1)}px）：` +
+            '表头在上、值在下一行就是这一块的形状'
+        );
+      }
     }
     // 它必须真的**在信息须那一行里**（不是在毡面上自由漂浮的一层）
-    if (rail !== undefined && !contains(rail, m.statusRow)) {
+    if (rail !== undefined && !contains(rail, m.railBlock)) {
       fail(
-        `信息须那块表不在 [data-felt-row="rail"] 那一行里（表 ${boxOf(m.statusRow)} 不在 ` +
+        `信息须那块表不在 [data-felt-row="rail"] 那一行里（表 ${boxOf(m.railBlock)} 不在 ` +
           `${boxOf(rail)} 里）：它必须由毡面的行给出位置，不能自己算偏移`
       );
     }
   }
 
+  // ⑭b 信息须里每一格的内容都必须**放得下一行**（真机截图：「庄已抓」那格的「分」掉到了
+  //     第二行，`25` 下面孤零零一个「分」）。
+  //     判据是「不换行时需要多宽」（把内容原样塞进一个 nowrap 探针量）vs「这一格真有多宽」——
+  //     不写死任何数字，所以字号、文案、机型怎么变都能量。
+  //     为什么不能只靠「四格互不相叠」：折行只让那一行变高，格子之间照样不重叠（⑭ 全绿），
+  //     而它已经发生过了；也不能只靠「值格中线齐平」（⑬）：表格一行里所有格子同高，
+  //     折行的那一格高了，整行的中线照样齐平。
+  for (const cell of [...m.railHeads, ...m.railCells]) {
+    if (cell.needed > cell.available + 0.5) {
+      fail(
+        `信息须的「${cell.name}」格放不下：不换行需要 ${cell.needed.toFixed(1)}px，` +
+          `这一格只有 ${cell.available.toFixed(1)}px（格子宽 ${cell.rect.width.toFixed(1)}px）—— ` +
+          '内容会折行（「庄已抓」那格的「分」就是这样掉到第二行的）或被顶出格子'
+      );
+    }
+  }
+
+  // ⑭c 表头那行与整块的上边线之间要有留白（真机反馈「第一行太挤」：早先上下各只有 2px，
+  //     表头贴着圆角边线）。量的是**出货页面上的上内边距**，不是源码里的类名。
+  for (const head of m.railHeads) {
+    if (head.padTop < 4) {
+      fail(
+        `信息须表头「${head.name}」的上边距只有 ${head.padTop}px（至少 4px）：第一行贴着整块的上边线`
+      );
+    }
+  }
+
+  // ⑮ 闹钟圆里的三位数：**量**它在「小一档」那颗字号下要占多宽（第 6 条决定：先量再定）。
+  //    三件事各对应一次真实的坏法：
+  //    - 圆里那颗字的字号与组件源码里那一档**对不上** ⇒ 下面那条宽度判据量的是另一个字号；
+  //    - 探针不随字号变宽 ⇒ 尺子坏了（那种情况下「放得下」永远成立）；
+  //    - 三位数**真的**放不下 ⇒ 数字溢出那个圆（所以左右各留 1px 余量）。
+  //    为什么必须有它：圆是 22px、三位数是 9px 那一档，而**这一档从来没有被渲染出来量过** ——
+  //    场景跑起来时「距上一步」都是几秒，走不到 100 秒，也就永远走不进这一档。
+  //    第一次量出来的结论（省掉了一次凭感觉的调整）：8px 下三位数只占 14.8px、圆有 22px，
+  //    于是把小档提到 9px（约 16.7px）—— 既不加圆径、也不必砍掉这一档。
+  if (m.clock === null) {
+    fail('这一屏有牌局却量不到闹钟的读数（找不到 [data-clock-face]）：计时图标不见了');
+  } else {
+    const clock = m.clock;
+    const expected = clock.tone === 'long' ? clock.tierPx.long : clock.tierPx.plain;
+    if (Math.abs(clock.liveFontPx - expected) > 0.5) {
+      fail(
+        `闹钟圆里那颗字的字号是 ${clock.liveFontPx}px，与组件源码里「${clock.tone}」那一档` +
+          `（${expected}px）对不上：⑮ 的宽度判据就量错了字号`
+      );
+    }
+    if (clock.doubleSizePx <= clock.threeDigitsPx) {
+      fail(
+        `闹钟的探针不随字号变宽（${clock.tierPx.long}px ⇒ ${clock.threeDigitsPx.toFixed(1)}px、` +
+          `${clock.tierPx.long * 2}px ⇒ ${clock.doubleSizePx.toFixed(1)}px）：这把尺子坏了，` +
+          '「放得下」会永远成立'
+      );
+    }
+    const usable = clock.circleWidth - 2;
+    if (clock.threeDigitsPx > usable) {
+      fail(
+        `闹钟里三位数（888）在 ${clock.tierPx.long}px 下要 ${clock.threeDigitsPx.toFixed(1)}px，` +
+          `而圆只有 ${clock.circleWidth.toFixed(1)}px（可用 ${usable.toFixed(1)}px）：` +
+          '要么把圆放大，要么三位数换一档更小的字'
+      );
+    }
+  }
+
+  // ⑯ 信息须与「我」那条底栏**同宽**（毡面的一个尺度 `--rail-w`，见 app.css / InfoRail）。
+  //    早先信息须由内容撑到 229–238px、底栏固定 256px：一上一下差 18–27px，读起来是两个尺度
+  //    —— 而 ⑫ 只管底栏的上限，量不到这条「统一尺度」。
+  if (m.railBlock !== null) {
+    if (m.seatBar === null) {
+      fail('信息须在，但「我」那条底栏不在：⑯ 这条同宽判据会空转（这一屏应当有我在座）');
+    } else {
+      const delta = Math.abs(m.railBlock.width - m.seatBar.width);
+      if (delta > 1) {
+        fail(
+          `信息须宽 ${m.railBlock.width.toFixed(1)}px、「我」那条底栏宽 ${m.seatBar.width.toFixed(1)}px，` +
+            `差 ${delta.toFixed(1)}px：两块取的是同一个尺度（--rail-w），宽度必须相等`
+        );
+      }
+      // 同宽还不够：两块**一起**漂窄/漂宽也满足「相等」，所以再与这一屏该有的尺度比一次。
+      if (Math.abs(m.railBlock.width - railScale) > 1) {
+        fail(
+          `信息须宽 ${m.railBlock.width.toFixed(1)}px，而这一屏的尺度（--rail-w）是 ${railScale}px：` +
+            '两块同宽但一起偏了（媒体查询或变量没生效）'
+        );
+      }
+    }
+  }
+
   const rowHeight = m.history.rowHeight > 0 ? m.history.rowHeight : 24;
   const capacity = m.history.box === null ? 0 : Math.floor(m.history.box.height / rowHeight);
+  /** 信息须里最紧的一格（需要宽度 − 可用宽度最大者）：负得越多越宽松 */
+  const tightestRailCell = [...m.railHeads, ...m.railCells].reduce<RailCellBox | null>(
+    (worst, cell) =>
+      worst === null || cell.needed - cell.available > worst.needed - worst.available ? cell : worst,
+    null
+  );
   const wings = slot === undefined ? [] : m.spots.filter((spot) => spot.rect.width <= slot.width * 0.5);
   const wingMid =
     wings.length === 2
@@ -968,8 +1230,16 @@ function assertLayout(
     `档位对齐最大差 ${worstDelta.toFixed(2)}px；历史容量 ${capacity} 行（已录 ${m.history.total} 条）；` +
     `内容槽 ${slot?.height.toFixed(0) ?? '—'}px；出牌点张数 ${m.spots.map((spot) => `${spot.seat}:${spot.cards.length}`).join(' ') || '（本场景无出牌）'}` +
     `；中点偏差 ${midDelta === null ? '—' : `${midDelta.toFixed(1)}px`}` +
-    `；毡面 ${m.felt?.width.toFixed(0) ?? '—'}px / 「我」栏 ${m.seatBar?.width.toFixed(0) ?? '—'}px` +
-    `；状态条 ${m.statusRow?.width.toFixed(0) ?? '—'}×${m.statusRow?.height.toFixed(0) ?? '—'}px（${m.statusCells.length} 格）`;
+    `；毡面 ${m.felt?.width.toFixed(0) ?? '—'}px / 尺度 ${railScale}px / 「我」栏 ${m.seatBar?.width.toFixed(0) ?? '—'}px` +
+    `；信息须 ${m.railBlock?.width.toFixed(0) ?? '—'}×${m.railBlock?.height.toFixed(0) ?? '—'}px（${m.railCells.length} 格` +
+    (tightestRailCell === null
+      ? '）'
+      : `，最紧一格「${tightestRailCell.name}」需要 ${tightestRailCell.needed.toFixed(1)} / 可用 ` +
+        `${tightestRailCell.available.toFixed(1)}px，表头上边距 ${m.railHeads[0]?.padTop.toFixed(1) ?? '—'}px）`) +
+    (m.clock === null
+      ? '；闹钟 —'
+      : `；闹钟三位数 ${m.clock.threeDigitsPx.toFixed(1)}px / 圆 ${m.clock.circleWidth.toFixed(0)}px` +
+        ` @${m.clock.tierPx.long}px（${m.clock.tone}，实际字号 ${m.clock.liveFontPx}px）`);
   return { summary, problems };
 }
 

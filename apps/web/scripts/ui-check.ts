@@ -306,14 +306,14 @@ function reviewButton(
 }
 
 /**
- * 信息须里「定约」那一格的值（`data-status-cell="contract"`）的 HTML 切片：
+ * 信息须里「定约」那一格的值（`data-rail-cell="contract"`）的 HTML 切片：
  * 只为断言那个数字的字号够大（值必须是大号，不能缩回小字）。
  *
  * 早先这里抓的是 `ring-gold/25`（定约是一枚独立的金色描边药丸）—— 那条须改成**类表格**之后，
  * 定约是「定约」表头下面的一个值格，描边移到了整块上（ADR-0020 修订）。
  */
 function contractMarkup(html: string): string {
-  return statusCellMarkup(html, 'contract');
+  return railCellMarkup(html, 'contract');
 }
 
 /** 数表头格：`<thead` 也以 `<th` 开头，所以正则必须带定界符（空格或 `>`） */
@@ -334,17 +334,17 @@ function actionTrayMarkup(html: string): string | null {
 }
 
 /**
- * 信息须那张表里某一格的值（`data-status-cell="<name>"`）的 HTML 切片。
+ * 信息须那张表里某一格的值（`data-rail-cell="<name>"`）的 HTML 切片。
  *
  * 抓不到直接抛：定约 / 级牌 / 庄已抓这三样必须一直在牌面上，没了就是缺陷（不是可跳过的情况）。
  * 早先这里抓的是 `ring-gold/25`（定约是一枚独立的描边药丸）—— 那条须改成类表格之后，
  * 定约是「定约」表头下面的一个值格，描边移到了整块上。
  */
-function statusCellMarkup(html: string, name: string): string {
-  const start = html.indexOf(`data-status-cell="${name}"`);
+function railCellMarkup(html: string, name: string): string {
+  const start = html.indexOf(`data-rail-cell="${name}"`);
   assert(
     start >= 0,
-    `页面里找不到信息须的「${name}」值格（data-status-cell="${name}"）：定约 / 级牌 / 庄已抓必须一直在牌面上`
+    `页面里找不到信息须的「${name}」值格（data-rail-cell="${name}"）：定约 / 级牌 / 庄已抓必须一直在牌面上`
   );
   return html.slice(start, start + 400);
 }
@@ -691,22 +691,62 @@ async function main(): Promise<void> {
     assert(!bury.includes(gone), `埋底页面仍在写「${gone}」：这句已删`);
   }
   // 6d) 定约 / 级牌 / 庄已抓三个值都是**大号金数字**（小号 chip 被判为不显眼）
-  const statusBlock = contractMarkup(bury);
+  const contractCell = contractMarkup(bury);
   assert(
-    statusBlock.includes('text-2xl'),
-    `定约数字又缩回小号了（缺 text-2xl）：${statusBlock.slice(0, 120)}`
+    contractCell.includes('text-2xl'),
+    `定约数字又缩回小号了（缺 text-2xl）：${contractCell.slice(0, 120)}`
   );
   // 「庄已抓」那一格：按**值格切片**判断（早先是「庄已抓」三个字往后数 200 字符 ——
   // 表格形状下那段距离里还有表头与另外两格，窗口判据会假红也会假绿）。
-  const pointsCell = statusCellMarkup(bury, 'points');
+  const pointsCell = railCellMarkup(bury, 'points');
   assert(
     pointsCell.includes('text-2xl'),
     `「庄已抓」的分数不是大号数字（缺 text-2xl）：${pointsCell.slice(0, 120)}`
   );
-  const levelCell = statusCellMarkup(bury, 'level');
+  // 「分」不许掉到第二行（真机截图：25 下面单独一行「分」）：值格必须 nowrap
+  assert(
+    pointsCell.includes('whitespace-nowrap'),
+    `「庄已抓」那一格没有 whitespace-nowrap：数字与「分」之间会断行（真机截过 25 下面单独一行「分」）：` +
+      pointsCell.slice(0, 160)
+  );
+  const levelCell = railCellMarkup(bury, 'level');
   assert(
     levelCell.includes('text-2xl'),
     `「级牌」那一格不是大号数字（缺 text-2xl）：${levelCell.slice(0, 120)}`
+  );
+  // 6d2) 表头那行小字**不许回到 10px**：它是这张表唯一的说明（`回溯 / 定约 / 级牌 / 庄已抓`），
+  //      10px 在手机上是可读下限之下；判据落在**出货的表头格**上，不是源码里那个常量。
+  //      同一条里还要两样：上边距（第一行贴着圆角边线太挤，真机反馈过）与 nowrap
+  //      （表头文字折成两行会让整块长高）。
+  const headCell = /<th[\s>][^>]*>/.exec(bury)?.[0] ?? '';
+  assert(headCell !== '', `页面里找不到信息须的表头格（<th>）：${headCell}`);
+  assert(
+    headCell.includes('text-[11px]'),
+    `信息须的表头字号不是 11px（读不清等于表头不存在）：${headCell}`
+  );
+  assert(
+    headCell.includes('pt-1.5'),
+    `信息须的表头上边距不是 6px（第一行会贴着整块的上边线）：${headCell}`
+  );
+  assert(
+    headCell.includes('whitespace-nowrap'),
+    `信息须的表头没有 whitespace-nowrap（表头会折成两行）：${headCell}`
+  );
+
+  // 6d3) 信息须与「我」那条底栏取**同一个尺度**（`--rail-w`）：两块的宽度类都引用同一个变量，
+  //      而那个变量在出货样式表里真的有值 —— 只断言其中一半（比如「底栏 ≤ 256px」）是量不到
+  //      「两块一样宽」的，而两块宽度不等时上下框只是看起来差一点，不会报任何错。
+  const railTag = /<table[^>]*data-info-rail[^>]*>/.exec(bury)?.[0] ?? '';
+  assert(railTag !== '', `页面里找不到信息须那张表（data-info-rail）：${railTag}`);
+  assert(
+    railTag.includes('w-[var(--rail-w)]'),
+    `信息须不是按 --rail-w 取宽的（缺 w-[var(--rail-w)]）：${railTag}`
+  );
+  const barTag = /<[a-z]+[^>]*data-seat-bar[^>]*>/.exec(bury)?.[0] ?? '';
+  assert(barTag !== '', `页面里找不到「我」那条底栏（data-seat-bar）：${barTag}`);
+  assert(
+    barTag.includes('max-w-[var(--rail-w)]'),
+    `「我」那条底栏不是按 --rail-w 取宽的（缺 max-w-[var(--rail-w)]）：${barTag}`
   );
 
   // 6b) 闲家看不到底牌：同一页没有底牌行，也没有任何标记
@@ -857,7 +897,7 @@ async function main(): Promise<void> {
   }
   assert(follower.includes('出 牌'), '跟牌者页面没有出牌按钮');
   // 徽标只报「这 N 分归庄方还是闲方」，不许回潮成「上一轮 · 赢墩 +N 分」。
-  // 判的是**那一句徽标文案**，不是「上一轮」这四个字 —— 它另有正当去处：状态条上那枚回看入口
+  // 判的是**那一句徽标文案**，不是「上一轮」这四个字 —— 它另有正当去处：信息须上那枚回看入口
   // （收墩后出现，见下面两条）。把整页的「上一轮」一律禁掉会让新入口一起被判红。
   for (const gone of ['上一轮 · 赢墩', '赢墩 +']) {
     assert(!follower.includes(gone), `出牌页面还在写「${gone}」：徽标只报这 N 分归庄方还是闲方`);
@@ -927,7 +967,7 @@ async function main(): Promise<void> {
   console.log(
     '出牌阶段：动作托盘住在操作条那一行里（在流内、单行、宽度 max-content —— 不再有 44px 动作带）；'
       + `跟牌蓝框 ${marks} 处 = 下家领出门张数；收墩徽标「${badge[0]}」；`
-      + '收墩后状态条上出现「上一轮」回看入口（浮层默认关着）'
+      + '收墩后信息须上出现「上一轮」回看入口（浮层默认关着）'
   );
 
   // 8) 教程页：新版面跑同一套 position 守卫，且小节与真实牌面都在
@@ -978,6 +1018,15 @@ async function main(): Promise<void> {
   // 9) 角点已从出货产物里消失：牌角不再有装饰圆点；主牌改成**浅金底**，叫牌阶段另有更浅一档的级牌候选
   const cssHref = cssHrefOf(rules);
   const css = await asset(cssHref);
+  // 信息须与「我」那条底栏的那个**共同尺度**必须在出货样式表里真有值：
+  // 两边的类都引用 `var(--rail-w)`（上面 6d3 已断言），但如果变量本身丢了，
+  // `width: var(--rail-w)` 会退化成 `auto` —— 两块又各自按内容撑开，而且谁都不会报错。
+  // **两档都要在**：值那一档数字在 `sm` 上从 20px 长到 24px，最宽的内容（`100♣ / 100 分`）
+  // 只有在桌面档（18rem）里才放得下；少一档就会有某一屏把「分」挤出去。
+  assert(
+    /--rail-w:\s*16rem/.test(css) && /--rail-w:\s*18rem/.test(css),
+    `出货样式表里缺少 --rail-w 的两档值（基准 16rem / sm 18rem）：${cssHref}`
+  );
   assert(css.includes('.card.trump'), `样式表里找不到 .card.trump（抓到的可能不是牌面样式：${cssHref}）`);
   assert(css.includes('.card .pip'), '样式表里找不到 .card .pip（正对照失败）');
   assert(!css.includes('.card.pt'), '出货样式表里仍有分牌角点 .card.pt');

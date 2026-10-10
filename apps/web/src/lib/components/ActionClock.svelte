@@ -39,9 +39,14 @@
   /**
    * 三档的字号（见 `labels.ts` 的 `clockFace`）：一位 / 两位数正常、三位数小一档、
    * 「停住了」那枚横杠回到正常字号（它只有一个字符）。
+   *
+   * 小一档是 9px 而不是更小：`shot-auction.ts` 的 ⑮ 把那串 `888` **当场量过** ——
+   * 三个等宽数字在 8px 下只要 14.8px，而圆有 22px（可用 20px），于是提到 9px（约 16.7px，
+   * 两侧各留 1.7px）；再往上到 10px（18.5px）就只剩 0.75px，太贴 ring 了。
+   * 也就是说：这一档不是被宽度逼出来的，是先量了才知道还有余量（第 6 条决定）。
    */
   const size = $derived(
-    face === null ? '' : face.tone === 'long' ? 'text-[8px]' : 'text-[10px]'
+    face === null ? '' : face.tone === 'long' ? 'text-[9px]' : 'text-[10px]'
   );
   const ink = $derived(
     face === null

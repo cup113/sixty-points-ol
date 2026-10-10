@@ -21,7 +21,7 @@
   import TabRail from '$lib/components/TabRail.svelte';
   import TableDrawer from '$lib/components/TableDrawer.svelte';
   import TableHeaderActions from '$lib/components/TableHeaderActions.svelte';
-  import TableStatus from '$lib/components/TableStatus.svelte';
+  import InfoRail from '$lib/components/InfoRail.svelte';
   import TrickArea from '$lib/components/TrickArea.svelte';
   import TrickReview from '$lib/components/TrickReview.svelte';
   import { followSuitCards, kittyHandDelta, lastCompletedTrick } from '$lib/labels';
@@ -306,8 +306,8 @@
          行格让「非座位层只能住在内容槽里」成为**结构**保证，而不是靠调数维持。
          钩子 `data-felt-row` 供 `scripts/shot-auction.ts` 的实测断言定位（源码守卫看不见几何）。
 
-         第一行是**信息须**（`TableStatus`：上一轮 / 定约·级牌 / 庄已抓），常驻：
-         它整条横贯内宽、三格分布，于是内容槽里只剩「打这一墩」的东西，牌区上方不再悬着任何层；
+         第一行是**信息须**（`InfoRail`：回溯 / 定约 / 级牌 / 庄已抓），常驻：
+         它整条横贯内宽、四列一张计分表，于是内容槽里只剩「打这一墩」的东西，牌区上方不再悬着任何层；
          同一份内容也就不再随视口宽度在「标题行」与「空绿区里的孤岛」之间摇摆
          （实测窄屏占毡面 79%、桌面只占 25%）。它**没有内容时高度为 0**（叫牌阶段与大厅），
          但这一格始终在（行的顺序恒定，不靠条件渲染挪行）。
@@ -319,7 +319,7 @@
          内容宽了就在自己那一槽里溢出，不再牵动别的行。 -->
     <div data-felt-row="rail" class="min-w-0">
       {#if view !== null}
-        <TableStatus {view} onReviewTrick={() => (reviewOpen = true)} />
+        <InfoRail {view} onReviewTrick={() => (reviewOpen = true)} />
       {/if}
     </div>
 
@@ -358,8 +358,14 @@
     </div>
 
     <!-- 第三行：「我」那一条底栏（一行装完身份）。观战者没有座位，这一行整行消失。
-         `max-w-3xs`（16rem = 256px）+ `mx-auto`：栏里只有「庄冠 + 头像 + 名字 + 级别」这几样，
-         桌面端毡面 1080px 时让它整幅铺开既没必要、也不好看（实测宽 1080px → 384 → 256）。
+         `max-w-[var(--rail-w)]`（基准 16rem = 256px、`sm` 以上 18rem = 288px）+ `mx-auto`：
+         栏里只有「庄冠 + 头像 + 名字 + 级别」这几样，桌面端毡面 1080px 时让它整幅铺开
+         既没必要、也不好看（实测宽 1080px → 384 → 256）。
+         宽度**不自己写一个数**：它取毡面的那一条尺度（`app.css` 的 `--rail-w`），
+         与顶部信息须**同一个值** —— 两者一上一下、同宽同居中才是同一个台面框
+         （早先信息须按内容撑到 229–238px，比这一条窄 18–27px，上下框对不齐）。
+         那一档尺度在 `sm` 上跟着值那一档数字一起长大（20px → 24px），两块一起变宽 ——
+         这里因此只写变量名：**改尺度的地方只有 `app.css` 一处**。
          为什么不更宽：这一条只装身份，名字列本来就 `truncate`（合法名字上限 12 字，
          256px 下名字列约 124px ≈ 8 个汉字，超出部分按设计省略而不是把卡片撑长）。
          居中走 auto 边距（这一行是 flex 行），不靠再加一层嵌套。 -->
@@ -374,7 +380,7 @@
           isMe={seated}
           isTurn={isTurnAt(anchor)}
           isDeclarer={deal?.declarerSeat === anchor}
-          class="mx-auto w-full max-w-3xs"
+          class="mx-auto w-full max-w-[var(--rail-w)]"
         />
       {/if}
     </div>

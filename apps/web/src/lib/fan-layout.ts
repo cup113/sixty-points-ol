@@ -118,3 +118,58 @@ export function computeClusterStep(input: {
   if (fits(count, cardWidth, natural, budget)) return natural;
   return Math.max(0, (budget - cardWidth) / (count - 1));
 }
+
+/* ---------- 出牌点的宽度预算 ---------- */
+
+/**
+ * 左右两个**出牌点**（两翼）的宽度预算：**按这一侧要放几张牌给**（内容槽宽度的百分比）。
+ *
+ * 为什么不再写死 38%（那是上一版）：宽度预算是这一簇牌唯一的可支配资源，而「够不够」
+ * 只由张数决定 —— 一张牌要一张牌宽，五张牌要 `牌宽 × (0.6 × 4 + 1)`：
+ *
+ *     needed(count) = 牌宽 × (CLUSTER_STRIP_RATIO × (count − 1) + 1)
+ *
+ * 这条式子对张数是**线性**的，所以这里也按线性给：每多一张牌多 `SPOT_WIDTH_STEP` 个百分点，
+ * 一颗牌 30%、五张 38%、八张及以上给到上限 44%。
+ *
+ * - **五张 = 38% 是量出来的锚点**：5 张顺子那一档实测在 38% 的盒子里刚好维持紧凑叠排
+ *   （`pnpm shot` 的场景 11 / 12），所以这条曲线**穿过**它，而不是另起一个数；
+ * - **少牌时收窄**：牌少时盒子窄一点，这一簇在盒内居中，于是整体更靠中间
+ *   （一张牌时盒子中心在 33%，38% 时是 29%）—— 少牌的空桌面不再把两家推到两边；
+ * - **上限 44% 是结构性的**：两翼内侧边缘钉在 48% / 52%（中间留 4% 空带），
+ *   于是 `2 × inset + 2 × width + 4 = 100`（见 `spotBox`）。44% 时两侧各留 4% 外缘，
+ *   再宽就会顶到毡面内缘与右边缘那条活页签条。
+ *
+ * 两侧**共用同一个宽度**（取两家张数的较大者）：宽度不等就会让两翼的中点偏出中线
+ * （`shot-auction.ts` 的 ⑨ 量的正是这个），而跟牌时两家张数本来就常常不等。
+ */
+export const SPOT_WIDTH_MIN = 30;
+export const SPOT_WIDTH_MAX = 44;
+/** 每多一张牌多给几个百分点（1 张 30 ⇒ 5 张 38 ⇒ 8 张 44） */
+const SPOT_WIDTH_STEP = 2;
+/** 两翼之间留的空带（%）：它保证两簇的**内侧边缘**不接触 */
+const SPOT_CENTER_GAP = 4;
+/** 两翼内侧边缘的位置（左 48% / 右 52%）—— 盒子的内侧边不动，宽度只向外长 */
+const SPOT_INNER_EDGE = (100 - SPOT_CENTER_GAP) / 2;
+
+export interface SpotBox {
+  /** 这一个出牌点的宽度（内容槽宽度的百分比） */
+  readonly widthPct: number;
+  /** 它离那一侧外缘的内缩（百分比）；`宽度只向外长`，所以内侧边缘恒在 48% / 52% */
+  readonly insetPct: number;
+}
+
+export function spotWidthPct(count: number): number {
+  const n = Math.max(1, Math.floor(count));
+  return Math.min(SPOT_WIDTH_MAX, SPOT_WIDTH_MIN + SPOT_WIDTH_STEP * (n - 1));
+}
+
+/**
+ * 一侧出牌点的宽度与外缩：`insetPct + widthPct = 48`（内侧边缘固定）。
+ * 于是 `2 × inset + 2 × width + 4 = 100` 对任何张数都成立 —— 这就是两翼「互不相交」的
+ * 结构性保证（`TrickArea` 早先写死 `10 + 38 + 4 + 38 + 10 = 100`，同一套加法，只是宽度可变了）。
+ */
+export function spotBox(count: number): SpotBox {
+  const widthPct = spotWidthPct(count);
+  return { widthPct, insetPct: SPOT_INNER_EDGE - widthPct };
+}
