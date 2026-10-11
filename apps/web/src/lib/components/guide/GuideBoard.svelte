@@ -66,7 +66,13 @@
         : { from: 0, to: spans.total }
   );
 
-  let snapshot = $state<SessionSnapshot>(
+  /**
+   * 引擎快照**必须留在响应式代理之外**：`dispatch` 一进来就 `structuredClone(prev)`，
+   * 而 `$state` 的深代理一被结构化克隆就抛 `DataCloneError`（对手自动出牌与「跳过等待」
+   * 会当场全挂，画面停在「0 手已叫」不动）。快照本来就是整体替换、从不就地改，
+   * 所以 `$state.raw` 正合身 —— 换走的只有代理，响应性一点没少（重新赋值照样通知）。
+   */
+  let snapshot = $state.raw<SessionSnapshot>(
     // 起始快照只算一次（深链 / 续读给的那条动作之前停下）：`untrack` 让「只取初值」这件事显式化，
     // 之后推进一律靠 `stepOnce` / `submit*`，没人会回到这个表达式
     untrack(() => fastForward(deal, Math.max(range.from, startAt ?? range.from)))

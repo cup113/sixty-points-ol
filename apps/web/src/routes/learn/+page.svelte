@@ -202,62 +202,68 @@
   {/if}
 
   <div class="mt-3 min-h-0 flex-1 rounded-2xl bg-black/25 p-3 ring-1 ring-white/10 sm:p-4">
-    {#if step.kind === 'brief'}
-      <BriefCard title={step.title} points={step.points} widget={step.widget} />
-    {:else if step.kind === 'quiz'}
-      <QuizCard title={step.title} questions={step.questions} onDone={onStepPassed} />
-    {:else if step.kind === 'deal'}
-      {@const deal = dealOf(step.slug)}
-      {#if deal === null}
-        <div class="space-y-2" data-guide-pending>
-          <h2 class="text-sm font-bold text-ivory">{step.title}</h2>
-          <p class="text-[12px] leading-relaxed text-white/60">{step.pending ?? '这一副引导局还没接上数据。'}</p>
-          <p class="text-[11px] text-white/40">
-            概念与测验里已经讲透的部分不受影响；这一副接上数据后会换成整副手把手强制引导。
+    <!-- 一步 = 一屏 = 一份新状态：Svelte 会在**同一条 {#if} 链的同一分支上复用组件实例**，
+         于是连着两步都是测验时 `QuizCard` 的题号会从上一屏漏过来（第二屏只有一题、题号却还停在
+         上一屏的第四题 → 越界取题 → `question.cards` 抛错，整页从此不再刷新）；
+         连着两步都是引导局时 `GuideBoard` 的快照同理。`{#key step.id}` 把这条边界钉死。 -->
+    {#key step.id}
+      {#if step.kind === 'brief'}
+        <BriefCard title={step.title} points={step.points} widget={step.widget} />
+      {:else if step.kind === 'quiz'}
+        <QuizCard title={step.title} questions={step.questions} onDone={onStepPassed} />
+      {:else if step.kind === 'deal'}
+        {@const deal = dealOf(step.slug)}
+        {#if deal === null}
+          <div class="space-y-2" data-guide-pending>
+            <h2 class="text-sm font-bold text-ivory">{step.title}</h2>
+            <p class="text-[12px] leading-relaxed text-white/60">{step.pending ?? '这一副引导局还没接上数据。'}</p>
+            <p class="text-[11px] text-white/40">
+              概念与测验里已经讲透的部分不受影响；这一副接上数据后会换成整副手把手强制引导。
+            </p>
+          </div>
+        {:else}
+          <GuideBoard
+            {deal}
+            segment={step.segment}
+            startAt={current === index.indexOf.get(step.id) ? dealAction : null}
+            onprogress={onDealProgress}
+            ondone={onStepPassed}
+          />
+        {/if}
+      {:else if step.kind === 'review'}
+        {@const deal = dealOf(step.slug)}
+        {#if deal === null}
+          <div class="space-y-2" data-guide-pending>
+            <h2 class="text-sm font-bold text-ivory">{step.title}</h2>
+            <p class="text-[12px] leading-relaxed text-white/60">{step.pending ?? '这一副引导局还没接上数据。'}</p>
+          </div>
+        {:else}
+          <GuideReview {deal} />
+        {/if}
+      {:else}
+        <div class="space-y-3" data-guide-end>
+          <h2 class="text-base font-bold text-ivory">{step.title}</h2>
+          <p class="text-[13px] leading-relaxed text-white/70">
+            你已经把四副真实牌局打了一遍：竞叫之后让给他打、十一张主牌坐庄、无主局把 30 分埋进底、盯住庄家的主牌等它打光。
+            叫牌怎么算账、埋底埋什么、跟牌为什么结构优先、末轮怎么保底抠底，你都亲手摸过一遍了。
+            接下来轮到你自己的牌局 —— 拉上两个牌友（或先加个机器人陪练），开一桌真打。
           </p>
+          <ul class="space-y-1 text-[12px] text-white/60">
+            <li>· 开桌、加入、离座与补位都在大厅里；牌桌左下角的「?」按阶段给即时说明。</li>
+            <li>· 想查某一条规则，去 <a class="text-gold underline" href="/rules">文字教程</a>，那里可以搜索、可以跳转。</li>
+            <li>· 随时可以回到 <a class="text-gold underline" href="/learn">新手引导</a>；左侧章节菜单能直接跳到任意一步。</li>
+          </ul>
+          <div class="flex flex-wrap gap-2">
+            <a class="rounded-lg bg-gold/20 px-4 py-2 text-xs font-semibold text-gold ring-1 ring-gold/40" href="/">
+              回大厅开一桌 →
+            </a>
+            <a class="rounded-lg px-4 py-2 text-xs text-white/70 ring-1 ring-white/15 hover:bg-white/10" href="/rules">
+              查文字教程
+            </a>
+          </div>
         </div>
-      {:else}
-        <GuideBoard
-          {deal}
-          segment={step.segment}
-          startAt={current === index.indexOf.get(step.id) ? dealAction : null}
-          onprogress={onDealProgress}
-          ondone={onStepPassed}
-        />
       {/if}
-    {:else if step.kind === 'review'}
-      {@const deal = dealOf(step.slug)}
-      {#if deal === null}
-        <div class="space-y-2" data-guide-pending>
-          <h2 class="text-sm font-bold text-ivory">{step.title}</h2>
-          <p class="text-[12px] leading-relaxed text-white/60">{step.pending ?? '这一副引导局还没接上数据。'}</p>
-        </div>
-      {:else}
-        <GuideReview {deal} />
-      {/if}
-    {:else}
-      <div class="space-y-3" data-guide-end>
-        <h2 class="text-base font-bold text-ivory">{step.title}</h2>
-        <p class="text-[13px] leading-relaxed text-white/70">
-          你已经把四副真实牌局打了一遍：竞叫之后让给他打、十一张主牌坐庄、无主局把 30 分埋进底、盯住庄家的主牌等它打光。
-          叫牌怎么算账、埋底埋什么、跟牌为什么结构优先、末轮怎么保底抠底，你都亲手摸过一遍了。
-          接下来轮到你自己的牌局 —— 拉上两个牌友（或先加个机器人陪练），开一桌真打。
-        </p>
-        <ul class="space-y-1 text-[12px] text-white/60">
-          <li>· 开桌、加入、离座与补位都在大厅里；牌桌左下角的「?」按阶段给即时说明。</li>
-          <li>· 想查某一条规则，去 <a class="text-gold underline" href="/rules">文字教程</a>，那里可以搜索、可以跳转。</li>
-          <li>· 随时可以回到 <a class="text-gold underline" href="/learn">新手引导</a>；左侧章节菜单能直接跳到任意一步。</li>
-        </ul>
-        <div class="flex flex-wrap gap-2">
-          <a class="rounded-lg bg-gold/20 px-4 py-2 text-xs font-semibold text-gold ring-1 ring-gold/40" href="/">
-            回大厅开一桌 →
-          </a>
-          <a class="rounded-lg px-4 py-2 text-xs text-white/70 ring-1 ring-white/15 hover:bg-white/10" href="/rules">
-            查文字教程
-          </a>
-        </div>
-      </div>
-    {/if}
+    {/key}
   </div>
 
   <footer class="mt-3 flex flex-wrap items-center justify-between gap-2 pb-2">
