@@ -182,7 +182,13 @@ export function forgetBotTimers(): void {
   timers.clear();
 }
 
-function clearTimer(tableId: number, userId: number): void {
+/**
+ * 丢掉某桌某机器人的在途定时器。
+ *
+ * 正常路径由 `removeBot` 调用；导出是因为**管理员删用户**（ADR-0024）也会删掉机器人
+ * 身份 —— 定时器若留着，到点只会看到「座位已没了」而空转一轮（无害，但白等一次）。
+ */
+export function clearTimer(tableId: number, userId: number): void {
   const key = `${tableId}:${userId}`;
   const existing = timers.get(key);
   if (existing !== undefined) {

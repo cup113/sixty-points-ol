@@ -1,7 +1,13 @@
 import { error } from '@sveltejs/kit';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { ApiError, createMcpServer } from '@sixty/mcp';
-import { credentialOf, createIdentity, credentialPresent, identityFrom, normalizeName } from '$lib/server/auth';
+import {
+  credentialOf,
+  createIdentity,
+  credentialPresent,
+  identityFromCredentialOnly,
+  normalizeName
+} from '$lib/server/auth';
 import { serverApi } from '$lib/server/mcp-api';
 import type { RequestHandler } from './$types';
 
@@ -16,9 +22,12 @@ import type { RequestHandler } from './$types';
  * **凭据是可选的**（ADR-0014）：没带凭据就是一个**无身份会话** —— 工具表照旧全列，但只有
  * `read_rules`（纯本地）与 `claim`（建身份、把凭据串交给人类）调得动，其余返回指路错误。
  * 「没带凭据」与「凭据无效」必须分开：前者合法，后者一律 401，绝不静默降级成匿名。
+ *
+ * 身份解析**只认凭据串**（`identityFromCredentialOnly`，ADR-0023）：Gitee 身份的会话
+ * cookie 在这里不算数 —— Gitee 身份拿不到凭据串，也就进不了 MCP（有意边界）。
  */
 export const POST: RequestHandler = async (event) => {
-  const identity = identityFrom(event);
+  const identity = identityFromCredentialOnly(event);
   if (identity === null && credentialPresent(event)) {
     error(401, '凭据无效或已失效：请重新复制凭据串（没有凭据时可以直接连，但只有 read_rules 与 claim 能用）');
   }

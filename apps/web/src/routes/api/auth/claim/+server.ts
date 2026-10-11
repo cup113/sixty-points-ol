@@ -6,6 +6,7 @@ import {
   findByCredential,
   identityFrom,
   normalizeName,
+  clearSessionCookie,
   setCredentialCookie
 } from '$lib/server/auth';
 import { seatedTableCode } from '$lib/server/tables';
@@ -27,6 +28,8 @@ export const POST: RequestHandler = async (event) => {
     }
     const credential = credentialOf(identity);
     setCredentialCookie(cookies, credential);
+    // 凭据与会话互斥（ADR-0023）：导入本地身份即退出 Gitee 会话
+    clearSessionCookie(cookies);
     return json({ name: identity.name, credential });
   }
 

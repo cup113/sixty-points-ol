@@ -339,7 +339,7 @@ test('机器人身份没有凭据串：令牌与凭据都认证不出，但名�
   assert.ok(row.token.length > 0, 'token 列非空（列约束），只是永不外发');
   assert.equal(findByToken(row.token), null, '机器人不该能靠令牌认证');
   assert.equal(
-    findByCredential(credentialOf({ id: row.id, name: row.name, token: row.token })),
+    findByCredential(credentialOf({ id: row.id, name: row.name, token: row.token, giteeId: null })),
     null,
     '机器人不该能靠凭据串认证'
   );

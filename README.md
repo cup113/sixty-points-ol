@@ -31,10 +31,10 @@ packages/mcp        MCP 工具面（stdio 入口 + 与传输无关的工具定�
   test/             node:test：工具层单测 + 内存链对上的协议单测 + stdio 启动契约
   scripts/          mcp-check.ts（两条传输各打一整副 + 形状/在线/权威守卫）
 apps/web            SvelteKit 2 + Svelte 5 + Tailwind 4 + adapter-node
-  src/lib/server/   SQLite（node:sqlite）、身份凭据、牌桌服务、SSE hub、MCP 进程内适配层、机器人调度、
-                    机器重演存档（replays，结算时同步算好，见 ADR-0016）
-  src/routes/       大厅、牌桌页、规则演示（/learn）、文字教程（/rules）、牌局编排台（/studio）、
-                    REST 动作接口（含入座/离座/加机器人）、SSE 流、MCP（/api/mcp）
+  src/lib/server/   SQLite（node:sqlite）、身份凭据、Gitee 会话与管理面、牌桌服务、SSE hub、
+                    MCP 进程内适配层、机器人调度、机器重演存档（replays，结算时同步算好，见 ADR-0016）
+  src/routes/       大厅、牌桌页、规则演示（/learn）、文字教程（/rules）、牌局编排台（/studio）、管理面（/admin）、
+                    REST 动作接口（含入座/离座/加机器人）、Gitee OAuth（/api/auth/gitee/*）、SSE 流、MCP（/api/mcp）
   src/hooks.server.ts  启动时补扫机器人回合（重启自愈，见 ADR-0015）
   src/lib/tutorial/ 演示页的幻灯片模型（deck.ts）与示例数据（scenarios.ts）
   src/lib/tutorial/stories/  由 docs/deals 生成的故事数据（勿手改，见 ADR-0010）
@@ -44,6 +44,9 @@ apps/web            SvelteKit 2 + Svelte 5 + Tailwind 4 + adapter-node
                     spectate-check.ts（观战/离座/改名换身份的端到端回归）
                     bot-check.ts（1 人 + 2 机器人打两副 + 中途踢/补的端到端）
                     shot-auction.ts（版面**几何**验收：自拉 vite dev + 无头 Chromium，截图并实测关键几何后断言）
+                    shot-gitee.ts（Gitee 登录 / 登出弹窗 / 管理面的验收截图：自拉 dev、往库里种一条 Gitee 会话，
+                                   并把「Gitee 身份卡上没有『复制凭据』」「登出确认是覆盖全屏的 fixed 弹窗」
+                                   「Gitee 入口是官方 SVG 小图标」钉成断言）
                     build-deal-stories.ts（牌局 JSON → 演示页数据 + 复核清单）
 CONTEXT.md          领域词汇表（术语与已敲定的规则歧义）
 docs/adr/           架构决策记录
@@ -88,6 +91,38 @@ pnpm deal:check       # 只校验：仓库里的生成物是否等于现场重�
 `pnpm deal:check` 会在「手改生成物」或「改完源文件忘了重跑」时报红。
 
 环境变量：`PORT`（默认 3000）、`HOST`、`SIXTY_DB`（默认 `<cwd>/data/sixty.db`）。
+
+### Gitee 登录与管理员（可选功能，见 ADR-0023 / ADR-0024）
+
+不配这些变量时，**整个功能隐身**：大厅的 Gitee 入口不渲染，`/api/auth/gitee/*` 与 `/admin` 一律 404。
+
+| 变量 | 作用 |
+| --- | --- |
+| `SIXTY_GITEE_CLIENT_ID` | Gitee 开放平台应用的 Client ID。**留空 = 关闭 Gitee 登录** |
+| `SIXTY_GITEE_CLIENT_SECRET` | 同一个应用的 Client Secret |
+| `SIXTY_GITEE_STATE_SECRET` | 可选：OAuth state 的 HMAC 密钥（不设则从 client secret 派生） |
+| `SIXTY_ADMIN_GITEE_IDS` | 管理员名单：逗号分隔的 Gitee **数字 id**。留空 = 没有管理员 |
+
+启用步骤：
+
+1. 到 Gitee「设置 → 数据管理 → 第三方应用」创建应用，**回调地址**填
+   `https://<你的域名>/api/auth/gitee/callback`（本地开发填 `http://127.0.0.1:5173/api/auth/gitee/callback`）。
+   它必须与页面实际访问的 **origin 逐字一致** —— 反代部署请固定 `ORIGIN`（见下文的警示）。
+2. 把 Client ID / Secret 填进上面两个变量。
+3. 想用管理面板：先用 Gitee 登录一次，再在 `/admin` 里对着自己那行的 `#id`
+   —— 那是**站内** id，不是 Gitee id。Gitee id 是 `/api/v5/user` 里的数字 id，
+   也就是登录后 `users.gitee_id` 那一列的值：
+
+   ```bash
+   sqlite3 data/sixty.db 'SELECT id, name, gitee_id FROM users WHERE gitee_id IS NOT NULL'
+   ```
+
+   把 `SIXTY_ADMIN_GITEE_IDS` 填成那个 `gitee_id`，重启即生效。
+
+> **Gitee 身份与本地身份是两种东西。** 本地身份拿**凭据串**（可复制、跨设备迁移，ADR-0003）；
+> Gitee 身份拿**会话**（不可复制、可撤销，换设备再登一次）。所以 Gitee 身份**没有**「复制凭据」
+> 这个动作，也**不能驱动 MCP 工具面**（MCP 只认凭据串）—— 想用 MCP 就另建一个本地身份。
+> 管理员权限只挂在 Gitee 侧，这样权限不会随一串可复制的字符串流出去。
 
 > ⚠️ **不要设置空的 `ORIGIN`。** 留空（例如 Compose 里的 `ORIGIN=${ORIGIN:-}`、`ORIGIN=` 或 `ORIGIN=""`）会让
 > adapter-node 直接拒绝启动：
@@ -280,8 +315,22 @@ pnpm shot                                              # 版面**几何**验收�
 
 ## 身份与凭据
 
-无密码：输入名字即注册并签发令牌，浏览器 localStorage 保存 `base64url(名字:令牌)` 的凭据串，
-一键复制到其它浏览器粘贴即可继续同一身份（服务端同时下发 httpOnly cookie 供 SSE 鉴权）。
+两种来历，**不要混用**（见 CONTEXT.md 的 **身份** / **凭据串** / **会话** / **Gitee 登录**）：
+
+- **本地身份**：无密码 —— 输入名字即注册并签发令牌，浏览器 localStorage 保存
+  `base64url(名字:令牌)` 的凭据串，一键复制到其它浏览器粘贴即可继续同一身份
+  （服务端同时下发 httpOnly cookie 供 SSE 鉴权）。名字全局唯一、可改；凭据串里内嵌名字，
+  所以**改名后旧串立刻失效**、界面会把新串写回本机。
+- **Gitee 身份**：在**登出态**点大厅里那枚 Gitee 图标，用 Gitee 账号一键建立。不需要也不发
+  凭据串 —— 令牌只存库、不进任何响应，浏览器只拿一条 30 天滚动的**会话**。
+  它的好处是换设备不用搬字符串（再登一次即可），代价是不能复制、不能迁移、不能驱动 MCP。
+  站内名从 Gitee 用户名派生（超 12 字截断、撞名加后缀），之后可照常改。
+
+**登出要看清**：本地身份登出会**同时删掉本机保存的凭据串**，而这个身份无密码、无找回 ——
+没在别处保存就永远回不来。所以在座时大厅会先弹一层确认，给你一条「离开房间并登出」：
+它退掉所有座位（进行中的一副停在空座等补位），并把那些桌的邀请码复制到剪贴板，
+之后用**新身份**凭邀请码补位回来（座位空着才补得进 —— 这就是它防的「幽灵占位」）。
+Gitee 身份登出没有这一层：再登一次 Gitee 就回来了。
 
 ## 让 LLM 也来玩（MCP）
 
@@ -290,6 +339,12 @@ LLM 在这套系统里**就是一个普通身份**：服务器不区分人类与
 "会不会打牌"由接上来的宿主决定 —— LLM 宿主自带策略。
 **凭据是可选的**：没配也能连上（**无身份会话**：只能读规则、或替人类建一个身份，见 ADR-0014）——
 所以「AI 一步步教人类把身份配起来」这条路上的第一步不需要先有一个身份。
+
+> **Gitee 身份进不了 MCP**（ADR-0023）。MCP 的鉴权面只有凭据串（`Authorization: Bearer` /
+> `SIXTY_CREDENTIAL`），而 Gitee 身份的令牌永不外发、没有凭据串可配 —— 这是「不得复制凭据」
+> 那条要求直接推出来的边界，不是遗漏。想用 MCP 就在浏览器里另建一个**本地身份**
+> （README 本来就把 MCP 客户端当「另一台设备」）。带着 Gitee 会话 cookie 的请求撞 `/api/mcp`
+> 按**无身份会话**处理，绝不把会话 cookie 当成第二根凭据。
 
 > **别把它和「机器人」搞混。** 机器人是服务器自己代打的那种身份（无凭据串、由「+机器人」加进空座，
 > 见 ADR-0015 与上面「机器人（凑桌陪练）」一节），跟 MCP 席位是两回事：MCP 对面是人还是 LLM，
@@ -419,7 +474,7 @@ DOMAIN=game.example.com docker compose --profile https up -d --build   # → htt
 - 镜像：`node:24-bookworm-slim` 两阶段构建（装依赖+构建 → 只带产物与运行期依赖），非 root 运行。
 - 数据：命名卷 `sixty-data` 挂到容器 `/data`（`SIXTY_DB=/data/sixty.db`）。牌局状态、身份、座位与观战记录、事件日志都在这里，容器重建/升级不丢；重启续局已实测。
   **这一行只对 `docker compose` 与 Coolify 的 Docker Compose 资源生效**：Coolify 用 **Docker Image** 资源时不会自动带上它，必须手动加 Persistent Storage，见下文「Coolify」的 A 路径。
-- 环境变量全部带默认值，可用 `${X:-默认}` 直接改：`PORT`（容器内端口，默认 3000）、`PUBLIC_PORT`（宿主映射，默认同 PORT）、`SIXTY_DB`、`DOMAIN`（仅 https profile）。
+- 环境变量全部带默认值，可用 `${X:-默认}` 直接改：`PORT`（容器内端口，默认 3000）、`PUBLIC_PORT`（宿主映射，默认同 PORT）、`SIXTY_DB`、`DOMAIN`（仅 https profile）；另有一组可选的 Gitee / 管理员变量（见上文「Gitee 登录与管理员」），留空即整个功能隐身。
   **`ORIGIN` 例外：不要用 `${ORIGIN:-}` 这种写法**（宿主未设置时会注入空串导致容器起不来），需要时就写完整 URL 或整行留空不定义，见上文「本地运行」的警示。
 - 健康检查：容器内 `GET /` 返回 200；`docker compose ps` 里看到 `healthy` 即就绪。
 - 升级：`git pull && docker compose up -d --build`。

@@ -17,7 +17,9 @@ import type { RequestHandler } from './$types';
  * 1. **在座时不能改**：身份是全局的，所以只要还占着任何一张桌的座位就拒绝；
  * 2. 名字全局唯一，撞名直接 400。
  *
- * 凭据串里内嵌名字，所以改名后必须**回发新凭据串**并重设 cookie，否则调用方手里的旧串当场失效。
+ * 凭据串里内嵌名字，所以**本地身份**改名后必须**回发新凭据串**并重设 cookie，否则
+ * 调用方手里的旧串当场失效。**Gitee 身份没有凭据串**（ADR-0023）：会话 cookie 与名字
+ * 无关，只改库里的名字、什么都不回发。
  */
 export const POST: RequestHandler = async (event) => {
   const identity = requireIdentity(event);
@@ -32,6 +34,9 @@ export const POST: RequestHandler = async (event) => {
   if (taken !== null && taken.id !== identity.id) error(400, '这个名字已被使用');
 
   const renamed = rename(identity, name);
+  if (renamed.giteeId !== null) {
+    return json({ name: renamed.name });
+  }
   const credential = credentialOf(renamed);
   setCredentialCookie(event.cookies, credential);
   return json({ name: renamed.name, credential });

@@ -19,8 +19,20 @@ CREATE TABLE IF NOT EXISTS users (
   name TEXT NOT NULL UNIQUE,
   token TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  is_bot INTEGER NOT NULL DEFAULT 0
+  is_bot INTEGER NOT NULL DEFAULT 0,
+  gitee_id TEXT
 );
+-- Gitee 会话（ADR-0023）：Gitee 身份的令牌永不离开服务器，浏览器持有的是
+-- 这张表里的不透明随机 token —— 复制它不等于复制身份（与凭据串是两种东西），
+-- 且服务端可撤销（登出即删行）。
+CREATE TABLE IF NOT EXISTS sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token TEXT NOT NULL UNIQUE,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
 CREATE TABLE IF NOT EXISTS tables (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   code TEXT NOT NULL UNIQUE,
@@ -77,6 +89,19 @@ CREATE TABLE IF NOT EXISTS replays (
   if (!columns.some((col) => col.name === 'is_bot')) {
     db.exec('ALTER TABLE users ADD COLUMN is_bot INTEGER NOT NULL DEFAULT 0');
   }
+}
+
+// Gitee 身份（ADR-0023）：老库同样补列。唯一索引放在补列**之后**再建，
+// 否则老库（还没有这一列）在启动时就撞「no such column」。
+// 部分索引排除 NULL：本地身份与机器人不参与唯一性。
+{
+  const columns = db.prepare('PRAGMA table_info(users)').all() as unknown as { name: string }[];
+  if (!columns.some((col) => col.name === 'gitee_id')) {
+    db.exec('ALTER TABLE users ADD COLUMN gitee_id TEXT');
+  }
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_gitee_id ON users (gitee_id) WHERE gitee_id IS NOT NULL');
+  // 顺手清扫过期会话：滚动续期只在「有人来」时发生，没人再来的行在这里回收
+  db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now());
 }
 
 export function now(): string {

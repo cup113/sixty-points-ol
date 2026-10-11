@@ -23,6 +23,18 @@ services:
       # 不定义 ORIGIN 时服务端按请求头推导（反代场景正是想要的行为）；
       # 确实需要绝对地址时，取消下一行注释并填完整 URL：
       # - ORIGIN=${ORIGIN:-https://game.example.com}
+      #
+      # Gitee 登录（ADR-0023）：留空 = 功能整体隐身（按钮不渲染、回调 404），
+      # 所以这几行可以原样留着，配上值才算启用。回调地址在 Gitee 开放平台登记为
+      #   https://<你的域名>/api/auth/gitee/callback
+      # - SIXTY_GITEE_CLIENT_ID=${SIXTY_GITEE_CLIENT_ID:-}
+      # - SIXTY_GITEE_CLIENT_SECRET=${SIXTY_GITEE_CLIENT_SECRET:-}
+      # 可选：state 的 HMAC 密钥（不设则从 client secret 派生；想让两者独立轮换再设）
+      # - SIXTY_GITEE_STATE_SECRET=${SIXTY_GITEE_STATE_SECRET:-}
+      #
+      # 管理员名单（ADR-0024）：逗号分隔的 Gitee 数字 id；留空 = 没有管理员（/admin 一律 404）。
+      # 只有这些 Gitee 身份能进 /admin，本地身份永远不是管理员。
+      # - SIXTY_ADMIN_GITEE_IDS=${SIXTY_ADMIN_GITEE_IDS:-}
     volumes:
       # 牌局、身份、事件日志都在这里；容器重建不丢
       - sixty-data:/data
