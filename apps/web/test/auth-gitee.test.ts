@@ -247,8 +247,34 @@ test('state：签名往返带 join；篡改/过期一律拒；专用密钥与派
   assert.equal(verifyGiteeState(state, config)?.join, 'ABC123', 'join 要原样带回来');
   assert.equal(verifyGiteeState(state, config)?.exp !== undefined, true);
 
-  const tampered = `${state.slice(0, -1)}${state.endsWith('A') ? 'B' : 'A'}`;
-  assert.equal(verifyGiteeState(tampered, config), null, '签名不符必须拒');
+  // 篡改要打在**首字符**上。这条判据原先打在**末**字符：sha256 的 base64url 是 43 个字符
+  // （43 × 6 = 258 比特 > 256），末字符只有 4 个有效比特 —— 孪生字符解出来是同一串字节，
+  // 于是约 1/16 的运行里它根本没改到签名，守卫悄悄空转（CI 上真的红过一次；与本特性无关）。
+  // 下面三段就地证明这件事，别让判据退回去：
+  const BASE64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  const cut = state.indexOf('.');
+  const body = state.slice(0, cut);
+  const mac = state.slice(cut + 1);
+  const lastIndex = BASE64URL.indexOf(mac.slice(-1));
+  assert.equal(lastIndex % 4, 0, 'base64url 末字符的低 2 位应当是零（多出来的比特没人看）');
+  const twin = `${mac.slice(0, -1)}${BASE64URL[lastIndex + 1]!}`;
+  assert.equal(
+    Buffer.from(twin, 'base64url').equals(Buffer.from(mac, 'base64url')),
+    true,
+    '末字符的孪生写法应当解出同一串字节 —— 这就是「改末字符」那种篡改会空转的原因'
+  );
+  const forgedMac = `${mac.slice(0, 1) === 'A' ? 'B' : 'A'}${mac.slice(1)}`;
+  assert.equal(
+    Buffer.from(forgedMac, 'base64url').equals(Buffer.from(mac, 'base64url')),
+    false,
+    '这次篡改必须真的换掉签名字节，否则这条守卫又是空转'
+  );
+  assert.equal(verifyGiteeState(`${body}.${forgedMac}`, config), null, '签名不符必须拒');
+  assert.equal(
+    verifyGiteeState(`${body.slice(0, -1)}${body.endsWith('A') ? 'B' : 'A'}.${mac}`, config),
+    null,
+    '改载荷也必须拒（签名是对载荷**文本**算的，动一个字符就换一组字节）'
+  );
   assert.equal(verifyGiteeState(undefined, config), null, '没带 state 必须拒');
   assert.equal(verifyGiteeState('garbage', config), null, '形状不对必须拒');
 
