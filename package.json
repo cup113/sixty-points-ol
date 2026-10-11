@@ -17,8 +17,8 @@
     "shot:gitee": "pnpm --filter web shot:gitee",
     "arena": "pnpm --filter @sixty/bot arena",
     "check": "pnpm -r check",
-    "deal": "pnpm --filter web deal",
-    "deal:check": "pnpm --filter web deal:check"
+    "deal": "pnpm --filter web guide",
+    "deal:check": "pnpm --filter web guide:check"
   },
   "devDependencies": {
     "typescript": "^5.7.3"

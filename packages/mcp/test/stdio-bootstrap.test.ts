@@ -13,12 +13,21 @@
  */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 
 import { DEFAULT_BASE_URL, startupOf } from '../src/bootstrap.ts';
 
 const ENTRY = fileURLToPath(new URL('../src/stdio.ts', import.meta.url));
+/**
+ * 子进程也要拿到工作区解析钩子：Windows 上 pnpm 把工作区包做成 **junction**，Node 24 于是拒绝对
+ * `node_modules/...` 下的文件做类型擦除（`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`），
+ * 子进程会在 import 阶段就死掉、根本走不到「连不上」那一步。走 `NODE_OPTIONS` 与包自己的
+ * test 脚本同一招；CI 的软链布局下它只是把同一份文件重定向一次，没有副作用。
+ */
+const LOADER = pathToFileURL(
+  fileURLToPath(new URL('../../../tooling/workspace-loader.mjs', import.meta.url))
+).href;
 /** 一个必然连不上的地址：连接被拒是即时的，不吃超时 */
 const DEAD_BASE = 'http://127.0.0.1:1';
 
@@ -29,8 +38,9 @@ interface RunResult {
 
 function runStdio(env: Record<string, string>): Promise<RunResult> {
   return new Promise<RunResult>((resolve, reject) => {
+    const nodeOptions = [process.env['NODE_OPTIONS'], `--import=${LOADER}`].filter(Boolean).join(' ');
     const child = spawn(process.execPath, [ENTRY], {
-      env: { ...process.env, ...env },
+      env: { ...process.env, ...env, NODE_OPTIONS: nodeOptions },
       stdio: ['ignore', 'pipe', 'pipe']
     });
     let stderr = '';

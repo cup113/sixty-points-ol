@@ -13,7 +13,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "node --test --test-isolation=none \"test/*.test.ts\"",
+    "test": "node --import ../../tooling/workspace-loader.mjs --test --test-isolation=none \"test/*.test.ts\"",
     "check": "tsc --noEmit",
     "start": "node src/stdio.ts",
     "mcp-check": "node scripts/mcp-check.ts"
