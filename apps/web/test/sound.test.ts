@@ -375,7 +375,7 @@ test('代码里引用的正是这几个文件名（改名漏一半会被抓出�
 });
 
 test('音乐只在牌桌页：其它页面不引用声音模块', () => {
-  for (const page of ['+page.svelte', 'learn/+page.svelte', 'rules/+page.svelte', 'studio/+page.svelte']) {
+  for (const page of ['+page.svelte', 'learn/+page.svelte', 'rules/+page.svelte']) {
     const source = read(`../src/routes/${page}`);
     for (const needle of ['SoundControl', 'lib/sound', 'SoundBoard']) {
       assert.equal(

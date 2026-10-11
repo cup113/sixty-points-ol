@@ -11,6 +11,8 @@
     selected = [],
     /** 需要标蓝描边的牌（埋底阶段 = 拿上来的底牌）；空数组即无标记 */
     marked = [],
+    /** 需要标金虚线描边的牌（引导局 = 教练点名要出的那几张） */
+    hinted = [],
     selectable = false,
     onToggle
   }: {
@@ -19,6 +21,7 @@
     candidateRanks?: readonly Rank[] | null;
     selected?: readonly string[];
     marked?: readonly string[];
+    hinted?: readonly string[];
     selectable?: boolean;
     onToggle?: (card: Card) => void;
   } = $props();
@@ -69,6 +72,7 @@
           size="lg"
           selected={selected.includes(cardKey(card))}
           marked={marked.includes(cardKey(card))}
+          hinted={hinted.includes(cardKey(card))}
           onclick={selectable ? () => onToggle?.(card) : undefined}
         />
       {/each}

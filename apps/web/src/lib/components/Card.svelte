@@ -16,6 +16,8 @@
     muted = false,
     /** 蓝描边标记：埋底阶段用来指出「这几张是拿上来的底牌」 */
     marked = false,
+    /** 金色虚线描边：引导局里「教练点名要出的这几张」（与选中的金条、底牌的蓝框都不同形） */
+    hinted = false,
     onclick
   }: {
     card: Card;
@@ -25,6 +27,7 @@
     selected?: boolean;
     muted?: boolean;
     marked?: boolean;
+    hinted?: boolean;
     onclick?: () => void;
   } = $props();
 
@@ -57,6 +60,7 @@
   ]}
   data-selected={selected}
   data-marked={marked}
+  data-hinted={hinted}
   disabled={onclick === undefined}
   aria-label={face.aria}
   onclick={() => onclick?.()}

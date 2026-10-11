@@ -60,9 +60,9 @@
  *    （`inert` + 滑出屏幕）；而「牌桌」页的内容（改名 / 换身份、座位已满）在关闭时也必须留在
  *    SSR 里 —— 否则观战者那两条入口就又从「页面上真的在」退化成「标签名存在」。
  * 另外对 /rules 与 /learn 跑同一套 position 守卫 —— 新写的版面正是最容易踩坑的地方；
- * /learn 还额外守住幻灯机骨架（幻灯片语义、自动播放、每屏 aria-label、无裸花色字母）
- * 与深链（`?s=245-trick-8` 必须直接服务端渲染出那一墩的牌面，而不是先给封面再靠 JS 跳），
- * 以及牌局章「三家当前的牌」那条横条：叫牌 17/17/17 → 第 1 墩打完 13/13/13 → 末墩 0/0/0。
+ * /learn（新手引导，ADR-0025）额外守住课程骨架：概念简述 / 门槛式测验 / 引导局外壳三态都要在
+ * SSR 里真的渲染出来，深链 `?s=<step-id>` 直接落在那一步（不是先给第一步再靠 JS 跳），
+ * 且**不许回潮**成幻灯片（语义、自动播放都必须是零），文案无裸花色字母、无方位称谓。
  *
  * 运行：BASE=http://127.0.0.1:5178 node scripts/ui-check.ts
  */
@@ -1123,59 +1123,43 @@ async function main(): Promise<void> {
     '出货样式表里找不到断线提示条的底色 .bg-amber-400/15（提示会失去告警观感）'
   );
 
-  // 10) 规则演示页（/learn）：新版面同样跑 position 守卫，并守住幻灯机的骨架与牌局章
+  // 10) 新手引导页（/learn，ADR-0025）：概念简述 + 门槛式测验 + 引导局，不再是幻灯片
   const learn = await page('/learn');
-  assertNoPositionMix(learn, '规则演示页');
-  assert(!/[东南西]/.test(learn), '规则演示页出现方位称谓');
-  assert(learn.includes('aria-roledescription="幻灯片"'), '演示页缺少「幻灯片」语义');
-  assert(learn.includes('自动播放'), '演示页没有自动播放按钮');
-  assert(learn.includes('规则演示'), '演示页没有章节入口');
-  assert(learn.includes('href="/rules"'), '演示页没有指向文字教程的入口');
+  assertNoPositionMix(learn, '新手引导页');
+  assert(!/[东南西]/.test(learn), '新手引导页出现方位称谓');
+  assert(learn.includes('data-brief'), '第一步不是概念简述屏（课程入口应当是「基础概念 I」）');
+  assert(learn.includes('基础概念 I'), `页头没有当前章入口：${learn.slice(0, 160)}`);
+  assert(learn.includes('href="/rules"'), '新手引导页没有指向文字教程的入口');
+  assert(learn.includes('href="/"'), '新手引导页没有回大厅的入口');
+  assert(/\?s=[a-z0-9-]+/.test(learn), '页脚没有写明这一步的深链写法');
+  assert(bareStrainLetters(learn).length === 0, `新手引导页出现裸花色字母：${bareStrainLetters(learn).join(', ')}`);
+  // 幻灯片语义必须彻底退场（自动播放、屏计数器都是旧形状）
+  assert(!learn.includes('aria-roledescription="幻灯片"'), '新手引导页还带着幻灯片语义');
+  assert(!learn.includes('自动播放'), '新手引导页还留着自动播放');
+
+  // 10b) 深链直接落在指定那一步：服务端渲染出那一步的内容，而不是先给第一步再靠 JS 跳
+  const quizStep = await page('/learn?s=c2-follow-single');
+  assert(quizStep.includes('上家领出 ♣8-9-10-J 四张顺子'), '测验步的深链没有渲染出题干');
+  assert(quizStep.includes('data-quiz'), '测验步没有渲染成测验');
+  assert(quizStep.includes('♣3-4-6'), '测验选项没有渲染出牌面文字');
+  assert(quizStep.includes('答对才能继续'), '测验步没有写出门槛（答对才能继续）');
+  assertNoPositionMix(quizStep, '测验步深链页');
+
+  const endStep = await page('/learn?s=c8-end');
+  assert(endStep.includes('回大厅开一桌'), '收尾屏没有回大厅的入口');
+
+  // 引导局那一步：数据还没接上时如实说「还没到」，接上之后必须是教学桌面 —— 两者必居其一
+  const dealStep = await page('/learn?s=c1-auction');
   assert(
-    /aria-label="第 \d+ 屏，共 \d+ 屏/.test(learn),
-    `演示页每屏没有「第 n 屏，共 N 屏」的 aria-label：${learn.slice(0, 200)}`
+    dealStep.includes('data-guide-board') || dealStep.includes('data-guide-pending'),
+    '引导局步既没有教学桌面、也没有「数据还没接上」的说明'
   );
-  assert(bareStrainLetters(learn).length === 0, `演示页出现裸花色字母：${bareStrainLetters(learn).join(', ')}`);
+  assertNoPositionMix(dealStep, '引导局步深链页');
 
-  /** 三家手牌横条上报的张数（服务端渲染出来的 `data-seat-total`） */
-  const seatTotals = (html: string): number[] =>
-    [...html.matchAll(/data-seat-total="(\d+)"/g)].map((match) => Number(match[1]));
-
-  // 10b) 深链直接落在牌局某一墩：必须带着真实牌面服务端渲染出来（不是先给封面再靠 JS 跳）
-  const trickSlide = await page('/learn?s=245-trick-8');
-  assert(trickSlide.includes('第 8 墩'), '深链没有直接渲染出指定的那一屏');
-  const trickCards = (trickSlide.match(/class="card[ "]/g) ?? []).length;
-  assert(trickCards >= 6, `深链的那一墩至少要有 6 张牌面（三家各一手 + 底牌），实际 ${trickCards}`);
-  assert(trickSlide.includes('本墩'), '牌局章没有写出这一墩的信息');
-  assertNoPositionMix(trickSlide, '牌局章深链页');
-  // 结算屏也是深链：必须把算式与升级都渲染出来
-  const settleSlide = await page('/learn?s=245-settle');
-  assert(settleSlide.includes('打成') || settleSlide.includes('打输'), '结算屏没有写打成/打输');
-  assert(/升 \d+ 级/.test(settleSlide), '结算屏没有写升级级数');
-
-  // 10c) 三家当前的牌：叫牌屏与出牌屏都要能看到，且张数随出牌递减到 0
-  const same = (values: readonly number[], expected: readonly number[]): boolean =>
-    values.length === expected.length && values.every((value, index) => value === expected[index]);
-  const bidSlide = await page('/learn?s=245-bid-1');
-  assert(same(seatTotals(bidSlide), [17, 17, 17]), `叫牌屏三家应当各 17 张：${seatTotals(bidSlide).join(', ')}`);
-  const earlySlide = await page('/learn?s=245-trick-1');
-  assert(
-    same(seatTotals(earlySlide), [13, 13, 13]),
-    `第 1 墩打完三家应当各剩 13 张：${seatTotals(earlySlide).join(', ')}`
-  );
-  assert(
-    same(seatTotals(trickSlide), [0, 0, 0]),
-    `最后一墩打完三家应当空了：${seatTotals(trickSlide).join(', ')}`
-  );
-  assert(trickSlide.includes('牌就出完了'), '最后一墩没有说明这副牌的牌已经出完');
-  // 单位不能丢：写成「主 3」也能过 `主 \d+`，读者却不知道那是「3 张」
-  assert(/主 \d+ 张/.test(bidSlide), `手牌横条没有写清主牌张数（要带「张」）：${bidSlide.match(/主\s*\d+\s*张?/)?.[0]}`);
-  assert(bidSlide.includes('叫牌阶段'), '叫牌屏没有说明这是叫牌阶段的手牌');
-
-  // 11) 入口：大厅指向演示页，教程页指向演示页（互链不能单边）
+  // 11) 入口：大厅指向新手引导，文字教程也指向它（互链不能单边）
   const home = await page('/', players[0]!.credential);
-  assert(home.includes('href="/learn"'), '大厅没有指向规则演示的入口');
-  assert(rules.includes('href="/learn"'), '文字教程页没有指向规则演示的入口');
+  assert(home.includes('href="/learn"'), '大厅没有指向新手引导的入口');
+  assert(rules.includes('href="/learn"'), '文字教程页没有指向新手引导的入口');
 
   console.log('界面结构：position 工具类无混用，毡面是「顶卡 / 内容槽 / 我的底栏」三行格（顶行两张对手卡，不再各自绝对定位）');
   console.log('文案：邀请码可点复制，常驻提示已清空，? 按阶段给说明，界面无方位称谓');
@@ -1189,8 +1173,8 @@ async function main(): Promise<void> {
   console.log('触控：悬停上浮只在鼠标设备生效；出牌按钮 .play-btn 带 z-index:20');
   console.log('页头：大厅 / 邀请码 + 右上角桌况簇（观战人数含 0 常显；在座离座、不在座改名+入座），连接圆点已下线、断线提示不在首帧出现；战报/叫牌/底牌/牌桌 四项页签常驻右边缘，抽屉默认 inert');
   console.log('抽屉：查阅面进抽屉、动作面留桌面；「牌桌」页常驻 SSR（改名/换身份与座位已满始终在页面上）');
-  console.log(`演示：/learn 有幻灯片语义与自动播放；深链 ?s=245-trick-8 直接渲染出 ${trickCards} 张真实牌面；大厅与文字教程都指向它`);
-  console.log(`牌局章：三家当前的牌随出牌递减（叫牌 17/17/17 → 第 1 墩 13/13/13 → 末墩 0/0/0），出牌与手牌之间有配对过渡`);
+  console.log('新手引导：/learn 是交互课程（概念简述 + 门槛式测验 + 引导局），深链 ?s=<step-id> 直接渲染出那一步；大厅与文字教程都指向它');
+  console.log('引导局：数据没接上时如实说「还没到」（data-guide-pending），接上后是教学桌面（data-guide-board）');
   console.log('UI OK');
 }
 

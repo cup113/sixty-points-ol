@@ -33,12 +33,11 @@ packages/mcp        MCP 工具面（stdio 入口 + 与传输无关的工具定�
 apps/web            SvelteKit 2 + Svelte 5 + Tailwind 4 + adapter-node
   src/lib/server/   SQLite（node:sqlite）、身份凭据、Gitee 会话与管理面、牌桌服务、SSE hub、
                     MCP 进程内适配层、机器人调度、机器重演存档（replays，结算时同步算好，见 ADR-0016）
-  src/routes/       大厅、牌桌页、规则演示（/learn）、文字教程（/rules）、牌局编排台（/studio）、管理面（/admin）、
+  src/routes/       大厅、牌桌页、新手引导（/learn）、文字教程（/rules）、管理面（/admin）、
                     REST 动作接口（含入座/离座/加机器人）、Gitee OAuth（/api/auth/gitee/*）、SSE 流、MCP（/api/mcp）
-  src/hooks.server.ts  启动时补扫机器人回合（重启自愈，见 ADR-0015）
-  src/lib/tutorial/ 演示页的幻灯片模型（deck.ts）与示例数据（scenarios.ts）
-  src/lib/tutorial/stories/  由 docs/deals 生成的故事数据（勿手改，见 ADR-0010）
-  src/lib/story/    牌局编排台的内核：种子↔牌局、回放、说明标签、导出/导入、草稿存储
+  src/lib/tutorial/ 概念示例数据（scenarios.ts，被引擎逐个核对）
+  src/lib/guide/    新手引导的内核：课程结构（course.ts）、引导局客户端回放与强制交互、测验判分
+  src/lib/guide/deals/  由 docs/guide 生成的引导局数据（勿手改，见 ADR-0025）
   scripts/          smoke.ts（三人 HTTP 端到端 + 机器重演存档逐副核对）、resume-check.ts（重启续局校验）
                     lobby-check.ts（开局入口回归）、ui-check.ts（版面与文案守卫）
                     spectate-check.ts（观战/离座/改名换身份的端到端回归）
@@ -47,10 +46,11 @@ apps/web            SvelteKit 2 + Svelte 5 + Tailwind 4 + adapter-node
                     shot-gitee.ts（Gitee 登录 / 登出弹窗 / 管理面的验收截图：自拉 dev、往库里种一条 Gitee 会话，
                                    并把「Gitee 身份卡上没有『复制凭据』」「登出确认是覆盖全屏的 fixed 弹窗」
                                    「Gitee 入口是官方 SVG 小图标」钉成断言）
-                    build-deal-stories.ts（牌局 JSON → 演示页数据 + 复核清单）
+                    build-guide.ts（引导局 JSON 校验 + 生成页面数据）、guide-extract.ts（db 副本 → 候选真实牌局清单）
 CONTEXT.md          领域词汇表（术语与已敲定的规则歧义）
 docs/adr/           架构决策记录
-docs/deals/         牌局故事：<slug>.json（牌手导出，原话不改）+ notes/（润色与补写）+ <slug>.review.md（逐条复核）
+docs/guide/         引导局：<slug>.json（真实牌局提取的事实 + 引导词；candidates/ 不提交）
+tooling/            workspace-loader.mjs（`node --test` 的解析钩子：`@sixty/*` → `packages/*/src`）
 ```
 
 ## 规则实现要点
@@ -73,7 +73,8 @@ pnpm test             # 规则引擎测试（node:test，零额外依赖）
 pnpm test:bot         # 机器人策略测试：叫牌/埋底/出牌表驱动单测 + 整局属性测试（3 个机器人打完一场）
                       #                 + 纯净守卫（策略只许依赖引擎、无 IO/随机）
 pnpm test:web         # 前端纯函数测试：扇形布局 / 邀请码解析 / 阶段说明 / 牌面映射 / 结算门槛 / 教程示例 /
-                      #                   牌局编排台（回放·导出·草稿）/ 说明标签 / 牌局故事完整性 / 演示页结构 /
+                      #                   新手引导（课程结构·引导局回放·强制两类拒绝·测验判分·取数路径·生成物守卫）/
+                      #                   说明标签 /
                       #                   角色与观战投影 + 在线态判定 + MCP 作弊面守卫 + 叫牌面板可达性（唯一滚动区、「不叫」钉底）
                       #                 + 机器人座位的进程内集成（延迟调零：打完一副、补位、权限与上限、
                       #                   踢出语义、身份认不出、重启自愈）+ 机器人作弊面守卫
@@ -82,13 +83,14 @@ pnpm check            # 引擎 tsc + 机器人包 tsc + MCP 包 tsc + 应用 sve
 pnpm dev              # SvelteKit 开发服务器（默认 http://localhost:5173）
 pnpm build            # 产出 apps/web/build（adapter-node）
 pnpm start            # 跑构建产物（默认端口 3000，见下）
-pnpm deal             # 把 docs/deals/*.json 重生成演示页数据 + <slug>.review.md
-pnpm deal:check       # 只校验：仓库里的生成物是否等于现场重算（不改文件）
+pnpm guide           # 把 docs/guide/*.json 校验后生成引导局页面数据（deals/<slug>.ts）
+pnpm guide:check     # 只校验：仓库里的生成物是否等于现场重算（不改文件）
+pnpm guide:extract   # 从 data/guide-source.db 副本提取候选真实牌局（三人非 bot、已结算）到 docs/guide/candidates/
 ```
 
-改牌局讲解的流程：在 `/studio` 里改并重新导出 `docs/deals/<slug>.json`，把润色/补写写进
-`docs/deals/notes/<slug>.json`，然后 `pnpm deal`（生成物是提交进仓库的，所以 CI 与镜像构建不需要跑脚本）。
-`pnpm deal:check` 会在「手改生成物」或「改完源文件忘了重跑」时报红。
+改引导局内容的流程：`pnpm guide:extract` 列候选 → 把选中的候选挪成 `docs/guide/<slug>.json`
+并补引导词（用户座位每个动作一句）与复盘要点，然后 `pnpm guide`（生成物提交进仓库，CI 与镜像构建不需要跑脚本）。
+`pnpm guide:check` 会在「手改生成物」「事实与引擎重放不一致」或「用户动作缺引导词」时报红。
 
 环境变量：`PORT`（默认 3000）、`HOST`、`SIXTY_DB`（默认 `<cwd>/data/sixty.db`）。
 
@@ -147,8 +149,8 @@ BASE=http://127.0.0.1:5178 pnpm --filter web ui        # 版面/文案守卫：p
                                                        #   旧形状「floating 的一层 / 旧锚 bottom-full」会压住「我」的底栏）
                                                        # 收墩后的徽标只说「庄 +N 分 / 闲 +N 分」，信息须「回溯」格里那枚「上一轮」
                                                        #   按钮首轮是灰的（disabled）、收墩后可点（浮层默认关着，SSR 首帧里没有 data-trick-review）
-                                                       # /learn 有幻灯片语义与自动播放、深链 ?s=245-trick-8 必须直接
-                                                       #   服务端渲染出那一墩的牌面、大厅与 /rules 都指向它
+                                                       # /learn 是新手引导课程（每步深链 ?s=<step-id>，服务端渲染出该步内容）、
+                                                       #   大厅与 /rules 都指向它
 BASE=http://127.0.0.1:5178 pnpm --filter web resume    # 重启服务端后再跑，校验 SQLite 续局
 BASE=http://127.0.0.1:5178 pnpm --filter web spectate  # 观战/离座/改名换身份：满座第 4 人只看公共信息、
                                                        # 观战负载不含在座手牌、补位继承该座位的手牌与级别、
@@ -189,8 +191,8 @@ pnpm shot                                              # 版面**几何**验收�
 
 - **说明只在一处**：牌桌上的阶段玩法说明全部收在左下角的「?」弹层（内容与 `/rules` 教程同源，
   见 `packages/engine/src/help.ts`）；界面上不再有常驻提示文案，玩家不需要在三个角落各读一遍。
-- **三处讲解分工**（见 CONTEXT.md）：牌桌「?」弹层是**打牌时的即时说明**（按阶段给）、`/learn` 是**演示**
-  （幻灯片，含三副真实牌局的逐步讲解）、`/rules` 是**逐段查证**的长文。三者共用术语与被引擎核对过的示例，
+- **三处讲解分工**（见 CONTEXT.md）：牌桌「?」弹层是**打牌时的即时说明**（按阶段给）、`/learn` 是**新手引导**
+  （交互课程：概念简述 + 测验 + 引导局，见 ADR-0025）、`/rules` 是**逐段查证**的长文。三者共用术语与被引擎核对过的示例，
   不互相复制整段文本；`/learn` 是默认入口（大厅与 `/rules` 都指它），两边互链。
 - **玩家名而不是方位**：文案里一律用玩家名或「你」（`whoLabel`），不出现「东/南/西家」——
   座位卡显示的就是名字，而**座位在屏幕上没有锚点位置**。
@@ -307,11 +309,12 @@ pnpm shot                                              # 版面**几何**验收�
   座位与身份）。`apps/web/test/table-chrome.test.ts` 与 `scripts/ui-check.ts` 一起守着这些
   （页头白名单 + 桌况簇三态 + 页签清单 + 动作面不许进抽屉 + 连接提示只许在断线时出现），
   免得页头再一次被堆满。
-- **规则演示**：`/learn` 是幻灯片式演示（键盘 ← → / 空格翻页、自动播放、每屏深链 `/learn?s=<屏 id>`）。
-  「基本概念」15 屏的示例全部复用 `/rules` 那份被引擎核对过的数据；三副实战牌局来自 `docs/deals/`，
-  每一手都有讲解，**讲解的来路**（原话 / 润色 / 补写）逐条记在 `docs/deals/<slug>.review.md`。
-  牌局数据是生成物（`stories/<slug>.ts`）并提交进仓库，页面渲染不跑回放、不碰随机数 —— 所以引擎或随机数
-  将来变了，已发布的讲解也不会变味；真要变是 `pnpm deal:check` 报红，由人决定重新生成（见 ADR-0010）。
+- **新手引导**：`/learn` 是交互课程：概念简述 + 门槛式测验 + **引导局**（用户坐进一副真实牌局的一个座位，
+  对手自动出牌、用户每个动作被引导词强制带着打，过程只见自己的手牌、打完全亮复盘，见 ADR-0025）。
+  每步深链 `/learn?s=<step-id>`，进度存 localStorage 可续读；概念示例复用 `/rules` 那份被引擎核对过的数据。
+  引导局数据取自「三人均非机器人」的真实牌局（`guide:extract` 从 db 副本提取候选），牌面事实烘焙进
+  `docs/guide/<slug>.json`，客户端用引擎 `dealWith` 从显式手牌确定性重放 —— 不依赖种子；生成物
+  （`guide/deals/<slug>.ts`）提交进仓库，`pnpm guide:check` 核对「生成物 == 现场重算」。
 
 ## 身份与凭据
 

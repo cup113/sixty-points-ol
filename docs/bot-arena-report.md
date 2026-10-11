@@ -230,8 +230,9 @@ node packages/bot/scripts/arena.ts --mode deal --seeds 2000 --seed0 9000 --ratio
   CLI 现在会把这种细胞标成**空转**并告警，`legacy-baseline` 变体就是为这种场景准备的。
 - **没做的方向**（想推进要单独立项）：防守方「穿同伴已证缺门」的协作领出、用同伴缺门诱导杀牌、
   叫牌阶段利用搭档信息，以及任何搜索/学习类方法（ADR-0015 明确不做）。
-- **`docs/deals/*.json` 那三份讲评不受影响**：它们是作者自己打出来的记录，与机器人策略无关
-  （`build-deal-stories.ts` 不 import `@sixty/bot`），`pnpm deal:check` 照旧。
+- **本节涉及的三份旧讲评（`docs/deals/*.json`）已随 ADR-0025 退役**：它们是作者自己打出来的记录，与机器人策略无关，
+  作为历史结论保留；当时的结论「这条链路不 import `@sixty/bot`」对现在的 `pnpm guide:check` 同样成立
+  （引导局校验只 import 引擎）。
 - **机器重演（ADR-0016）是快照**：已落库的记录保持原样（那正是快照的语义），但同一副牌在参数变了之后
   重算会给出不同结果 —— 这是「策略是版本化输入」的直接后果，不是缺陷。
 

@@ -10,7 +10,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "node --test --test-isolation=none \"test/*.test.ts\"",
+    "test": "node --import ../../tooling/workspace-loader.mjs --test --test-isolation=none \"test/*.test.ts\"",
     "check": "tsc --noEmit",
     "arena": "node scripts/arena.ts"
   },

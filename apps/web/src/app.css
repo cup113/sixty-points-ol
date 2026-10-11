@@ -210,6 +210,17 @@ button:disabled {
   pointer-events: none;
 }
 
+/* 引导局里「教练点名要出的这几张」：金色**虚线**外框。
+   与选中的金条 + 上浮、来自底牌的蓝框都不同形，三者可以同时出现而不打架。 */
+.card[data-hinted='true']::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border: 2px dashed var(--color-gold);
+  border-radius: inherit;
+  pointer-events: none;
+}
+
 /* ---------- 手牌扇形 ---------- */
 /* 多行容器：窄屏放不下可读下限时切行，行距容纳选中牌上移的 26px。
    padding-top 让上浮的牌还留在容器内，但**不等于**按钮的安全区 ——
@@ -357,7 +368,7 @@ button:disabled {
 }
 
 /* 系统要求减少动态效果时，纯 CSS 动画一律关掉；
-   Svelte 那几处过渡由 deck/motion.ts 的 motionMs() 归零，两条路都要盖上。 */
+   引导局里的 Svelte 过渡（牌面落牌之类）由组件自己按系统设置归零，两条路都要盖上。 */
 @media (prefers-reduced-motion: reduce) {
   .drop-in,
   .shake,
