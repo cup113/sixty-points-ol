@@ -6,6 +6,7 @@
    * 答对 → 给确认解释 → 「继续」。全对之后才回调 `onDone`，课程壳据此放行下一步。
    */
   import CardRow from '$lib/components/CardRow.svelte';
+  import RichText from './RichText.svelte';
   import { handFromKeys } from '$lib/guide/replay';
   import { gradeQuiz, type GradeResult } from '$lib/guide/quiz';
   import type { QuizQuestion } from '$lib/guide/types';
@@ -54,7 +55,9 @@
     <span class="text-[10px] text-white/45">第 {index + 1} / {questions.length} 题</span>
   </div>
 
-  <p class="text-[13px] leading-relaxed text-white/80">{question.prompt}</p>
+  <p class="text-[13px] leading-relaxed text-white/80">
+    <RichText text={question.prompt} />
+  </p>
 
   {#if cards.length > 0}
     <div class="rounded-xl bg-black/30 px-2 py-3">
@@ -89,7 +92,7 @@
         >
           {question.kind === 'multi' ? (active ? '✓' : '') : String.fromCharCode(65 + question.options.indexOf(option))}
         </span>
-        <span class="min-w-0 flex-1">{option.text}</span>
+        <span class="min-w-0 flex-1"><RichText text={option.text} /></span>
       </button>
     {/each}
   </div>
@@ -114,18 +117,29 @@
       data-quiz-feedback={result.ok ? 'ok' : 'retry'}
     >
       {#each result.feedback as line, i (i)}
-        <p>{line}</p>
+        <p><RichText text={line} /></p>
       {/each}
     </div>
   {/if}
 
   {#if settled}
-    <button
-      type="button"
-      class="rounded-lg bg-gold/20 px-3 py-1.5 text-[11px] font-semibold text-gold ring-1 ring-gold/40"
-      onclick={next}
-    >
-      {index + 1 < questions.length ? '下一题 →' : '继续 →'}
-    </button>
+    {#if index + 1 < questions.length}
+      <button
+        type="button"
+        class="rounded-lg bg-gold/20 px-3 py-1.5 text-[11px] font-semibold text-gold ring-1 ring-gold/40"
+        onclick={next}
+      >
+        下一题 →
+      </button>
+    {:else}
+      <button
+        type="button"
+        class="rounded-lg bg-gold/20 px-3 py-1.5 text-[11px] font-semibold text-gold ring-1 ring-gold/40"
+        onclick={next}
+        data-quiz-passed
+      >
+        这一组过了 ✓ 往下读
+      </button>
+    {/if}
   {/if}
 </section>
