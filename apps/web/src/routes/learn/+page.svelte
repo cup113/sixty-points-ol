@@ -227,7 +227,7 @@
     <a class="text-xs text-white/50 hover:text-white" href="/">← 大厅</a>
     <a class="text-xs text-white/50 hover:text-white" href="/rules">文字教程</a>
     <div class="ml-auto flex flex-wrap items-center gap-1.5">
-      <span class="text-[11px] text-white/45">
+      <span class="text-xs text-white/45">
         第 <b class="text-gold/80">{actNo}</b> 幕 · {chapter.title}
       </span>
       <button type="button" class={ghost} onclick={() => (mapOpen = !mapOpen)} aria-expanded={mapOpen}>

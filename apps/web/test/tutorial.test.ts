@@ -56,6 +56,7 @@ import {
   OFF_RANK_EQUALS,
   PHASES,
   POINT_CARDS,
+  POINT_UNITS,
   RUFF_LEAD,
   RUFF_WINNER,
   RUN_NOT_ADJACENT,
@@ -92,6 +93,7 @@ test('handOf 只接受真实存在的牌面键', () => {
 test('示例牌面本身自洽：同一手牌不重复、领出的牌不在自己手里', () => {
   const hands: readonly [string, readonly Card[]][] = [
     ['POINT_CARDS', POINT_CARDS],
+    ['POINT_UNITS', POINT_UNITS.map((unit) => unit.card)],
     ['BURY_HAND', BURY_HAND],
     ['DEMO_KITTY', DEMO_KITTY],
     ['TRICK_DEMO', TRICK_DEMO],

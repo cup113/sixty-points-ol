@@ -81,6 +81,24 @@ export function cardsOf(keys: readonly string[]): Card[] {
 
 /* ---------- 1. 分值 ---------- */
 
+/**
+ * 引导屏的「分值六例」：每一格是**一张牌 + 它值多少分**（单元内上下布局）。
+ *
+ * 刻意混进 ♣6、♠A 与大王：新手容易以为「大牌就值钱」，这三张正是反例 ——
+ * 上排三张全是分牌、下排三张全是 0 分，规则由版式讲出来，不必再写一句说明。
+ * （`/rules` 那一节仍用 `POINT_CARDS` 的牌面图与 `POINT_ROWS` 的速查行：
+ * 那边要的是「一类牌一行」，与引导屏的「一张牌一格」粒度不同，各留一份。）
+ */
+export const POINT_UNITS: readonly { readonly card: Card; readonly points: number }[] = [
+  { card: lookup('H5'), points: 5 },
+  { card: lookup('S10'), points: 10 },
+  { card: lookup('DK'), points: 10 },
+  { card: lookup('C6'), points: 0 },
+  { card: lookup('j1'), points: 0 },
+  { card: lookup('SA'), points: 0 }
+];
+
+/** `/rules` 的牌面图：三种分牌各一张 + 两张王（王在图上，但一行速查里写着 0 分） */
 export const POINT_CARDS = handOf('H5', 'D10', 'SK', 'j0', 'j1');
 
 export const POINT_ROWS: readonly { readonly label: string; readonly points: number }[] = [

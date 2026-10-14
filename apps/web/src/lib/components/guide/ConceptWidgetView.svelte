@@ -27,8 +27,7 @@
     LEVEL_DEMO,
     LEVEL_STEPS,
     MULTIPLIER_ROWS,
-    POINT_CARDS,
-    POINT_ROWS,
+    POINT_UNITS,
     RUFF_LEAD,
     RUFF_WINNER,
     TRICK_DEMO,
@@ -48,8 +47,8 @@
   let { widget }: { widget: ConceptWidget } = $props();
 
   const box = 'rounded-xl bg-black/30 p-3';
-  const env = 'mb-2 text-[11px] text-gold/70';
-  const chip = 'rounded-md bg-white/10 px-2 py-1 text-[11px]';
+  const env = 'mb-2 text-xs text-gold/70';
+  const chip = 'rounded-md bg-white/10 px-2 py-1 text-xs';
 
   const heartTrumps = trumpGroups(TRUMP_HEARTS);
   const ntTrumps = trumpGroups(TRUMP_NT);
@@ -63,13 +62,16 @@
 
 {#if widget.kind === 'point-values'}
   <div class={box}>
-    <p class={env}>分值只看牌面：5 / 10 / K</p>
-    <CardRow cards={POINT_CARDS} size="md" />
-    <div class="mt-2 flex flex-wrap gap-1.5">
-      {#each POINT_ROWS as row (row.label)}
-        <span class={chip}>{row.label} = <b class="text-gold">{row.points}</b> 分</span>
+    <ul class="grid grid-cols-3 gap-x-2 gap-y-3">
+      {#each POINT_UNITS as unit (cardKey(unit.card))}
+        <li class="flex flex-col items-center gap-1">
+          <CardRow cards={[unit.card]} size="md" />
+          <span class={unit.points > 0 ? 'text-xs font-semibold text-gold' : 'text-xs text-white/45'}>
+            {unit.points} 分
+          </span>
+        </li>
       {/each}
-    </div>
+    </ul>
   </div>
 {:else if widget.kind === 'point-places'}
   <div class={box}>
