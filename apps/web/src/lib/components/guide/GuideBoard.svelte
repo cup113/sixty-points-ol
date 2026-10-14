@@ -1,27 +1,48 @@
 <script lang="ts">
   /**
-   * 引导局的教学桌面（CONTEXT.md 的 **引导局**、**教练栏** 与 **收墩停留**）。
+   * 引导局的教学桌面（CONTEXT.md 的 **引导局**、**教练栏**、**座位气泡** 与 **收墩停留**）。
    *
    * 分工：**规则全在 `guide/session.ts`（纯函数）里**，这里只有接线与手感 ——
    * 定时器、选中态、拒绝提示、动画。于是「强制怎么判、下一步该谁动」都被单测盯着，
    * 而这一层改排版不会碰到规则（ADR-0008 的同一条纪律）。
    *
-   * 四件事在这里实现：
+   * 七件事在这里实现：
    * 1. **对手自动出牌**：延迟按动作分档（叫牌/埋底 1.5s、出牌 1.1s）——教程要留出
    *    读叫牌历史表与引导词的时间，反而该比真桌的机器人（0.5–1.5s）慢；随时可「跳过等待」。
-   * 2. **收墩停留**：`stepOnce`/`submit*` 返回的 `events.trickWon` 在这里被消费 ——
-   *    一墩收起时三家牌在出牌区**原地停 2 秒**配赢家徽标，才清场进下一轮。
-   * 3. **用户座位全量强制**：他点牌只是「选择」，出手一律由 `submit*` 判定 ——
+   * 2. **收墩停留 + 两行式出牌区**：`events.trickWon` 在这里被消费 —— 一墩收起时三家牌
+   *    **原地停 2 秒**配赢家徽标；停留结束不是清场，整墩带着同一个 key 从「这一墩」行
+   *    flip 搬进「上一墩」行（缩一档常驻）—— 效仿正式打牌的摆两行，收墩不跳变。
+   * 3. **座位气泡**：对手动作的 `notes` 解说挂在**动作者那一席**下面的气泡里 ——
+   *    最近 `SAY_WINDOW` 条**并存**（同一席连说两条只留最新，原地换字），一条新气泡
+   *    冒出来不许把上一条顶走；文案里的 `**粗体**` 走 `RichText`，星号不上屏。
+   * 4. **轮次只有一个真相源**：`actingSeat` = 段内下一条动作的座位。座位卡的轮次环、
+   *    叫牌盘的引导金框（经 `active` 门）、等待栏的「X 在想」读的都是它 ——
+   *    没轮到你，金框不亮，你不会以为该自己了。
+   * 5. **用户座位全量强制**：他点牌只是「选择」，出手一律由 `submit*` 判定 ——
    *    不合法给引擎的理由，合法但非引导牌指回教练栏（两类拒绝，见 `forcing.ts`）。
-   * 4. **过程只见自己的手牌**：对手只报张数；复盘屏才全亮三家。手牌过引擎的
+   * 6. **过程只见自己的手牌**：对手只报张数；复盘屏才全亮三家。手牌过引擎的
    *    `sortHand`（真桌 **个人视图** 同一份序：主牌在前、副牌黑红交替、同门内大到小）。
+   * 7. **实时数住进信息须，讲解面贴着手牌**：定约 / 级牌 / 庄已抓 / 轮数在出牌区顶上
+   *    摆成大号金字（真桌 **信息须** 的引导局版，不再缩成一行 10px 小字）；教练栏排在
+   *    手牌**正上方** —— 它讲的就是底下那几张牌，讲解面不垫底。
    */
-  import { cardKey, declarerTrickPoints, highestBid, sortHand, type Card, type CompletedTrick } from '@sixty/engine';
+  import {
+    cardKey,
+    declarerTrickPoints,
+    highestBid,
+    rankLabel,
+    sortHand,
+    type Card,
+    type CompletedTrick,
+    type TrickPlay
+  } from '@sixty/engine';
   import { untrack } from 'svelte';
+  import { flip } from 'svelte/animate';
+  import { fade } from 'svelte/transition';
   import AuctionHistory from '$lib/components/AuctionHistory.svelte';
   import HandFan from '$lib/components/HandFan.svelte';
   import TrickCluster from '$lib/components/TrickCluster.svelte';
-  import { callText, cardText, trickSideBadge, trumpText } from '$lib/labels';
+  import { callText, cardText, isRedStrain, strainGlyph, trickSideBadge } from '$lib/labels';
   import { describeTarget, guidedCards, judgeBury, judgePlay, type Rejection } from '$lib/guide/forcing';
   import { dealSpans, handFromKeys, sameCards } from '$lib/guide/replay';
   import {
@@ -42,6 +63,7 @@
   import type { DealSegment, GuideDealData } from '$lib/guide/types';
   import CoachBar from './CoachBar.svelte';
   import GuideBidBoard from './GuideBidBoard.svelte';
+  import RichText from './RichText.svelte';
 
   let {
     deal,
@@ -64,8 +86,16 @@
   const THINK_DELAY_MS = 1500;
   /** 对手出牌的延迟：看清谁出了什么就够了 */
   const PLAY_DELAY_MS = 1100;
-  /** 收墩后的停留：三家牌原地摆着 + 赢家徽标，然后才清场（「跳过等待」可立即过去） */
+  /** 收墩后的停留：三家牌原地摆着 + 赢家徽标，然后才搬进「上一墩」行（「跳过等待」可立即过去） */
   const TRICK_HOLD_MS = 2000;
+  /** 系统要求减少动态：flip/fade 是 Svelte 过渡不是纯 CSS，归零要组件自己来（app.css 媒体查询的另一半） */
+  const CALM =
+    typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  /** 完成的一墩从「这一墩」行搬进「上一墩」行的时长 */
+  const FLIP_MS = CALM ? 0 : 480;
+  const FADE_MS = CALM ? 0 : 160;
+  /** 气泡巷同时留几条对手解说：新的一条冒出来时前一条还在 —— 别一冒就走 */
+  const SAY_WINDOW = 2;
 
   const spans = $derived(dealSpans(deal));
   const range = $derived(
@@ -115,33 +145,68 @@
   const coachWord = $derived(coachIndex < 0 ? null : (deal.guides[String(coachIndex)] ?? null));
   const waiting = $derived(myTurn === null && snapshot.phase === 'playing' && snapshot.index < range.to);
   const played = $derived(currentPlays(snapshot));
-  const lastWon = $derived(
-    played.length === 0 ? (dealState?.trickHistory ?? []).at(-1) ?? null : null
-  );
   /** 拿上来的底牌（只在埋底阶段给庄家亮，闲家那一章用不到） */
   const kittyTaken = $derived(takenKitty(snapshot));
   const declarerSeat = $derived(dealState?.contract?.declarerSeat ?? null);
+  const contract = $derived(dealState?.contract ?? null);
+  /** 当前最高叫品：叫牌没结束时它就是要成为定约的那个 —— 信息须「定约」格先摆它 */
+  const highest = $derived(dealState === null ? null : highestBid(dealState.auction));
   /** 庄家已抓的分（真桌 **信息须** 同一个来源：引擎 `declarerTrickPoints`） */
   const declarerPts = $derived(dealState === null ? 0 : declarerTrickPoints(dealState));
   /** 还在叫牌阶段时，按三家级别点数预示「哪些牌可能成为本副级牌」 */
   const candidateRanks = $derived(trump === null ? deal.facts.levels.map((level) => level.rank) : null);
-  /** 等对手出手那条的解说：刚出手那家在 notes 里留了话就显示（notes 此前几乎看不到） */
-  const waitingNote = $derived.by(() => {
-    if (!waiting || snapshot.index === 0) return null;
-    const note = deal.notes?.[String(snapshot.index - 1)];
-    const actor = deal.actions[snapshot.index - 1]?.seat;
-    if (note === undefined || actor === undefined || actor === deal.learnerSeat) return null;
-    return `${deal.aliases[actor] ?? `座位 ${actor}`}：${note}`;
+
+  /** 现在该谁动：段内下一条动作的座位（轮到你时它就是 deal.learnerSeat）。座位卡的轮次环、叫牌盘的金框门、等待栏的「X 在想」读的都是这一份 —— 轮次只有一个真相源，金框才不会先亮 */
+  const actingSeat = $derived(
+    snapshot.phase !== 'playing' || snapshot.index >= range.to
+      ? null
+      : (deal.actions[snapshot.index]?.seat ?? null)
+  );
+
+  /**
+   * 最近的对手解说（新在前，最多 `SAY_WINDOW` 条）：各挂各的席位 —— 一条新气泡冒出来时，
+   * 前一条**还在**，两条对话同摆桌上才是牌桌。同一席连着说了两条（赢下这墩又领下一墩）
+   * 只留最新：那一席的气泡原地换字（`{#key at}` 重弹），不叠两条。
+   */
+  const says = $derived.by(() => {
+    const recent: { seat: number; at: number; text: string }[] = [];
+    for (let at = snapshot.index - 1; at >= 0 && recent.length < SAY_WINDOW; at--) {
+      const actor = deal.actions[at]?.seat;
+      const note = deal.notes?.[String(at)];
+      if (note === undefined || actor === undefined || actor === deal.learnerSeat) continue;
+      if (recent.length > 0 && recent[0]?.seat === actor) break;
+      recent.push({ seat: actor, at, text: note });
+    }
+    return recent;
   });
 
   function nameOf(seat: number): string {
     return deal.aliases[seat] ?? `座位 ${seat}`;
   }
 
-  function seatOfCluster(index: number): number {
-    const play = played[index];
-    return play === undefined ? -1 : play.seat;
+  /** 出牌区的一行：key = 墩序（1 起）。同一墩从「这一墩」行搬进「上一墩」行时 key 不变，flip 才接得住这次搬家 */
+  interface TrickRow {
+    readonly key: number;
+    readonly plays: readonly TrickPlay[];
+    readonly trick: CompletedTrick | null;
+    readonly mini: boolean;
   }
+
+  /** 两行式：第一行永远是「这一墩」（进行中或收墩停留，谁出的牌摆在谁那一列），第二行是「上一墩」缩一档常驻 —— 收墩是**搬下去**，不是清场重来 */
+  const trickRows = $derived.by(() => {
+    const history = dealState?.trickHistory ?? [];
+    const rows: TrickRow[] = [];
+    if (heldTrick !== null) {
+      rows.push({ key: history.length, plays: heldTrick.plays, trick: heldTrick, mini: false });
+      const prev = history.length >= 2 ? (history[history.length - 2] ?? null) : null;
+      if (prev !== null) rows.push({ key: history.length - 1, plays: prev.plays, trick: prev, mini: true });
+    } else {
+      rows.push({ key: history.length + 1, plays: played, trick: null, mini: false });
+      const prev = history.length >= 1 ? (history[history.length - 1] ?? null) : null;
+      if (prev !== null) rows.push({ key: history.length, plays: prev.plays, trick: prev, mini: true });
+    }
+    return rows;
+  });
 
   /** 一次推进之后：收墩了就把那墩**原地停住**（`events.trickWon` 在这里被消费） */
   function holdIfWon(next: SessionSnapshot, trickWon: boolean): SessionSnapshot {
@@ -275,87 +340,150 @@
 </script>
 
 <div class="space-y-2" data-guide-board>
-  <!-- 顶行：两张对手卡（牌面不给看，只报张数；定约未定时说「叫牌中」，不冒称闲家） -->
-  <div class="grid grid-cols-2 gap-2">
-    {#each [0, 1, 2].filter((seat) => seat !== deal.learnerSeat) as seat (seat)}
-      <div class="rounded-xl bg-black/30 px-2.5 py-1.5" data-guide-seat={seat}>
-        <p class="flex items-baseline justify-between gap-2 text-[11px]">
-          <b class="truncate text-ivory">{nameOf(seat)}</b>
-          <span class="shrink-0 text-white/45">
-            {declarerSeat === null
-              ? '叫牌中'
-              : seat === declarerSeat
-                ? '庄家'
-                : '闲家'} · 剩 {dealState?.hands[seat]?.length ?? 0} 张
-          </span>
+  <!-- 座位行：三家都在（含「你」），列序与底下出牌区一一对齐 —— 气泡与牌列都以它为锚。
+       轮到谁，谁的卡亮金环（牌面照旧不给看，只报张数；定约未定时说「叫牌中」，不冒称闲家） -->
+  <div class="grid grid-cols-3 gap-1.5">
+    {#each [0, 1, 2] as seat (seat)}
+      <div
+        class={[
+          'rounded-xl px-2 py-1 transition',
+          'bg-black/30',
+          actingSeat === seat
+            ? 'ring-2 ring-gold/80'
+            : seat === deal.learnerSeat
+              ? 'ring-1 ring-gold/30'
+              : 'ring-1 ring-white/10'
+        ]}
+        data-guide-seat={seat}
+        data-turn={actingSeat === seat}
+      >
+        <p
+          class={[
+            'truncate text-[11px]',
+            seat === deal.learnerSeat ? 'font-semibold text-gold' : 'text-ivory'
+          ]}
+        >
+          {nameOf(seat)}
+        </p>
+        <p class="truncate text-[10px] text-white/45">
+          {declarerSeat === null ? '叫牌中' : seat === declarerSeat ? '庄家' : '闲家'} ·
+          {dealState?.hands[seat]?.length ?? 0} 张
         </p>
       </div>
     {/each}
   </div>
 
-  <!-- 出牌区：三家各一个点，谁出的牌就摆在谁那一格里 -->
-  <div class="rounded-xl bg-black/25 p-2">
-    <div class="flex flex-wrap items-center justify-between gap-2">
-      <p class="text-[10px] text-white/45">
-        {#if dealState?.phase === 'auction'}
-          叫牌 · 第 {deal.facts.dealNo} 副 · {dealState.auction.length} 手已叫
-        {:else if trump !== null}
-          {trumpText(trump)} · {dealState?.phase === 'bury' ? '埋底中' : '出牌中'} · 第 {(dealState?.trickHistory.length ?? 0) + 1} 轮
-        {:else}
-          —
+  <!-- 解说气泡巷：最近两条对手解说各挂各的席位（新的一条冒出来，前一条还在），同一席
+       连说两条时原地换字；巷高按三行解说预留足，冒泡不顶动桌面（再长的 note 由
+       line-clamp-3 收进这个高度里）。文案里的 **粗体** 走 RichText -->
+  <div class="grid min-h-[3.2rem] grid-cols-3 gap-1.5" data-say-lane aria-live="polite">
+    {#each [0, 1, 2] as seat (seat)}
+      {@const note = says.find((item) => item.seat === seat) ?? null}
+      <div class="relative min-w-0">
+        {#if note !== null}
+          {#key note.at}
+            <div
+              class="say pts-pop relative rounded-lg bg-felt-800 px-2 py-1 ring-1 ring-white/15"
+              data-say={seat}
+              transition:fade={{ duration: FADE_MS }}
+            >
+              <i
+                class="absolute -top-1 left-1/2 -ml-1 size-2 rotate-45 rounded-[2px] bg-felt-800"
+                aria-hidden="true"></i>
+              <p class="line-clamp-3 text-[10px] leading-snug text-ivory">
+                <RichText text={note.text} />
+              </p>
+            </div>
+          {/key}
         {/if}
-      </p>
-      {#if (heldTrick ?? lastWon) !== null && declarerSeat !== null}
-        <span
-          class="rounded-md bg-gold/15 px-2 py-0.5 text-[10px] font-semibold text-gold"
-          data-trick-badge
-        >
-          {heldTrick !== null ? '这一轮' : '上一轮'} {nameOf((heldTrick ?? lastWon)!.winnerSeat)} 赢 ·
-          {trickSideBadge(declarerSeat, (heldTrick ?? lastWon)!.winnerSeat, (heldTrick ?? lastWon)!.points)}
-        </span>
-      {/if}
-    </div>
-    <div class="mt-1.5 grid grid-cols-3 gap-1.5">
-      {#if heldTrick !== null}
-        <!-- 收墩停留：整墩原地摆住，谁出的还在谁那格 -->
-        {#each [0, 1, 2] as seat (seat)}
-          {@const play = heldTrick.plays.find((item) => item.seat === seat)}
-          <div class="min-w-0">
-            {#if play !== undefined}
-              <TrickCluster cards={play.cards} {trump} caption={nameOf(seat)} />
-            {:else}
-              <div class="min-h-[3.5rem]"></div>
-            {/if}
-          </div>
-        {/each}
-      {:else}
-        {#each [0, 1, 2] as slot (slot)}
-          {@const seat = seatOfCluster(slot)}
-          {@const play = played[slot]}
-          <div class="min-w-0">
-            {#if play !== undefined}
-              <TrickCluster cards={play.cards} {trump} caption={nameOf(play.seat)} />
-            {:else}
-              <div class="min-h-[3.5rem]"></div>
-            {/if}
-          </div>
-        {/each}
-      {/if}
-    </div>
-    <!-- 上一轮的小行：停留期间不渲染（同墩不双显），停留结束后接手回看 -->
-    {#if lastWon !== null && heldTrick === null}
-      <div class="mt-1.5 flex flex-wrap items-end gap-2">
-        {#each lastWon.plays as play (play.seat)}
-          <TrickCluster cards={play.cards} {trump} caption={`上轮 · ${nameOf(play.seat)}`} />
-        {/each}
       </div>
-    {/if}
+    {/each}
+  </div>
+
+  <!-- 出牌区（两行式，效仿正式打牌摆两行）：第一行 = 这一墩（进行中或收墩停留），
+       第二行 = 上一墩缩一档。收墩时牌不消失：整墩带着同一个 key 从第一行 flip 搬进第二行，
+       再由更老的墩把它顶出去。赢家徽标摆在赢家那一列（与真桌 TrickArea 同一语义：位置即身份） -->
+  <div class="rounded-xl bg-black/25 p-2">
+    <!-- 桌面信息须：定约 / 级牌 / 庄已抓 / 轮数四个大号金字（真桌 InfoRail 的引导局版）——
+         级牌、庄分这些实时数决定进退，不该缩成一行 10px 小字。叫牌没结束时「定约」格
+         先摆当前最高叫品（它就是要成为定约的那个），级牌 / 庄分照旧「—」；标签小、值大，
+         与真桌那条同一套视觉语言（值一律 text-gold + tabular-nums） -->
+    <div class="grid grid-cols-4 gap-px overflow-hidden rounded-lg bg-white/10 text-center" data-guide-rail>
+      <div class="bg-black/40 px-1 pb-1.5 pt-1.5" data-guide-rail-cell="contract">
+        <p class="text-[10px] leading-none text-white/45">定约</p>
+        <b class="mt-1 block truncate text-base font-black leading-none tabular-nums text-gold">
+          {#if contract !== null}
+            {contract.points}<span class={isRedStrain(contract.strain) ? 'text-rose-300' : ''}>{strainGlyph(contract.strain)}</span>
+          {:else if highest !== null}
+            {callText(highest)}
+          {:else}
+            —
+          {/if}
+        </b>
+      </div>
+      <div class="bg-black/40 px-1 pb-1.5 pt-1.5" data-guide-rail-cell="level">
+        <p class="text-[10px] leading-none text-white/45">级牌</p>
+        <b class="mt-1 block truncate text-base font-black leading-none tabular-nums text-gold">
+          {trump === null ? '—' : rankLabel(trump.rank)}
+        </b>
+      </div>
+      <div class="bg-black/40 px-1 pb-1.5 pt-1.5" data-guide-rail-cell="points">
+        <p class="text-[10px] leading-none text-white/45">庄已抓</p>
+        <b class="mt-1 block truncate text-base font-black leading-none tabular-nums text-gold">
+          {#if contract === null}—{:else}{declarerPts}<span class="ml-0.5 text-[10px] font-normal text-white/60">分</span>{/if}
+        </b>
+      </div>
+      <div class="bg-black/40 px-1 pb-1.5 pt-1.5" data-guide-rail-cell="round">
+        <p class="text-[10px] leading-none text-white/45">轮数</p>
+        <b class="mt-1 block truncate text-base font-black leading-none text-gold">
+          {#if dealState === null || dealState.phase === 'auction'}
+            叫牌
+          {:else if dealState.phase === 'bury'}
+            埋底
+          {:else if dealState.phase === 'scored'}
+            结算
+          {:else}
+            第 {(dealState.trickHistory.length ?? 0) + 1} 轮
+          {/if}
+        </b>
+      </div>
+    </div>
+    <div class="mt-1.5 flex flex-col gap-1.5">
+      {#each trickRows as row (row.key)}
+        <div
+          class={['grid grid-cols-3 gap-1.5', row.mini ? 'trick-mini opacity-60' : 'trick-live']}
+          animate:flip={{ duration: FLIP_MS }}
+          transition:fade={{ duration: FADE_MS }}
+          data-trick-row={row.mini ? 'prev' : 'live'}
+        >
+          {#each [0, 1, 2] as seat (seat)}
+            {@const play = row.plays.find((item) => item.seat === seat)}
+            <div class="min-w-0">
+              {#if play !== undefined}
+                <TrickCluster
+                  cards={play.cards}
+                  {trump}
+                  badge={
+                    row.trick !== null && declarerSeat !== null && row.trick.winnerSeat === seat
+                      ? trickSideBadge(declarerSeat, row.trick.winnerSeat, row.trick.points)
+                      : null
+                  }
+                />
+              {:else}
+                <div class="spot-empty"></div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      {/each}
+    </div>
   </div>
 
   {#if needsBid || dealState?.phase === 'auction'}
     <GuideBidBoard
-      highest={dealState === null || dealState === undefined ? null : highestBid(dealState.auction)}
+      {highest}
       target={coachAction !== null && coachAction.type === 'bid' ? coachAction.call : 'pass'}
+      active={needsBid}
       onpick={pickBid}
     />
     <!-- 叫牌历史：与真桌同一份三列表格（列 = 三家、行 = 一轮、最高叫品标金） -->
@@ -366,8 +494,9 @@
 
   {#if waiting}
     <div class="flex items-center justify-between gap-2 rounded-xl bg-black/25 px-2.5 py-1.5 text-[11px] text-white/50">
-      <span class="min-w-0 flex-1 truncate" data-waiting-note={waitingNote !== null}>
-        {waitingNote ?? '等对手出手⋯'}
+      <!-- 解说已经搬进座位气泡，这里只报「谁在想」—— 与座位卡上的轮次环同一份真相 -->
+      <span class="min-w-0 flex-1 truncate" data-waiting>
+        {actingSeat !== null ? `${nameOf(actingSeat)} 在想⋯` : '等对手出手⋯'}
       </span>
       <button
         type="button"
@@ -379,8 +508,27 @@
     </div>
   {/if}
 
+  <!-- 教练栏：手牌正上方 —— 它讲的就是底下那几张牌，建议得贴着牌说；
+       引导词给的「接下来那一手」在等待时也摆这里，学员的眼睛不用桌面底端找一圈 -->
+  {#if coachWord !== null}
+    <CoachBar
+      word={coachWord?.text ?? '跟上这一手。'}
+      why={coachWord?.why ?? null}
+      target={coachAction === null ? null : describeTarget(coachAction)}
+      {waiting}
+    />
+  {/if}
+
+  <!-- 叫牌目标是「不叫」这类没有牌面可点的动作，托盘里给一枚明确的确认 -->
+  {#if needsBid && coachAction !== null && coachAction.type === 'bid'}
+    <p class="text-center text-[11px] text-white/50">
+      教练带你叫 <b class="text-gold">{callText(coachAction.call)}</b>
+      {#if coachAction.call === 'pass'}（点在叫牌盘右上那颗「不叫」）{/if}
+    </p>
+  {/if}
+
   <!-- 自己的手牌：过程只见自己这一手；引导目标点金色虚线 -->
-  <div class="rounded-xl bg-black/25 px-2 py-3">
+  <div class="rounded-xl bg-black/25 px-2 py-3" data-guide-hand>
     <HandFan
       {hand}
       {trump}
@@ -446,32 +594,8 @@
     </div>
   {/if}
 
-  {#if coachWord !== null || waitingNote !== null}
-    <CoachBar
-      word={coachWord?.text ?? '跟上这一手。'}
-      why={coachWord?.why ?? null}
-      target={coachAction === null ? null : describeTarget(coachAction)}
-      {waiting}
-    />
-  {/if}
-
-  <!-- 叫牌目标是「不叫」这类没有牌面可点的动作，托盘里给一枚明确的确认 -->
-  {#if needsBid && coachAction !== null && coachAction.type === 'bid'}
-    <p class="text-center text-[11px] text-white/50">
-      教练带你叫 <b class="text-gold">{callText(coachAction.call)}</b>
-      {#if coachAction.call === 'pass'}（点在叫牌盘右上那颗「不叫」）{/if}
-    </p>
-  {/if}
-
-  <!-- 底部元信息：只说「这一副怎么打 + 打到哪 + 账面」。引导目标由教练栏与金虚线自己说，不在这里抄第三份 -->
+  <!-- 底部元信息：只说身份与副号 —— 定约 / 级牌 / 庄分 / 轮数这些实时数在信息须，不在这里抄第二份 -->
   <p class="text-center text-[10px] text-white/35" data-guide-meta>
-    {deal.role === 'declarer' ? '你坐庄' : '你当闲家'}
-    {#if trump !== null}· {trumpText(trump)}{/if}
-    {#if dealState?.phase === 'auction'}
-      · 叫牌中 · 第 {dealState.auction.length} 手
-    {:else if dealState !== null}
-      · 第 {dealState.trickHistory.length + 1} 轮
-      {#if declarerSeat !== null}· 庄已抓 {declarerPts} 分{/if}
-    {/if}
+    {deal.role === 'declarer' ? '你坐庄' : '你当闲家'} · 第 {deal.facts.dealNo} 副
   </p>
 </div>

@@ -6,6 +6,7 @@
    * 少了的只是「翻页动作」——现在由课程壳的上一屏 / 下一屏接管。
    */
   import ConceptWidgetView from './ConceptWidgetView.svelte';
+  import RichText from './RichText.svelte';
   import type { ConceptWidget } from '$lib/guide/types';
 
   let {
@@ -17,11 +18,6 @@
     points: readonly string[];
     widget?: ConceptWidget;
   } = $props();
-
-  /** 正文里用 **粗体** 标出关键结论；只做最小解析，不引 markdown 依赖 */
-  function segments(text: string): string[] {
-    return text.split('**');
-  }
 </script>
 
 <div
@@ -32,9 +28,7 @@
     <h2 class="text-sm font-bold text-ivory">{title}</h2>
     {#each points as point, index (index)}
       <p class="text-[13px] leading-relaxed text-white/70">
-        {#each segments(point) as segment, part (part)}
-          {#if part % 2 === 1}<b class="text-ivory">{segment}</b>{:else}{segment}{/if}
-        {/each}
+        <RichText text={point} boldClass="text-ivory" />
       </p>
     {/each}
   </div>

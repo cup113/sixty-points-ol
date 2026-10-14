@@ -11,6 +11,7 @@
   import LevelTable from '$lib/components/LevelTable.svelte';
   import TrickCluster from '$lib/components/TrickCluster.svelte';
   import VerdictBadge from '$lib/components/VerdictBadge.svelte';
+  import RichText from './RichText.svelte';
   import { sortHand } from '@sixty/engine';
   import { levelRows, strainGlyph, trickSideBadge, trumpText } from '$lib/labels';
   import { handFromKeys, replayGuide } from '$lib/guide/replay';
@@ -44,7 +45,9 @@
     </span>
   </div>
 
-  <p class="text-[12px] leading-relaxed text-white/75">{deal.review.intro}</p>
+  <p class="text-[12px] leading-relaxed text-white/75">
+    <RichText text={deal.review.intro} />
+  </p>
 
   <div class="grid gap-2 sm:grid-cols-3">
     {#each hands as hand, seat (seat)}
@@ -76,6 +79,7 @@
     <p class="text-[11px] text-white/50">逐墩回看（这一副 {tricks.length} 墩）</p>
     <div class="max-h-[24rem] space-y-2 overflow-y-auto overscroll-contain pr-1">
       {#each tricks as trick (trick.ordinal)}
+        {@const note = deal.review.tricks?.[String(trick.ordinal)]}
         <div class="rounded-xl bg-black/25 p-2.5">
           <p class="text-[11px] text-white/60">
             第 {trick.ordinal + 1} 墩 · <b class="text-ivory">{nameOf(trick.winnerSeat)}</b> 赢
@@ -86,13 +90,17 @@
               <TrickCluster cards={play.cards} {trump} caption={nameOf(play.seat)} />
             {/each}
           </div>
-          {#if deal.review.tricks?.[String(trick.ordinal)] !== undefined}
-            <p class="mt-1.5 text-[11px] leading-relaxed text-gold/85">{deal.review.tricks[String(trick.ordinal)]}</p>
+          {#if note !== undefined}
+            <p class="mt-1.5 text-[11px] leading-relaxed text-gold/85">
+              <RichText text={note} />
+            </p>
           {/if}
         </div>
       {/each}
     </div>
   </div>
 
-  <p class="text-[12px] leading-relaxed text-white/75">{deal.review.outro}</p>
+  <p class="text-[12px] leading-relaxed text-white/75">
+    <RichText text={deal.review.outro} />
+  </p>
 </section>

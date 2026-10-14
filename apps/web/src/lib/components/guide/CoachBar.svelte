@@ -3,8 +3,13 @@
    * 教练栏：引导局里**常驻**的那一条引导语（CONTEXT.md 的 **教练栏**）。
    *
    * 三块内容：一句话（为什么这么打）、可选的事实依据、右上角一枚目标小标（该叫什么 / 该出哪几张）。
-   * 它是引导局唯一的「讲解面」—— 桌面本身只摆牌，不写说明。
+   * 它是引导局唯一的「讲解面」—— 桌面本身只摆牌，不写说明。住**手牌正上方**
+   * （由 `GuideBoard` 排版：贴着它讲的那几颗牌说，讲解面不垫底），所以底色与描边
+   * 都比上一版加重一档 —— 教学桌面里它是最该被一眼看到的东西之一。
+   * 引导词里的 `**粗体**` 走 `RichText`，星号不许原样上屏。
    */
+  import RichText from './RichText.svelte';
+
   let {
     word,
     why = null,
@@ -20,7 +25,7 @@
 </script>
 
 <div
-  class="flex items-start gap-2.5 rounded-xl bg-gold/10 p-2.5 ring-1 ring-gold/25"
+  class="flex items-start gap-2.5 rounded-xl bg-gold/15 p-2.5 ring-1 ring-gold/40"
   data-coach
   aria-live="polite"
 >
@@ -30,14 +35,16 @@
     </svg>
   </span>
   <div class="min-w-0 flex-1">
-    <p class="text-[12px] leading-relaxed text-ivory">
-      {word}
+    <p class="text-[13px] font-medium leading-relaxed text-ivory">
+      <RichText text={word} />
       {#if waiting}
         <span class="text-white/45">（对手出手时先读着，轮到你照这个来）</span>
       {/if}
     </p>
     {#if why !== null && why.length > 0}
-      <p class="mt-1 text-[10px] leading-relaxed text-white/50">{why}</p>
+      <p class="mt-1 text-[10px] leading-relaxed text-white/50">
+        <RichText text={why} />
+      </p>
     {/if}
   </div>
   {#if target !== null && target.length > 0}

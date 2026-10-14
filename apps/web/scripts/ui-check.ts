@@ -60,7 +60,8 @@
  *    （`inert` + 滑出屏幕）；而「牌桌」页的内容（改名 / 换身份、座位已满）在关闭时也必须留在
  *    SSR 里 —— 否则观战者那两条入口就又从「页面上真的在」退化成「标签名存在」。
  * 另外对 /rules 与 /learn 跑同一套 position 守卫 —— 新写的版面正是最容易踩坑的地方；
- * /learn（新手引导，ADR-0025 / guide-v2）额外守住课程骨架：**讲解与它的测验同屏**（概念简述 + 测验组）
+ * /learn（新手引导，ADR-0025 / guide-v3）额外守住课程骨架：**五幕剧 + 讲解与它的测验同屏**
+ * （首副三屏内开打、一屏至多一组题），页头有课程地图、门槛句住在 CTA 位。
  * 与引导局外壳三态都要在 SSR 里真的渲染出来，深链 `?s=<step-id>` 直接落在那一步（不是先给第一步
  * 再靠 JS 跳；并屏时被吸收的旧 quiz 步 id 经别名表落到合并后的那一屏），**下一步**是内容底部的主 CTA
  * （`data-guide-cta`）而不是页脚一行开发者提示（`?s=` 写法与键盘翻页提示都不许回潮），
@@ -1125,18 +1126,20 @@ async function main(): Promise<void> {
     '出货样式表里找不到断线提示条的底色 .bg-amber-400/15（提示会失去告警观感）'
   );
 
-  // 10) 新手引导页（/learn，ADR-0025 / guide-v2）：讲解与它的测验同屏 + 引导局，不再是幻灯片
+  // 10) 新手引导页（/learn，ADR-0025 / guide-v3）：五幕剧 + 讲解与它的测验同屏，不再是幻灯片
   const learn = await page('/learn');
   assertNoPositionMix(learn, '新手引导页');
   assert(!/[东南西]/.test(learn), '新手引导页出现方位称谓');
-  assert(learn.includes('data-brief'), '第一步不是概念简述屏（课程入口应当是「基础概念 I」）');
+  assert(learn.includes('data-brief'), '第一步不是概念简述屏（课程入口应当是第一幕「上桌」的讲解屏）');
+  assert(!learn.includes('**'), '概念屏把 **星号** 原样端上屏（粗体应经 RichText 渲染成 <b>）');
   assert(learn.includes('data-quiz'), '概念屏里没有同屏的测验组：讲解与题目又分页了');
-  assert(learn.includes('基础概念 I'), `页头没有当前章入口：${learn.slice(0, 160)}`);
+  assert(learn.includes('幕 · 上桌'), `页头没有幕次标识（第 1 幕 · 上桌）：${learn.slice(0, 160)}`);
+  assert(learn.includes('课程地图'), '页头没有「课程地图」入口：旅程不可见，只剩一个数字进度条');
   assert(learn.includes('href="/rules"'), '新手引导页没有指向文字教程的入口');
   assert(learn.includes('href="/"'), '新手引导页没有回大厅的入口');
-  // 导航：主 CTA 在内容流里预告下一节；页脚不再写「← → 翻步 · 深度链接 ?s=…」这种开发者语言
+  // 导航：主 CTA 在内容流里预告下一节；门槛句住在 CTA 位、口吻是教练的（不是「答对才能继续」的判官脸）
   assert(learn.includes('data-guide-cta'), '内容底部没有主 CTA 位（下一步只剩右下角一枚小钮）');
-  assert(learn.includes('答对才能继续'), '测验没答对时没有在 CTA 位写出门槛（答对才能继续）');
+  assert(learn.includes('不急 —— 把上面的小题答对'), '测验门槛句没有落在 CTA 位（教练口吻的那句）');
   assert(!learn.includes('深度链接'), '页脚还在展示深链写法（?s= 是分享用的机制，不是给用户看的说明）');
   assert(!learn.includes('翻步'), '页脚还在展示键盘翻页提示');
   assert(bareStrainLetters(learn).length === 0, `新手引导页出现裸花色字母：${bareStrainLetters(learn).join(', ')}`);
@@ -1145,17 +1148,20 @@ async function main(): Promise<void> {
   assert(!learn.includes('自动播放'), '新手引导页还留着自动播放');
 
   // 10b) 深链直接落在指定那一步：服务端渲染出那一步的内容，而不是先给第一步再靠 JS 跳。
-  //      这里用的正是一个**被并屏吸收掉的旧 quiz 步 id**：别名表必须把它接回合并后的简述屏。
+  //      这里用的正是一个**跨了两代重组的旧 quiz 步 id**：别名账本必须把它接回 x-follow 那一屏。
   const quizStep = await page('/learn?s=c2-follow-single');
-  assert(quizStep.includes('上家领出 ♣8-9-10-J 四张顺子'), '旧测验步的深链没有落到合并后的那一屏（题干没渲染出来）');
+  assert(!quizStep.includes('**'), '测验屏把 **星号** 原样端上屏（题面/选项/解释的粗体应经 RichText 渲染）');
+  assert(quizStep.includes('上家领出 ♣8-9-10-J 四张顺子'), '旧测验步的深链没有落到结构优先那一屏（题干没渲染出来）');
   assert(quizStep.includes('data-brief'), '旧测验步的深链没有落到简述屏上（只有题、没有讲解）');
   assert(quizStep.includes('data-quiz'), '测验步没有渲染成测验');
   assert(quizStep.includes('♣3-4-6'), '测验选项没有渲染出牌面文字');
-  assert(quizStep.includes('答对才能继续'), '测验步没有写出门槛（答对才能继续）');
+  assert(quizStep.includes('不急 —— 把上面的小题答对'), '测验步没有写出门槛句（教练口吻的那句）');
   assertNoPositionMix(quizStep, '测验步深链页');
 
+  // 10c) 旧结尾步 id 与旧引导局步 id 的深链同样要接得住（别名账本管两代退役 id）
   const endStep = await page('/learn?s=c8-end');
-  assert(endStep.includes('回大厅开一桌'), '收尾屏没有回大厅的入口');
+  assert(endStep.includes('毕业了'), '旧结尾步的深链没有落到毕业屏');
+  assert(endStep.includes('回大厅开一桌'), '毕业屏没有回大厅的入口');
 
   // 引导局那一步：数据还没接上时如实说「还没到」，接上之后必须是教学桌面 —— 两者必居其一
   const dealStep = await page('/learn?s=c1-auction');
@@ -1163,6 +1169,27 @@ async function main(): Promise<void> {
     dealStep.includes('data-guide-board') || dealStep.includes('data-guide-pending'),
     '引导局步既没有教学桌面、也没有「数据还没接上」的说明'
   );
+  assert(dealStep.includes('跟着教练把这副打完'), '引导局步的门槛句没有落在 CTA 位');
+  // 桌面骨架（guide-v3 手感轮）：座位行三家齐（含「你」），解说气泡与出牌两行都以它为锚
+  assert(
+    (dealStep.match(/data-guide-seat="/g) ?? []).length === 3,
+    '引导桌面座位行不足三家（含「你」）：解说气泡与出牌列没有锚点'
+  );
+  assert(dealStep.includes('data-say-lane'), '引导桌面没有解说气泡巷（data-say-lane）：一轮的解说还是挤在一处');
+  assert(dealStep.includes('data-trick-row="live"'), '引导桌面没有两行式出牌区（data-trick-row）：收墩会清场跳变');
+  // guide-v3.2 手感第二轮：实时数进信息须、教练栏贴着手牌、粗体不许把星号端上屏
+  assert(dealStep.includes('data-guide-rail'), '引导桌面没有信息须（data-guide-rail）：定约/级牌/庄分还是一行小字');
+  assert(
+    (dealStep.match(/data-guide-rail-cell="/g) ?? []).length === 4,
+    '引导桌面信息须不足四格（定约 / 级牌 / 庄已抓 / 轮数）'
+  );
+  assert(
+    dealStep.indexOf('data-coach') >= 0 &&
+      dealStep.indexOf('data-guide-hand') >= 0 &&
+      dealStep.indexOf('data-coach') < dealStep.indexOf('data-guide-hand'),
+    '教练栏没有住到手牌正上方（data-coach 应排在 data-guide-hand 之前）'
+  );
+  assert(!dealStep.includes('**'), '引导桌面把 **星号** 原样端上了屏（气泡/教练栏的粗体应经 RichText 渲染）');
   assertNoPositionMix(dealStep, '引导局步深链页');
 
   // 11) 入口：大厅指向新手引导，文字教程也指向它（互链不能单边）
@@ -1182,8 +1209,8 @@ async function main(): Promise<void> {
   console.log('触控：悬停上浮只在鼠标设备生效；出牌按钮 .play-btn 带 z-index:20');
   console.log('页头：大厅 / 邀请码 + 右上角桌况簇（观战人数含 0 常显；在座离座、不在座改名+入座），连接圆点已下线、断线提示不在首帧出现；战报/叫牌/底牌/牌桌 四项页签常驻右边缘，抽屉默认 inert');
   console.log('抽屉：查阅面进抽屉、动作面留桌面；「牌桌」页常驻 SSR（改名/换身份与座位已满始终在页面上）');
-  console.log('新手引导：/learn 是交互课程（讲解与它的测验**同屏** + 引导局），深链 ?s=<step-id> 直接渲染出那一步（旧 quiz 步 id 经别名落到合并后的屏）；下一步是内容底部的主 CTA，页脚不再写 ?s= 与键盘翻页提示；大厅与文字教程都指向它');
-  console.log('引导局：数据没接上时如实说「还没到」（data-guide-pending），接上后是教学桌面（data-guide-board）；对手延迟按叫牌/出牌分档、收墩原地停留 2s，叫牌历史是真桌那份三列表格，手牌过引擎 sortHand');
+  console.log('新手引导：/learn 是一出五幕剧（guide-v3：概念跟着牌走、首副三屏内开打、一屏至多一组一口气过完的小题），讲解与测验同屏；页头有幕次标识与课程地图，深链 ?s=<step-id> 直接渲染那一步（两代退役旧 id 都由 GUIDE_ALIASES 接回）；门槛句与主 CTA 同住内容流，页脚不再写 ?s= 与键盘翻页提示；大厅与文字教程都指向它');
+  console.log('引导局：数据没接上时如实说「还没到」（data-guide-pending），接上后是教学桌面（data-guide-board）；座位行三家齐、对手解说从动作者那一席冒气泡（最近两条并存），出牌区两行式（这一墩 + 上一墩缩一档，收墩 flip 搬家不跳变），叫牌金框经 active 门只在轮到你时亮；定约/级牌/庄分/轮数住进信息须的大号金字，教练栏贴在手牌正上方，粗体一律经 RichText 渲染不留星号；对手延迟按叫牌/出牌分档、收墩原地停留 2s，叫牌历史是真桌那份三列表格，手牌过引擎 sortHand');
   console.log('UI OK');
 }
 

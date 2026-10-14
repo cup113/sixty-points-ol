@@ -318,6 +318,36 @@ button:disabled {
   }
 }
 
+/* ---------- 引导局：两行式出牌区（当前墩满幅 + 上一墩缩一档） ---------- */
+/* 空列占位高 = 一张牌的高（.card 同一条公式 --cw × 1.52）：
+   第一张牌落下时不把行高顶跳，收墩搬家时 flip 量到的两端尺寸也才稳定 */
+.trick-live .spot-empty {
+  min-height: calc(56px * 1.52);
+}
+
+/* 上一墩：同一副牌面小一号 —— 整墩从「这一墩」行 flip 搬下来，不是清场重画 */
+.trick-mini .cluster .card {
+  --cw: 34px;
+}
+
+.trick-mini .spot-empty {
+  min-height: calc(34px * 1.52);
+}
+
+@media (max-width: 640px) {
+  .trick-live .spot-empty {
+    min-height: calc(38px * 1.52);
+  }
+
+  .trick-mini .cluster .card {
+    --cw: 26px;
+  }
+
+  .trick-mini .spot-empty {
+    min-height: calc(26px * 1.52);
+  }
+}
+
 /* ---------- 演示页：三家的手牌横条 ---------- */
 /* 一屏里要并排放下三家的牌、出牌区与讲解，所以横条里的牌比牌桌小一号。
    牌外面那层 `<span class="hand-card">` 是动画节点（crossfade 的 send 挂在它上面）。 */

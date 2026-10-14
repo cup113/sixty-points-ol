@@ -136,6 +136,98 @@ test('引导局有叫牌历史表（复用 AuctionHistory，与真桌同一份�
   assert.ok(!showsAuctionHistory(board.replace(/<AuctionHistory[^]*?\/>/g, '')), '删掉挂载后判定仍通过：空转');
 });
 
+// ── 桌面手感（guide-v3 追加）：座位气泡 / 两行式收墩 / 叫牌金框的轮次门 ──────────
+const bidBoard = code(read('../src/lib/components/guide/GuideBidBoard.svelte'));
+const coachBar = code(read('../src/lib/components/guide/CoachBar.svelte'));
+const quizCard = code(read('../src/lib/components/guide/QuizCard.svelte'));
+
+/** 判定：对手的解说挂在他那一席的气泡上（notes 被消费 + 气泡按座位分列） */
+function saysAtSeats(src: string): boolean {
+  return /deal\.notes/.test(src) && /data-say/.test(src);
+}
+
+test('解说从动作者那一席冒气泡，不再全挤在一条等待栏里', () => {
+  assert.ok(saysAtSeats(board), 'notes 没挂到座位气泡上：一轮的解说还是挤在同一处');
+  assert.ok(!saysAtSeats(board.replace(/data-say/g, 'data-note')), '换掉气泡锚点后判定仍通过：空转');
+});
+
+/** 判定：收墩是「整墩搬进上一行」不是「清场重画」—— key 不变的两行 + flip + 缩档类 */
+function twoRowTricks(src: string): boolean {
+  return /animate:flip/.test(src) && /data-trick-row/.test(src) && /trick-mini/.test(src);
+}
+
+test('出牌区两行式：这一墩 + 上一墩，收墩用 flip 搬家不跳变', () => {
+  assert.ok(twoRowTricks(board), '收墩还在清场重画：没有 key 不变的两行式（flip + trick-mini + data-trick-row）');
+  assert.ok(!twoRowTricks(board.replace(/animate:flip/g, 'animate:none')), '抽掉 flip 后判定仍通过：空转');
+});
+
+/** 判定：叫牌盘的引导金框被 active 拦住 —— 没轮到你，格子不先亮 */
+function bidGoldGated(src: string): boolean {
+  return /active && target/.test(src);
+}
+
+test('叫牌金框只在轮到你时亮：没轮到就先金，学员会以为该自己叫', () => {
+  assert.ok(bidBoard.includes('active'), '叫牌盘没有 active 门：金框随时都可能亮');
+  assert.ok(bidGoldGated(bidBoard), 'guided 金框没被 active 拦住（target 匹配前必须先过 active）');
+  assert.ok(!bidGoldGated(bidBoard.replace(/active && /g, '')), '拆掉 active 门后判定仍通过：空转');
+});
+
+// ── 桌面手感第二轮（guide-v3.2）：粗体渲染 / 双气泡并存 / 教练栏贴手牌 / 桌面信息须 ──
+
+/** 判定：文案里的 **粗体** 走同一份最小解析（RichText），不许把两个星号端上屏 */
+function rendersBold(...sources: string[]): boolean {
+  return sources.every((src) => /<RichText/.test(src));
+}
+
+test('**粗体** 要渲染不要留星号：气泡、教练栏、测验都过 RichText', () => {
+  assert.ok(rendersBold(board, coachBar, quizCard), '引导文案没走 RichText：数据里的 **星号** 会原样端上屏');
+  assert.ok(
+    !rendersBold(board.replace(/<RichText/g, '<Plaintext')),
+    '抽掉 RichText 后判定仍通过：空转'
+  );
+});
+
+/** 判定：气泡巷是「最近 SAY_WINDOW 条并存」的窗口，不是只留最新一条的一冒就走 */
+function twoBubblesAtOnce(src: string): boolean {
+  return /SAY_WINDOW/.test(src) && /data-say/.test(src);
+}
+
+test('两个气泡可以同时显示：新的一条冒出来，前一条还在', () => {
+  assert.ok(twoBubblesAtOnce(board), '没有 SAY_WINDOW 窗口：解说还是每来一条就顶走上一条');
+  assert.ok(
+    !twoBubblesAtOnce(board.replace(/SAY_WINDOW/g, 'WINDOW')),
+    '收掉并存窗口后判定仍通过：空转'
+  );
+});
+
+/** 判定：教练栏住在手牌正上方（讲解面不垫底 —— 建议得贴着它讲的那几颗牌） */
+function coachAboveHand(src: string): boolean {
+  const coach = src.indexOf('<CoachBar');
+  const hand = src.indexOf('data-guide-hand');
+  return coach >= 0 && hand >= 0 && coach < hand;
+}
+
+test('教练栏在手牌正上方，不再垫到桌面底端', () => {
+  assert.ok(coachAboveHand(board), '教练栏不在手牌上方：<CoachBar 应排在 data-guide-hand 之前');
+  assert.ok(
+    !coachAboveHand(board.replace('data-guide-hand', 'data-hand')),
+    '拿掉手牌锚点后判定仍通过：空转'
+  );
+});
+
+/** 判定：定约 / 级牌 / 庄已抓 / 轮数住进桌面信息须（大号金字），不再缩成一行 10px 小字 */
+function hasInfoRail(src: string): boolean {
+  return /data-guide-rail/.test(src) && /rankLabel/.test(src);
+}
+
+test('级牌、庄分这些实时数摆成信息须的大号金字', () => {
+  assert.ok(hasInfoRail(board), '引导桌面没有信息须：定约/级牌/庄分还是一行小字');
+  assert.ok(
+    !hasInfoRail(board.replace(/data-guide-rail/g, 'data-rail')),
+    '换掉信息须锚点后判定仍通过：空转'
+  );
+});
+
 /** 判定：页面没有开发者向的页脚提示，且有主 CTA 位 */
 function hasUserNav(src: string): { clean: boolean; cta: boolean } {
   return {

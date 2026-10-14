@@ -14,11 +14,14 @@
   let {
     highest,
     target,
+    /** 轮到学员叫了才亮引导金框：没轮到就先金，学员会以为该自己叫了（引导词照旧在教练栏先读着） */
+    active = false,
     onpick
   }: {
     highest: Bid | null;
     /** 这一步引导词指定的叫品（含 `'pass'`） */
     target: BidCall;
+    active?: boolean;
     onpick: (call: BidCall) => void;
   } = $props();
 
@@ -36,17 +39,18 @@
     const call = { points, strain };
     if (highest !== null && highest.points === points && highest.strain === strain) return 'current';
     if (validateCall(call, highest) !== null) return 'illegal';
-    if (target !== 'pass' && target.points === points && target.strain === strain) return 'guided';
+    if (active && target !== 'pass' && target.points === points && target.strain === strain) return 'guided';
     return 'legal';
   }
 
-  const passGuided = $derived(target === 'pass');
+  const passGuided = $derived(active && target === 'pass');
 </script>
 
 <div class="rounded-xl bg-black/30 p-2.5" data-bid-board>
   <div class="flex items-center justify-between gap-2">
     <p class="text-[10px] text-white/50">
       当前叫品:{highest === null ? '还没人叫' : `　${callText(highest)}`}
+      {#if active}<span class="ml-1 font-semibold text-gold">· 轮到你了</span>{/if}
     </p>
     <button
       type="button"
