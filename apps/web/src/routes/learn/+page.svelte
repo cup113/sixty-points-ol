@@ -217,7 +217,7 @@
   }
 
   const ghost =
-    'rounded-lg px-3 py-1.5 text-[11px] text-white/70 ring-1 ring-white/15 transition hover:bg-white/10 disabled:opacity-30';
+    'rounded-lg px-3 py-1.5 text-xs text-white/70 ring-1 ring-white/15 transition hover:bg-white/10 disabled:opacity-30';
 </script>
 
 <svelte:window onkeydown={onKeydown} />
@@ -304,10 +304,7 @@
         {#if deal === null}
           <div class="space-y-2" data-guide-pending>
             <h2 class="text-sm font-bold text-ivory">{step.title}</h2>
-            <p class="text-[12px] leading-relaxed text-white/60">{step.pending ?? '这一副引导局还没接上数据。'}</p>
-            <p class="text-[11px] text-white/40">
-              概念与测验里已经讲透的部分不受影响；这一副接上数据后会换成整副手把手强制引导。
-            </p>
+            <p class="text-sm leading-relaxed text-white/60">{step.pending ?? '这一副引导局还没接上数据。'}</p>
           </div>
         {:else}
           <GuideBoard
@@ -323,7 +320,7 @@
         {#if deal === null}
           <div class="space-y-2" data-guide-pending>
             <h2 class="text-sm font-bold text-ivory">{step.title}</h2>
-            <p class="text-[12px] leading-relaxed text-white/60">{step.pending ?? '这一副引导局还没接上数据。'}</p>
+            <p class="text-sm leading-relaxed text-white/60">{step.pending ?? '这一副引导局还没接上数据。'}</p>
           </div>
         {:else}
           <GuideReview {deal} />
@@ -331,28 +328,27 @@
       {:else}
         <!-- 毕业屏：四副真牌的成绩单 + 开桌去。链接给全，但不堆砌。 -->
         <div class="space-y-3" data-guide-end>
-          <h2 class="text-base font-bold text-ivory">毕业了 —— 桌子在你手上</h2>
-          <p class="text-[13px] leading-relaxed text-white/70">
-            四副真牌打完：你跟教练抢过分，也独挑过大梁。叫牌怎么抬、埋底埋什么、跟牌为什么结构优先、
-            末轮怎么保底抠底 —— 每一条都是亲手摸过的，不是读过的。
+          <h2 class="text-lg font-bold text-ivory">毕业了 —— 桌子在你手上</h2>
+          <p class="text-sm leading-relaxed text-white/70">
+            四副真牌打完：跟教练抢过分，也独挑过大梁；叫牌、埋底、跟牌、保底抠底，每一条都是亲手摸过的。
           </p>
-          <ul class="grid gap-1.5 text-[12px] text-white/60 sm:grid-cols-2">
+          <ul class="grid gap-1.5 text-sm text-white/60 sm:grid-cols-2">
             <li class="rounded-xl bg-black/30 px-3 py-2">第一副 · 当闲家 —— 竞叫之后让给他打</li>
             <li class="rounded-xl bg-black/30 px-3 py-2">第二副 · 当庄家 —— 十一张主牌坐庄</li>
             <li class="rounded-xl bg-black/30 px-3 py-2">第三副 · 再坐庄 —— 无主局把 30 分埋进底</li>
             <li class="rounded-xl bg-black/30 px-3 py-2">第四副 · 当闲家 —— 盯住庄家的主牌等它打光</li>
           </ul>
-          <p class="text-[13px] leading-relaxed text-white/70">
-            接下来轮到你自己的牌局 —— 拉上两个牌友，或先加个机器人陪练，开一桌真打。
+          <p class="text-sm leading-relaxed text-white/70">
+            拉上牌友、或加个机器人陪练，开一桌真打。
           </p>
           <div class="flex flex-wrap gap-2">
-            <a class="rounded-lg bg-gold/20 px-4 py-2 text-xs font-semibold text-gold ring-1 ring-gold/40" href="/">
+            <a class="rounded-lg bg-gold/20 px-4 py-2 text-sm font-semibold text-gold ring-1 ring-gold/40" href="/">
               回大厅开一桌 →
             </a>
-            <a class="rounded-lg px-4 py-2 text-xs text-white/70 ring-1 ring-white/15 hover:bg-white/10" href="/rules">
+            <a class="rounded-lg px-4 py-2 text-sm text-white/70 ring-1 ring-white/15 hover:bg-white/10" href="/rules">
               查文字教程
             </a>
-            <button type="button" class="rounded-lg px-4 py-2 text-xs text-white/70 ring-1 ring-white/15 hover:bg-white/10" onclick={() => go(0)}>
+            <button type="button" class="rounded-lg px-4 py-2 text-sm text-white/70 ring-1 ring-white/15 hover:bg-white/10" onclick={() => go(0)}>
               从头再看一遍
             </button>
           </div>
@@ -365,18 +361,18 @@
     {#if step.kind !== 'end'}
       <div class="mt-4 flex flex-col items-center gap-1.5 border-t border-white/10 pt-3" data-guide-cta bind:this={ctaEl}>
         {#if step.kind === 'deal' && dealDone}
-          <p class="text-[11px] font-semibold text-emerald-300" data-guide-passed>✓ 这一段打完了</p>
+          <p class="text-sm font-semibold text-emerald-300" data-guide-passed>✓ 这一段打完了</p>
         {/if}
         {#if canNext && nextStep !== null}
           <button
             type="button"
-            class="rounded-lg bg-gold/20 px-5 py-2 text-xs font-semibold text-gold ring-1 ring-gold/40 transition hover:bg-gold/30"
+            class="rounded-lg bg-gold/20 px-5 py-2 text-sm font-semibold text-gold ring-1 ring-gold/40 transition hover:bg-gold/30"
             onclick={() => go(current + 1)}
           >
             下一节 · {nextStep.title} →
           </button>
         {:else if gated && !alreadyPassed}
-          <p class="text-[11px] text-white/50" data-guide-gate>
+          <p class="text-xs text-white/50" data-guide-gate>
             {step.kind === 'deal' ? '跟着教练把这副打完，就能继续' : '不急 —— 把上面的小题答对，就翻下一页'}
           </p>
         {/if}

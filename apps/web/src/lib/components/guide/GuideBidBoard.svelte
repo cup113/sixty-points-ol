@@ -48,16 +48,16 @@
 
 <div class="rounded-xl bg-black/30 p-2.5" data-bid-board>
   <div class="flex items-center justify-between gap-2">
-    <p class="text-[10px] text-white/50">
+    <p class="text-xs text-white/50">
       当前叫品:{highest === null ? '还没人叫' : `　${callText(highest)}`}
       {#if active}<span class="ml-1 font-semibold text-gold">· 轮到你了</span>{/if}
     </p>
     <button
       type="button"
       class={[
-        'rounded-lg px-3 py-1 text-[11px] font-semibold ring-1 transition',
+        'rounded-lg px-3 py-1.5 text-sm font-semibold ring-1 transition',
         passGuided
-          ? 'bg-gold/20 text-gold ring-gold/50'
+          ? 'coach-glow bg-gold/20 text-gold ring-gold/50'
           : 'text-white/60 ring-white/15 hover:bg-white/10'
       ]}
       onclick={() => onpick('pass')}
@@ -69,13 +69,13 @@
   <div class="mt-2 space-y-1">
     {#each rows as points (points)}
       <div class="grid grid-cols-[2.6rem_repeat(5,minmax(0,1fr))] items-center gap-1">
-        <span class="text-[11px] tabular-nums text-white/45">{points}</span>
+        <span class="text-xs tabular-nums text-white/45">{points}</span>
         {#each STRAINS as strain (strain)}
           {@const tone = state(points, strain)}
           <button
             type="button"
             class={[
-              'rounded-md py-1 text-[12px] font-semibold ring-1 transition',
+              'rounded-md py-1.5 text-sm font-semibold ring-1 transition',
               tone === 'guided' && 'bg-gold/20 text-gold ring-gold/50',
               tone === 'current' && 'bg-white/10 text-white/50 ring-white/20',
               tone === 'legal' && 'text-ivory ring-white/15 hover:bg-white/10',
@@ -93,7 +93,7 @@
     {/each}
   </div>
 
-  <p class="mt-2 text-[10px] leading-relaxed text-white/45">
-    分数为主序、花色为次序：同一分数上 ♣ &lt; ♦ &lt; ♥ &lt; ♠ &lt; NT。灰格也点得，点了会告诉你它为什么叫不出口。
+  <p class="mt-2 text-xs leading-relaxed text-white/45">
+    同分比花色：♣ &lt; ♦ &lt; ♥ &lt; ♠ &lt; NT；灰格点了会告诉你为什么。
   </p>
 </div>

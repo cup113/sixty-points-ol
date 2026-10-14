@@ -397,9 +397,27 @@ button:disabled {
   animation: pts-pop 0.24s ease both;
 }
 
+/* 教练栏的目标徽标、叫牌盘的「不叫」在轮到你时呼吸一圈金光：
+   不用读字也知道该看哪、该点什么（循环动画，reduced-motion 里照清单归零） */
+@keyframes coach-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(216 180 90 / 0);
+  }
+
+  50% {
+    box-shadow: 0 0 0 5px rgb(216 180 90 / 0.3);
+  }
+}
+
+.coach-glow {
+  animation: coach-glow 1.6s ease-in-out infinite;
+}
+
 /* 系统要求减少动态效果时，纯 CSS 动画一律关掉；
    引导局里的 Svelte 过渡（牌面落牌之类）由组件自己按系统设置归零，两条路都要盖上。 */
 @media (prefers-reduced-motion: reduce) {
+  .coach-glow,
   .drop-in,
   .shake,
   .pts-pop {

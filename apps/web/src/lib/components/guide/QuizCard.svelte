@@ -51,11 +51,11 @@
 
 <section class="space-y-3" data-quiz data-quiz-id={question.id}>
   <div class="flex flex-wrap items-center justify-between gap-2">
-    <h2 class="text-sm font-bold text-ivory">{title}</h2>
-    <span class="text-[10px] text-white/45">第 {index + 1} / {questions.length} 题</span>
+    <h2 class="text-base font-bold text-ivory">{title}</h2>
+    <span class="text-xs text-white/45">第 {index + 1} / {questions.length} 题</span>
   </div>
 
-  <p class="text-[13px] leading-relaxed text-white/80">
+  <p class="text-base leading-relaxed text-white/85">
     <RichText text={question.prompt} />
   </p>
 
@@ -71,7 +71,7 @@
       <button
         type="button"
         class={[
-          'flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-[12px] ring-1 transition',
+          'flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm ring-1 transition',
           settled && option.correct
             ? 'bg-emerald-500/15 text-emerald-200 ring-emerald-400/40'
             : active
@@ -86,7 +86,7 @@
       >
         <span
           class={[
-            'grid size-5 shrink-0 place-items-center rounded-md text-[10px] font-bold',
+            'grid size-6 shrink-0 place-items-center rounded-md text-xs font-bold',
             active ? 'bg-gold/25 text-gold' : 'bg-white/10 text-white/45'
           ]}
         >
@@ -100,7 +100,7 @@
   {#if question.kind === 'multi' && !settled}
     <button
       type="button"
-      class="rounded-lg bg-gold/20 px-3 py-1.5 text-[11px] font-semibold text-gold ring-1 ring-gold/40 disabled:opacity-40"
+      class="rounded-lg bg-gold/20 px-4 py-2 text-sm font-semibold text-gold ring-1 ring-gold/40 disabled:opacity-40"
       disabled={picked.length === 0}
       onclick={confirm}
     >
@@ -111,11 +111,14 @@
   {#if result !== null}
     <div
       class={[
-        'space-y-1 rounded-xl p-3 text-[11px] leading-relaxed ring-1',
+        'space-y-1 rounded-xl p-3 text-sm leading-relaxed ring-1',
         result.ok ? 'bg-emerald-500/10 text-emerald-100 ring-emerald-400/30' : 'bg-rose-500/10 text-rose-100 ring-rose-400/30'
       ]}
       data-quiz-feedback={result.ok ? 'ok' : 'retry'}
     >
+      <p class="flex items-center gap-1.5 text-lg font-black leading-none" aria-hidden="true">
+        {result.ok ? '✓' : '↻'}
+      </p>
       {#each result.feedback as line, i (i)}
         <p><RichText text={line} /></p>
       {/each}
@@ -126,7 +129,7 @@
     {#if index + 1 < questions.length}
       <button
         type="button"
-        class="rounded-lg bg-gold/20 px-3 py-1.5 text-[11px] font-semibold text-gold ring-1 ring-gold/40"
+        class="rounded-lg bg-gold/20 px-4 py-2 text-sm font-semibold text-gold ring-1 ring-gold/40"
         onclick={next}
       >
         下一题 →
@@ -134,7 +137,7 @@
     {:else}
       <button
         type="button"
-        class="rounded-lg bg-gold/20 px-3 py-1.5 text-[11px] font-semibold text-gold ring-1 ring-gold/40"
+        class="rounded-lg bg-gold/20 px-4 py-2 text-sm font-semibold text-gold ring-1 ring-gold/40"
         onclick={next}
         data-quiz-passed
       >

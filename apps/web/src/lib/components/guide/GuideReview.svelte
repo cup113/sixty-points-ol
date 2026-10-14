@@ -39,20 +39,20 @@
 
 <section class="space-y-3" data-guide-review>
   <div class="flex flex-wrap items-baseline justify-between gap-2">
-    <h2 class="text-sm font-bold text-ivory">{deal.title} · 复盘</h2>
-    <span class="text-[10px] text-white/45">
+    <h2 class="text-base font-bold text-ivory">{deal.title} · 复盘</h2>
+    <span class="text-xs text-white/45">
       {contractLabel} 定约 · {nameOf(summary.contract.declarerSeat)} 坐庄 · 本副：{trumpText(trump)}
     </span>
   </div>
 
-  <p class="text-[12px] leading-relaxed text-white/75">
+  <p class="text-sm leading-relaxed text-white/75">
     <RichText text={deal.review.intro} />
   </p>
 
   <div class="grid gap-2 sm:grid-cols-3">
     {#each hands as hand, seat (seat)}
       <div class="rounded-xl bg-black/30 p-2.5">
-        <p class="mb-1.5 text-[11px] text-white/60">
+        <p class="mb-1.5 text-xs text-white/60">
           <b class="text-ivory">{nameOf(seat)}</b>
           · {seat === summary.contract.declarerSeat ? '庄家' : '闲家'}
           · 发牌时 {hand.length} 张
@@ -63,8 +63,8 @@
   </div>
 
   <div class="rounded-xl bg-black/30 p-2.5">
-    <p class="mb-1.5 text-[11px] text-white/60">
-      埋下的底牌 <b class="text-ivory">{kitty.length}</b> 张（结算时按保底 / 抠底 × 末轮张数进出庄家的账）
+    <p class="mb-1.5 text-xs text-white/60">
+      埋下的底牌 <b class="text-ivory">{kitty.length}</b> 张
     </p>
     <CardRow cards={kitty} {trump} size="md" />
   </div>
@@ -76,7 +76,7 @@
   </div>
 
   <div class="space-y-2">
-    <p class="text-[11px] text-white/50">逐墩回看（这一副 {tricks.length} 墩）</p>
+    <p class="text-xs text-white/50">逐墩回看（这一副 {tricks.length} 墩）</p>
     <div class="max-h-[24rem] space-y-2 overflow-y-auto overscroll-contain pr-1">
       {#each tricks as trick (trick.ordinal)}
         {@const note = deal.review.tricks?.[String(trick.ordinal)]}
@@ -91,7 +91,7 @@
             {/each}
           </div>
           {#if note !== undefined}
-            <p class="mt-1.5 text-[11px] leading-relaxed text-gold/85">
+            <p class="mt-1.5 text-sm leading-relaxed text-gold/85">
               <RichText text={note} />
             </p>
           {/if}
@@ -100,7 +100,7 @@
     </div>
   </div>
 
-  <p class="text-[12px] leading-relaxed text-white/75">
+  <p class="text-sm leading-relaxed text-white/75">
     <RichText text={deal.review.outro} />
   </p>
 </section>

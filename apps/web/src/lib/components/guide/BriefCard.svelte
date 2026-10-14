@@ -24,12 +24,20 @@
   class={['grid gap-3', widget === undefined ? '' : 'lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]']}
   data-brief
 >
-  <div class="space-y-2">
-    <h2 class="text-sm font-bold text-ivory">{title}</h2>
+  <div class="space-y-2.5">
+    <h2 class="text-xl font-black text-ivory">{title}</h2>
     {#each points as point, index (index)}
-      <p class="text-[13px] leading-relaxed text-white/70">
-        <RichText text={point} boldClass="text-ivory" />
-      </p>
+      <div class="flex items-start gap-2.5">
+        <span
+          class="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full bg-gold/15 text-xs font-bold text-gold"
+          aria-hidden="true"
+        >
+          {index + 1}
+        </span>
+        <p class="text-[15px] leading-relaxed text-white/75">
+          <RichText text={point} boldClass="text-ivory" />
+        </p>
+      </div>
     {/each}
   </div>
   {#if widget !== undefined}
