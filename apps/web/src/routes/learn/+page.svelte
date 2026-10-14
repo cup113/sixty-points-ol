@@ -1,20 +1,25 @@
 <script lang="ts">
   /**
-   * 新手引导（ADR-0025）：`/learn` 从幻灯片改成**一门交互课程** —— 概念简述 + 门槛式测验 + 引导局。
+   * 新手引导（ADR-0025）：`/learn` 从幻灯片改成**一门交互课程** —— 概念简述（**与它的测验同屏**）+ 引导局。
    *
    * 四件事在这里：
    * 1. **深链**：`?s=<step-id>` 服务端就算得出来（`+page.ts`），分享出去的链接直接落在那一步；
    *    翻页时用 `history.replaceState` 同步地址（不往历史里塞几十条记录）。
+   *    讲解与测验并屏时被吸收的旧 quiz 步 id 经 `GUIDE_ALIASES` 落到合并后的那一屏。
    * 2. **续读**：最远到达的步与引导局里的动作下标存 localStorage，没有 `?s=` 时接着上次读。
-   * 3. **测验门槛**：没答对不放行（`QuizCard` 自己管判分，这里只认它报的 done）。
+   * 3. **测验门槛**：没答对不放行（`QuizCard` 自己管判分，这里只认每组报的 done，全组过了才算）。
    * 4. **引导局接线**：把 `GuideBoard` 的进展写回续读位置，打完这一段就能继续。
+   *
+   * 导航的形状：可前进时内容底部出现金色主按钮「下一节 · <标题> →」（按钮文案本身预告
+   * 去哪）；被门槛卡住时同一位置显示门槛句 —— 不再把「答对才能继续」藏进页脚小字。
+   * 页脚只剩两枚小号回翻钮；键盘 ←/→ 照旧可用，但不写出来（那是开发者的语言）。
    */
   import { onMount, untrack } from 'svelte';
   import BriefCard from '$lib/components/guide/BriefCard.svelte';
   import GuideBoard from '$lib/components/guide/GuideBoard.svelte';
   import GuideReview from '$lib/components/guide/GuideReview.svelte';
   import QuizCard from '$lib/components/guide/QuizCard.svelte';
-  import { COURSE } from '$lib/guide/course';
+  import { COURSE, GUIDE_ALIASES } from '$lib/guide/course';
   import { dealOf } from '$lib/guide/deals/index';
   import { indexCourse } from '$lib/guide/types';
 
@@ -46,29 +51,42 @@
     }
   }
 
+  /** 定位一步：直接命中，或是被合并吸收的旧 quiz 步（别名表里查它合并去了哪） */
+  function locate(stepId: string): number {
+    const direct = index.indexOf.get(stepId);
+    if (direct !== undefined) return direct;
+    const aliased = GUIDE_ALIASES.get(stepId);
+    return aliased === undefined ? 0 : (index.indexOf.get(aliased) ?? 0);
+  }
+
   /** 起始步：优先 `?s=`（服务端算得出，分享链接直接落位），否则第一步；续读在 onMount 里接上 */
-  let current = $state(untrack(() => Math.max(0, index.indexOf.get(data.step) ?? 0)));
+  let current = $state(untrack(() => Math.max(0, locate(data.step))));
   let far = $state(untrack(() => current));
   let menuOpen = $state(false);
-  let quizDone = $state(false);
+  /** 已答对的测验组（组下标集合）：全部组过了这一步才算过 */
+  let quizPassed = $state<ReadonlySet<number>>(new Set());
   /** 引导局那一步打完没有（打完才放行下一步） */
   let dealDone = $state(false);
   let dealAction = $state<number | null>(null);
-  let saved = $state<Saved | null>(null);
 
   const step = $derived(index.steps[current]!);
   const chapter = $derived(index.chapterOf.get(step.id)!);
   const progress = $derived(total <= 1 ? 100 : Math.round(((current + 1) / total) * 100));
+  /** 这一步自带的测验组（只有 brief 有；没有就是空数组 = 无门槛） */
+  const quizGroups = $derived(step.kind === 'brief' ? (step.quiz ?? []) : []);
+  const quizComplete = $derived(quizPassed.size >= quizGroups.length);
   /** 测验与引导局必须当场过掉才放行；其他步随时可往下走 */
-  const gated = $derived((step.kind === 'quiz' && !quizDone) || (step.kind === 'deal' && !dealDone));
+  const gated = $derived(
+    (quizGroups.length > 0 && !quizComplete) || (step.kind === 'deal' && !dealDone)
+  );
   const alreadyPassed = $derived(current < far);
   const canNext = $derived(!gated || alreadyPassed);
+  const nextStep = $derived(current + 1 < total ? index.steps[current + 1]! : null);
 
   function persist(next: number, action: number | null): void {
     try {
       const payload: Saved = { v: course.id, index: next, step: index.steps[next]?.id ?? '', action };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-      saved = payload;
     } catch {
       // 隐私模式里写不进去就算了：续读是锦上添花，不能因此挡住课程
     }
@@ -78,16 +96,23 @@
     const clamped = Math.max(0, Math.min(total - 1, next));
     if (clamped === current) return;
     current = clamped;
-    quizDone = false;
+    quizPassed = new Set();
     dealDone = false;
     dealAction = null;
     if (clamped > far) {
       far = clamped;
       persist(clamped, null);
     }
+    // 翻页的明确提示：新的一屏从顶上开始读，而不是停在上一屏滚到的位置
+    window.scrollTo({ top: 0 });
   }
 
-  /** 题目全答对、或这一副引导局打完：记录进展并允许往下走 */
+  /** 某一测验组答对：记下；全部组过、或引导局打完，才记录进展并允许往下走 */
+  function onQuizGroupDone(group: number): void {
+    quizPassed = new Set(quizPassed).add(group);
+    if (quizPassed.size >= quizGroups.length) onStepPassed();
+  }
+
   function onStepPassed(): void {
     const next = Math.min(total - 1, current + 1);
     if (next > far) {
@@ -102,7 +127,7 @@
   }
 
   onMount(() => {
-    saved = readSaved();
+    const saved = readSaved();
     if (data.step.length === 0 && saved !== null) {
       const at = index.indexOf.get(saved.step);
       if (at !== undefined && at > 0) {
@@ -117,7 +142,7 @@
   // 这一屏有没有已经读过去：前进过就视为已通过（否则回头再看测验会被门槛挡住）
   $effect(() => {
     if (current < far) {
-      quizDone = true;
+      quizPassed = new Set(quizGroups.map((_, group) => group));
       dealDone = true;
     }
   });
@@ -208,9 +233,16 @@
          连着两步都是引导局时 `GuideBoard` 的快照同理。`{#key step.id}` 把这条边界钉死。 -->
     {#key step.id}
       {#if step.kind === 'brief'}
-        <BriefCard title={step.title} points={step.points} widget={step.widget} />
-      {:else if step.kind === 'quiz'}
-        <QuizCard title={step.title} questions={step.questions} onDone={onStepPassed} />
+        <div class="space-y-4">
+          <BriefCard title={step.title} points={step.points} widget={step.widget} />
+          {#each quizGroups as group, groupIndex (group.title)}
+            <QuizCard
+              title={group.title}
+              questions={group.questions}
+              onDone={() => onQuizGroupDone(groupIndex)}
+            />
+          {/each}
+        </div>
       {:else if step.kind === 'deal'}
         {@const deal = dealOf(step.slug)}
         {#if deal === null}
@@ -264,18 +296,30 @@
         </div>
       {/if}
     {/key}
+
+    <!-- 主 CTA：可前进时是「下一节 · <标题>」（按钮自己预告去哪）；
+         被门槛卡住时同一位置说原因。结尾屏自带回大厅入口，不重复放。 -->
+    {#if step.kind !== 'end'}
+      <div class="mt-4 flex justify-center border-t border-white/10 pt-3" data-guide-cta>
+        {#if canNext && nextStep !== null}
+          <button
+            type="button"
+            class="rounded-lg bg-gold/20 px-5 py-2 text-xs font-semibold text-gold ring-1 ring-gold/40 transition hover:bg-gold/30"
+            onclick={() => go(current + 1)}
+          >
+            下一节 · {nextStep.title} →
+          </button>
+        {:else if gated && !alreadyPassed}
+          <p class="text-[11px] text-white/50" data-guide-gate>
+            {step.kind === 'deal' ? '把这一段打完才能继续' : '答对才能继续'}
+          </p>
+        {/if}
+      </div>
+    {/if}
   </div>
 
   <footer class="mt-3 flex flex-wrap items-center justify-between gap-2 pb-2">
     <button type="button" class={ghost} disabled={current === 0} onclick={() => go(current - 1)}>← 上一步</button>
-    <span class="text-[10px] text-white/35">
-      {#if gated && !alreadyPassed}
-        {step.kind === 'quiz' ? '答对才能继续' : '把这一段打完才能继续'}
-      {:else}
-        ← → 翻步 · 深度链接 {`?s=${step.id}`}
-      {/if}
-      {#if saved !== null && saved.index > current}· 已读到第 {saved.index + 1} 步{/if}
-    </span>
     <button type="button" class={ghost} disabled={!canNext || current >= total - 1} onclick={() => go(current + 1)}>
       下一步 →
     </button>

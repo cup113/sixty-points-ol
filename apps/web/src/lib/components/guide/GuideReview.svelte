@@ -11,6 +11,7 @@
   import LevelTable from '$lib/components/LevelTable.svelte';
   import TrickCluster from '$lib/components/TrickCluster.svelte';
   import VerdictBadge from '$lib/components/VerdictBadge.svelte';
+  import { sortHand } from '@sixty/engine';
   import { levelRows, strainGlyph, trickSideBadge, trumpText } from '$lib/labels';
   import { handFromKeys, replayGuide } from '$lib/guide/replay';
   import type { GuideDealData } from '$lib/guide/types';
@@ -23,7 +24,8 @@
     strain: summary.contract.strain,
     rank: deal.facts.levels[summary.contract.declarerSeat]!.rank
   });
-  const hands = $derived(deal.facts.hands.map((hand) => handFromKeys(hand)));
+  /** 发牌序只属于数据文件；屏上给读者看的是排好的序（引擎 `sortHand`，与真桌同一份） */
+  const hands = $derived(deal.facts.hands.map((hand) => sortHand(handFromKeys(hand), trump)));
   /** 结算摘要里的底牌本身就是牌对象（`DealSummary.kitty`），不必再解牌键 */
   const kitty = $derived(summary.kitty);
   const contractLabel = $derived(`${summary.contract.points}${strainGlyph(summary.contract.strain)}`);

@@ -1,19 +1,24 @@
 <script lang="ts">
   /**
-   * 引导局的教学桌面（CONTEXT.md 的 **引导局** 与 **教练栏**）。
+   * 引导局的教学桌面（CONTEXT.md 的 **引导局**、**教练栏** 与 **收墩停留**）。
    *
    * 分工：**规则全在 `guide/session.ts`（纯函数）里**，这里只有接线与手感 ——
    * 定时器、选中态、拒绝提示、动画。于是「强制怎么判、下一步该谁动」都被单测盯着，
    * 而这一层改排版不会碰到规则（ADR-0008 的同一条纪律）。
    *
-   * 三件事在这里实现：
-   * 1. **对手自动出牌**：轮流用短延迟推进，随时可点「跳过等待」；定时器随步进重建、卸载即清。
-   * 2. **用户座位全量强制**：他点牌只是「选择」，出手一律由 `submit*` 判定 ——
+   * 四件事在这里实现：
+   * 1. **对手自动出牌**：延迟按动作分档（叫牌/埋底 1.5s、出牌 1.1s）——教程要留出
+   *    读叫牌历史表与引导词的时间，反而该比真桌的机器人（0.5–1.5s）慢；随时可「跳过等待」。
+   * 2. **收墩停留**：`stepOnce`/`submit*` 返回的 `events.trickWon` 在这里被消费 ——
+   *    一墩收起时三家牌在出牌区**原地停 2 秒**配赢家徽标，才清场进下一轮。
+   * 3. **用户座位全量强制**：他点牌只是「选择」，出手一律由 `submit*` 判定 ——
    *    不合法给引擎的理由，合法但非引导牌指回教练栏（两类拒绝，见 `forcing.ts`）。
-   * 3. **过程只见自己的手牌**：对手只报张数；复盘屏才全亮三家。
+   * 4. **过程只见自己的手牌**：对手只报张数；复盘屏才全亮三家。手牌过引擎的
+   *    `sortHand`（真桌 **个人视图** 同一份序：主牌在前、副牌黑红交替、同门内大到小）。
    */
-  import { cardKey, highestBid, type Card } from '@sixty/engine';
+  import { cardKey, declarerTrickPoints, highestBid, sortHand, type Card, type CompletedTrick } from '@sixty/engine';
   import { untrack } from 'svelte';
+  import AuctionHistory from '$lib/components/AuctionHistory.svelte';
   import HandFan from '$lib/components/HandFan.svelte';
   import TrickCluster from '$lib/components/TrickCluster.svelte';
   import { callText, cardText, trickSideBadge, trumpText } from '$lib/labels';
@@ -22,6 +27,7 @@
   import {
     currentPlays,
     fastForward,
+    lastTrick,
     learnerHand,
     learnerTurn,
     nextLearnerAction,
@@ -54,8 +60,12 @@
     ondone: () => void;
   } = $props();
 
-  /** 对手拟人延迟：比真桌的机器人（0.5–1.5 秒）快一半 —— 教程里读引导词的时间已经够了 */
-  const OPPONENT_DELAY_MS = 700;
+  /** 对手叫牌/埋底的延迟：思考型动作，留出读历史表与引导词的时间 */
+  const THINK_DELAY_MS = 1500;
+  /** 对手出牌的延迟：看清谁出了什么就够了 */
+  const PLAY_DELAY_MS = 1100;
+  /** 收墩后的停留：三家牌原地摆着 + 赢家徽标，然后才清场（「跳过等待」可立即过去） */
+  const TRICK_HOLD_MS = 2000;
 
   const spans = $derived(dealSpans(deal));
   const range = $derived(
@@ -80,12 +90,22 @@
   let selected = $state<string[]>([]);
   let rejection = $state<Rejection | null>(null);
   let announced = $state(false);
+  /** 收墩停留中的那一墩（`null` = 不在停留）：清场由它自己的定时器负责 */
+  let heldTrick = $state<CompletedTrick | null>(null);
+  let holdTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // 停留定时器不进响应式图，卸载时手动清
+  $effect(() => {
+    return () => {
+      if (holdTimer !== null) clearTimeout(holdTimer);
+    };
+  });
 
   const dealState = $derived(snapshot.state.deal);
   const trump = $derived(dealState?.trump ?? null);
   const myTurn = $derived(learnerTurn(snapshot, deal));
   const nextMine = $derived(nextLearnerAction(deal, snapshot.index));
-  const hand = $derived(learnerHand(snapshot, deal));
+  const hand = $derived(sortHand(learnerHand(snapshot, deal), trump));
   /** 引导目标（手牌上要点出来的那几张） */
   const targetCards = $derived(myTurn === null ? [] : (guidedCards(myTurn.action) ?? []));
   const targetKeys = $derived(targetCards.map(cardKey));
@@ -93,18 +113,26 @@
   const coachAction = $derived(myTurn?.action ?? nextMine?.action ?? null);
   const coachIndex = $derived(myTurn?.index ?? nextMine?.index ?? -1);
   const coachWord = $derived(coachIndex < 0 ? null : (deal.guides[String(coachIndex)] ?? null));
-  const opponentNote = $derived(
-    snapshot.index > 0 && myTurn === null ? (deal.notes?.[String(snapshot.index - 1)] ?? null) : null
-  );
   const waiting = $derived(myTurn === null && snapshot.phase === 'playing' && snapshot.index < range.to);
   const played = $derived(currentPlays(snapshot));
   const lastWon = $derived(
     played.length === 0 ? (dealState?.trickHistory ?? []).at(-1) ?? null : null
   );
+  /** 拿上来的底牌（只在埋底阶段给庄家亮，闲家那一章用不到） */
   const kittyTaken = $derived(takenKitty(snapshot));
   const declarerSeat = $derived(dealState?.contract?.declarerSeat ?? null);
+  /** 庄家已抓的分（真桌 **信息须** 同一个来源：引擎 `declarerTrickPoints`） */
+  const declarerPts = $derived(dealState === null ? 0 : declarerTrickPoints(dealState));
   /** 还在叫牌阶段时，按三家级别点数预示「哪些牌可能成为本副级牌」 */
   const candidateRanks = $derived(trump === null ? deal.facts.levels.map((level) => level.rank) : null);
+  /** 等对手出手那条的解说：刚出手那家在 notes 里留了话就显示（notes 此前几乎看不到） */
+  const waitingNote = $derived.by(() => {
+    if (!waiting || snapshot.index === 0) return null;
+    const note = deal.notes?.[String(snapshot.index - 1)];
+    const actor = deal.actions[snapshot.index - 1]?.seat;
+    if (note === undefined || actor === undefined || actor === deal.learnerSeat) return null;
+    return `${deal.aliases[actor] ?? `座位 ${actor}`}：${note}`;
+  });
 
   function nameOf(seat: number): string {
     return deal.aliases[seat] ?? `座位 ${seat}`;
@@ -115,17 +143,34 @@
     return play === undefined ? -1 : play.seat;
   }
 
-  // 对手自动出牌：读一步、等一拍、再推进；定时器随快照/段界重建，卸载即清
+  /** 一次推进之后：收墩了就把那墩**原地停住**（`events.trickWon` 在这里被消费） */
+  function holdIfWon(next: SessionSnapshot, trickWon: boolean): SessionSnapshot {
+    if (trickWon) {
+      heldTrick = lastTrick(next);
+      if (holdTimer !== null) clearTimeout(holdTimer);
+      holdTimer = setTimeout(() => {
+        heldTrick = null;
+        holdTimer = null;
+      }, TRICK_HOLD_MS);
+    }
+    return next;
+  }
+
+  // 对手自动出牌：读一步、等一拍、再推进；定时器随快照/段界/停留重建，卸载即清。
+  // 读 `heldTrick` 让「停留中」成为依赖：停着不出手、停留结束这一拍自然排下一条动作。
   $effect(() => {
     if (snapshot.phase !== 'playing') return;
     if (snapshot.index < range.from || snapshot.index >= range.to) return;
     if (learnerTurn(snapshot, deal) !== null) return;
+    if (heldTrick !== null) return;
+    const action = deal.actions[snapshot.index];
+    const delay = action !== undefined && action.type === 'play' ? PLAY_DELAY_MS : THINK_DELAY_MS;
     const timer = setTimeout(() => {
       const out = stepOnce(snapshot, deal);
       rejection = null;
-      if (out.snapshot.index <= range.to) snapshot = out.snapshot;
+      if (out.snapshot.index <= range.to) snapshot = holdIfWon(out.snapshot, out.events.trickWon);
       else snapshot = { ...snapshot, index: range.to, phase: 'done' };
-    }, OPPONENT_DELAY_MS);
+    }, delay);
     return () => clearTimeout(timer);
   });
 
@@ -145,9 +190,18 @@
   function skip(): void {
     if (snapshot.phase !== 'playing') return;
     if (snapshot.index >= range.to) return;
+    // 停留也算「等待」：跳过先清掉它
+    if (holdTimer !== null) {
+      clearTimeout(holdTimer);
+      holdTimer = null;
+    }
+    heldTrick = null;
     const out = stepOnce(snapshot, deal);
     rejection = null;
-    snapshot = out.snapshot.index <= range.to ? out.snapshot : { ...snapshot, index: range.to, phase: 'done' };
+    snapshot = holdIfWon(
+      out.snapshot.index <= range.to ? out.snapshot : { ...snapshot, index: range.to, phase: 'done' },
+      out.events.trickWon
+    );
   }
 
   /** 点牌：先看这张在不在引导目标里 —— 不在就当场给两类拒绝中的一类，且**不选中**它 */
@@ -187,7 +241,7 @@
     }
     selected = [];
     rejection = null;
-    snapshot = out.snapshot;
+    snapshot = holdIfWon(out.snapshot, out.events.trickWon);
   }
 
   function confirmBury(): void {
@@ -221,14 +275,18 @@
 </script>
 
 <div class="space-y-2" data-guide-board>
-  <!-- 顶行：两张对手卡（牌面不给看，只报张数） -->
+  <!-- 顶行：两张对手卡（牌面不给看，只报张数；定约未定时说「叫牌中」，不冒称闲家） -->
   <div class="grid grid-cols-2 gap-2">
     {#each [0, 1, 2].filter((seat) => seat !== deal.learnerSeat) as seat (seat)}
       <div class="rounded-xl bg-black/30 px-2.5 py-1.5" data-guide-seat={seat}>
         <p class="flex items-baseline justify-between gap-2 text-[11px]">
           <b class="truncate text-ivory">{nameOf(seat)}</b>
           <span class="shrink-0 text-white/45">
-            {seat === declarerSeat ? '庄家' : '闲家'} · 剩 {dealState?.hands[seat]?.length ?? 0} 张
+            {declarerSeat === null
+              ? '叫牌中'
+              : seat === declarerSeat
+                ? '庄家'
+                : '闲家'} · 剩 {dealState?.hands[seat]?.length ?? 0} 张
           </span>
         </p>
       </div>
@@ -247,28 +305,45 @@
           —
         {/if}
       </p>
-      {#if lastWon !== null && declarerSeat !== null}
-        <span class="rounded-md bg-gold/15 px-2 py-0.5 text-[10px] font-semibold text-gold">
-          上一轮 {nameOf(lastWon.winnerSeat)} 赢 · {trickSideBadge(declarerSeat, lastWon.winnerSeat, lastWon.points)}
+      {#if (heldTrick ?? lastWon) !== null && declarerSeat !== null}
+        <span
+          class="rounded-md bg-gold/15 px-2 py-0.5 text-[10px] font-semibold text-gold"
+          data-trick-badge
+        >
+          {heldTrick !== null ? '这一轮' : '上一轮'} {nameOf((heldTrick ?? lastWon)!.winnerSeat)} 赢 ·
+          {trickSideBadge(declarerSeat, (heldTrick ?? lastWon)!.winnerSeat, (heldTrick ?? lastWon)!.points)}
         </span>
       {/if}
     </div>
     <div class="mt-1.5 grid grid-cols-3 gap-1.5">
-      {#each [0, 1, 2] as slot (slot)}
-        {@const seat = seatOfCluster(slot)}
-        {@const play = played[slot]}
-        <div class="min-w-0">
-          {#if play !== undefined}
-            <TrickCluster cards={play.cards} {trump} caption={nameOf(play.seat)} />
-          {:else}
-            <div class="flex h-full min-h-[3.5rem] items-center justify-center rounded-lg bg-black/20 px-1 text-[10px] text-white/25">
-              {slot < played.length ? '' : '等待出牌'}
-            </div>
-          {/if}
-        </div>
-      {/each}
+      {#if heldTrick !== null}
+        <!-- 收墩停留：整墩原地摆住，谁出的还在谁那格 -->
+        {#each [0, 1, 2] as seat (seat)}
+          {@const play = heldTrick.plays.find((item) => item.seat === seat)}
+          <div class="min-w-0">
+            {#if play !== undefined}
+              <TrickCluster cards={play.cards} {trump} caption={nameOf(seat)} />
+            {:else}
+              <div class="min-h-[3.5rem]"></div>
+            {/if}
+          </div>
+        {/each}
+      {:else}
+        {#each [0, 1, 2] as slot (slot)}
+          {@const seat = seatOfCluster(slot)}
+          {@const play = played[slot]}
+          <div class="min-w-0">
+            {#if play !== undefined}
+              <TrickCluster cards={play.cards} {trump} caption={nameOf(play.seat)} />
+            {:else}
+              <div class="min-h-[3.5rem]"></div>
+            {/if}
+          </div>
+        {/each}
+      {/if}
     </div>
-    {#if lastWon !== null}
+    <!-- 上一轮的小行：停留期间不渲染（同墩不双显），停留结束后接手回看 -->
+    {#if lastWon !== null && heldTrick === null}
       <div class="mt-1.5 flex flex-wrap items-end gap-2">
         {#each lastWon.plays as play (play.seat)}
           <TrickCluster cards={play.cards} {trump} caption={`上轮 · ${nameOf(play.seat)}`} />
@@ -279,16 +354,26 @@
 
   {#if needsBid || dealState?.phase === 'auction'}
     <GuideBidBoard
-      highest={dealState === null || dealState === undefined ? null : highestBid(dealState)}
+      highest={dealState === null || dealState === undefined ? null : highestBid(dealState.auction)}
       target={coachAction !== null && coachAction.type === 'bid' ? coachAction.call : 'pass'}
       onpick={pickBid}
     />
+    <!-- 叫牌历史：与真桌同一份三列表格（列 = 三家、行 = 一轮、最高叫品标金） -->
+    <div class="rounded-xl bg-black/25 p-2.5">
+      <AuctionHistory deal={dealState} mySeat={deal.learnerSeat} names={[...deal.aliases]} />
+    </div>
   {/if}
 
-  {#if myTurn === null && snapshot.phase === 'playing' && snapshot.index < range.to}
+  {#if waiting}
     <div class="flex items-center justify-between gap-2 rounded-xl bg-black/25 px-2.5 py-1.5 text-[11px] text-white/50">
-      <span>等对手出手⋯</span>
-      <button type="button" class="rounded-md px-2 py-0.5 ring-1 ring-white/15 hover:bg-white/10" onclick={skip}>
+      <span class="min-w-0 flex-1 truncate" data-waiting-note={waitingNote !== null}>
+        {waitingNote ?? '等对手出手⋯'}
+      </span>
+      <button
+        type="button"
+        class="shrink-0 rounded-md px-2 py-0.5 ring-1 ring-white/15 hover:bg-white/10"
+        onclick={skip}
+      >
         跳过等待
       </button>
     </div>
@@ -361,10 +446,10 @@
     </div>
   {/if}
 
-  {#if coachWord !== null || opponentNote !== null}
+  {#if coachWord !== null || waitingNote !== null}
     <CoachBar
       word={coachWord?.text ?? '跟上这一手。'}
-      why={coachWord?.why ?? opponentNote}
+      why={coachWord?.why ?? null}
       target={coachAction === null ? null : describeTarget(coachAction)}
       {waiting}
     />
@@ -378,10 +463,15 @@
     </p>
   {/if}
 
-  <p class="text-center text-[10px] text-white/35">
-    本副 {deal.source.table} 第 {deal.source.dealNo} 副 ·
-    {deal.role === 'declarer' ? '你坐庄' : '你当闲家'} ·
-    引导目标 {targetKeys.length > 0 ? targetCards.map(cardText).join(' ') : (coachAction === null ? '—' : describeTarget(coachAction))}
+  <!-- 底部元信息：只说「这一副怎么打 + 打到哪 + 账面」。引导目标由教练栏与金虚线自己说，不在这里抄第三份 -->
+  <p class="text-center text-[10px] text-white/35" data-guide-meta>
+    {deal.role === 'declarer' ? '你坐庄' : '你当闲家'}
     {#if trump !== null}· {trumpText(trump)}{/if}
+    {#if dealState?.phase === 'auction'}
+      · 叫牌中 · 第 {dealState.auction.length} 手
+    {:else if dealState !== null}
+      · 第 {dealState.trickHistory.length + 1} 轮
+      {#if declarerSeat !== null}· 庄已抓 {declarerPts} 分{/if}
+    {/if}
   </p>
 </div>

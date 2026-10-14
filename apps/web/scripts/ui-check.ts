@@ -60,8 +60,10 @@
  *    （`inert` + 滑出屏幕）；而「牌桌」页的内容（改名 / 换身份、座位已满）在关闭时也必须留在
  *    SSR 里 —— 否则观战者那两条入口就又从「页面上真的在」退化成「标签名存在」。
  * 另外对 /rules 与 /learn 跑同一套 position 守卫 —— 新写的版面正是最容易踩坑的地方；
- * /learn（新手引导，ADR-0025）额外守住课程骨架：概念简述 / 门槛式测验 / 引导局外壳三态都要在
- * SSR 里真的渲染出来，深链 `?s=<step-id>` 直接落在那一步（不是先给第一步再靠 JS 跳），
+ * /learn（新手引导，ADR-0025 / guide-v2）额外守住课程骨架：**讲解与它的测验同屏**（概念简述 + 测验组）
+ * 与引导局外壳三态都要在 SSR 里真的渲染出来，深链 `?s=<step-id>` 直接落在那一步（不是先给第一步
+ * 再靠 JS 跳；并屏时被吸收的旧 quiz 步 id 经别名表落到合并后的那一屏），**下一步**是内容底部的主 CTA
+ * （`data-guide-cta`）而不是页脚一行开发者提示（`?s=` 写法与键盘翻页提示都不许回潮），
  * 且**不许回潮**成幻灯片（语义、自动播放都必须是零），文案无裸花色字母、无方位称谓。
  *
  * 运行：BASE=http://127.0.0.1:5178 node scripts/ui-check.ts
@@ -1123,23 +1125,30 @@ async function main(): Promise<void> {
     '出货样式表里找不到断线提示条的底色 .bg-amber-400/15（提示会失去告警观感）'
   );
 
-  // 10) 新手引导页（/learn，ADR-0025）：概念简述 + 门槛式测验 + 引导局，不再是幻灯片
+  // 10) 新手引导页（/learn，ADR-0025 / guide-v2）：讲解与它的测验同屏 + 引导局，不再是幻灯片
   const learn = await page('/learn');
   assertNoPositionMix(learn, '新手引导页');
   assert(!/[东南西]/.test(learn), '新手引导页出现方位称谓');
   assert(learn.includes('data-brief'), '第一步不是概念简述屏（课程入口应当是「基础概念 I」）');
+  assert(learn.includes('data-quiz'), '概念屏里没有同屏的测验组：讲解与题目又分页了');
   assert(learn.includes('基础概念 I'), `页头没有当前章入口：${learn.slice(0, 160)}`);
   assert(learn.includes('href="/rules"'), '新手引导页没有指向文字教程的入口');
   assert(learn.includes('href="/"'), '新手引导页没有回大厅的入口');
-  assert(/\?s=[a-z0-9-]+/.test(learn), '页脚没有写明这一步的深链写法');
+  // 导航：主 CTA 在内容流里预告下一节；页脚不再写「← → 翻步 · 深度链接 ?s=…」这种开发者语言
+  assert(learn.includes('data-guide-cta'), '内容底部没有主 CTA 位（下一步只剩右下角一枚小钮）');
+  assert(learn.includes('答对才能继续'), '测验没答对时没有在 CTA 位写出门槛（答对才能继续）');
+  assert(!learn.includes('深度链接'), '页脚还在展示深链写法（?s= 是分享用的机制，不是给用户看的说明）');
+  assert(!learn.includes('翻步'), '页脚还在展示键盘翻页提示');
   assert(bareStrainLetters(learn).length === 0, `新手引导页出现裸花色字母：${bareStrainLetters(learn).join(', ')}`);
   // 幻灯片语义必须彻底退场（自动播放、屏计数器都是旧形状）
   assert(!learn.includes('aria-roledescription="幻灯片"'), '新手引导页还带着幻灯片语义');
   assert(!learn.includes('自动播放'), '新手引导页还留着自动播放');
 
-  // 10b) 深链直接落在指定那一步：服务端渲染出那一步的内容，而不是先给第一步再靠 JS 跳
+  // 10b) 深链直接落在指定那一步：服务端渲染出那一步的内容，而不是先给第一步再靠 JS 跳。
+  //      这里用的正是一个**被并屏吸收掉的旧 quiz 步 id**：别名表必须把它接回合并后的简述屏。
   const quizStep = await page('/learn?s=c2-follow-single');
-  assert(quizStep.includes('上家领出 ♣8-9-10-J 四张顺子'), '测验步的深链没有渲染出题干');
+  assert(quizStep.includes('上家领出 ♣8-9-10-J 四张顺子'), '旧测验步的深链没有落到合并后的那一屏（题干没渲染出来）');
+  assert(quizStep.includes('data-brief'), '旧测验步的深链没有落到简述屏上（只有题、没有讲解）');
   assert(quizStep.includes('data-quiz'), '测验步没有渲染成测验');
   assert(quizStep.includes('♣3-4-6'), '测验选项没有渲染出牌面文字');
   assert(quizStep.includes('答对才能继续'), '测验步没有写出门槛（答对才能继续）');
@@ -1173,8 +1182,8 @@ async function main(): Promise<void> {
   console.log('触控：悬停上浮只在鼠标设备生效；出牌按钮 .play-btn 带 z-index:20');
   console.log('页头：大厅 / 邀请码 + 右上角桌况簇（观战人数含 0 常显；在座离座、不在座改名+入座），连接圆点已下线、断线提示不在首帧出现；战报/叫牌/底牌/牌桌 四项页签常驻右边缘，抽屉默认 inert');
   console.log('抽屉：查阅面进抽屉、动作面留桌面；「牌桌」页常驻 SSR（改名/换身份与座位已满始终在页面上）');
-  console.log('新手引导：/learn 是交互课程（概念简述 + 门槛式测验 + 引导局），深链 ?s=<step-id> 直接渲染出那一步；大厅与文字教程都指向它');
-  console.log('引导局：数据没接上时如实说「还没到」（data-guide-pending），接上后是教学桌面（data-guide-board）');
+  console.log('新手引导：/learn 是交互课程（讲解与它的测验**同屏** + 引导局），深链 ?s=<step-id> 直接渲染出那一步（旧 quiz 步 id 经别名落到合并后的屏）；下一步是内容底部的主 CTA，页脚不再写 ?s= 与键盘翻页提示；大厅与文字教程都指向它');
+  console.log('引导局：数据没接上时如实说「还没到」（data-guide-pending），接上后是教学桌面（data-guide-board）；对手延迟按叫牌/出牌分档、收墩原地停留 2s，叫牌历史是真桌那份三列表格，手牌过引擎 sortHand');
   console.log('UI OK');
 }
 

@@ -32,4 +32,4 @@
 </script>
 
 <AuctionInfo {view} {mySeat} {names} {heading} />
-<AuctionHistory {view} {mySeat} {names} />
+<AuctionHistory deal={view.deal} {mySeat} {names} />

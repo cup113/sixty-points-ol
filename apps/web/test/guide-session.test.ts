@@ -139,7 +139,7 @@ test('叫牌：低于 40 的分数 → illegal；合法但非引导叫品 → of
   assert.equal(illegal.ok, false);
   if (!illegal.ok) assert.equal(illegal.rejection.kind, 'illegal');
 
-  const highest = highestBid(bidStep.snapshot.state.deal!);
+  const highest = highestBid(bidStep.snapshot.state.deal!.auction);
   const alternative = bidOptions(highest)
     .flatMap((row) => row.strains.map((strain) => ({ points: row.points, strain })))
     .find((call) => isPass(target) || call.points !== target.points || call.strain !== target.strain);

@@ -240,9 +240,9 @@ export function playTurn(deal: DealState): Seat | null {
   return ((deal.trick.leaderSeat + deal.trick.plays.length) % 3) as Seat;
 }
 
-export function highestBid(deal: DealState): Bid | null {
-  for (let i = deal.auction.length - 1; i >= 0; i--) {
-    const call = deal.auction[i]!.call;
+export function highestBid(auction: readonly BidEntry[]): Bid | null {
+  for (let i = auction.length - 1; i >= 0; i--) {
+    const call = auction[i]!.call;
     if (!isPass(call)) return call;
   }
   return null;
@@ -286,7 +286,7 @@ export function dispatch(prev: GameState, action: Action, rng: RNG): DispatchRes
       if (deal === null) return fail(err('no_deal', '尚未发牌'));
       if (deal.phase !== 'auction') return fail(err('not_auction', '当前不是叫牌阶段'));
       if (action.seat !== auctionTurn(deal)) return fail(err('not_your_turn', '还没轮到你叫牌'));
-      const bad = validateCall(action.call, highestBid(deal));
+      const bad = validateCall(action.call, highestBid(deal.auction));
       if (bad !== null) return fail(err('illegal_bid', bad));
 
       deal.auction.push({ seat: action.seat, call: action.call });

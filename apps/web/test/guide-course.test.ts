@@ -4,15 +4,18 @@
  * 分工（与旧 `deck.test.ts` 同一条纪律）：
  * - **内容正确性**由 `tutorial.test.ts` 盯着（概念挂件的示例都被引擎核对过）与 `guide-*.test.ts`（引导局机制）；
  * - 这里只守**结构**与**口径**：漏一屏、id 撞车、深链定位不到、测验少解释、文案里冒出方位词或裸花色字母。
+ *
+ * guide-v2 起讲解与测验**同屏**：brief 步自带 `quiz` 组（不再是独立 quiz 步），
+ * 被吸收的旧 quiz 步 id 收在 `GUIDE_ALIASES` 里供深链兼容 —— 那张表也在这里守。
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { COURSE } from '../src/lib/guide/course.ts';
+import { COURSE, GUIDE_ALIASES } from '../src/lib/guide/course.ts';
 import { dealOf } from '../src/lib/guide/deals/index.ts';
 import { gradeQuiz, validateQuestion } from '../src/lib/guide/quiz.ts';
 import { isCardKey } from '../src/lib/guide/replay.ts';
-import { indexCourse, type CourseStep } from '../src/lib/guide/types.ts';
+import { indexCourse, type CourseStep, type QuizGroup } from '../src/lib/guide/types.ts';
 
 const course = COURSE;
 const index = indexCourse(course);
@@ -21,15 +24,10 @@ const allSteps: readonly CourseStep[] = index.steps;
 function textOf(step: CourseStep): string {
   switch (step.kind) {
     case 'brief':
-      return [step.title, ...step.points].join('\n');
-    case 'quiz':
       return [
         step.title,
-        ...step.questions.flatMap((question) => [
-          question.prompt,
-          ...question.options.flatMap((option) => [option.text, option.why]),
-          question.note ?? ''
-        ])
+        ...step.points,
+        ...(step.quiz ?? []).flatMap((group) => quizGroupText(group))
       ].join('\n');
     case 'deal':
     case 'review':
@@ -37,6 +35,22 @@ function textOf(step: CourseStep): string {
     case 'end':
       return step.title;
   }
+}
+
+function quizGroupText(group: QuizGroup): string[] {
+  return [
+    group.title,
+    ...group.questions.flatMap((question) => [
+      question.prompt,
+      ...question.options.flatMap((option) => [option.text, option.why]),
+      question.note ?? ''
+    ])
+  ];
+}
+
+/** 全课程的测验组（guide-v2 起：讲解与它的测验同屏，组挂在 brief 步上） */
+function quizGroupsOf(): readonly QuizGroup[] {
+  return allSteps.flatMap((step) => (step.kind === 'brief' ? (step.quiz ?? []) : []));
 }
 
 test('章节：按大纲从基础概念 I 排到回大厅，每章都有标题与说明', () => {
@@ -109,14 +123,14 @@ test('简述屏：要点非空、挂件是允许的那些', () => {
   }
 });
 
-test('测验：每题都过题面校验，题目 id 全局唯一，选项里的牌面都能还原', () => {
-  const quizzes = allSteps.filter((step) => step.kind === 'quiz');
-  assert.ok(quizzes.length >= 10, '测验太少：大纲要求概念段与叫牌段都有题');
+test('测验组：每组有标题、每题都过题面校验，题目 id 全局唯一，选项里的牌面都能还原', () => {
+  const groups = quizGroupsOf();
+  assert.ok(groups.length >= 10, '测验太少：大纲要求概念段与叫牌段都有题');
   const ids = new Set<string>();
-  for (const step of quizzes) {
-    if (step.kind !== 'quiz') continue;
-    assert.ok(step.questions.length > 0, `${step.id} 没有题目`);
-    for (const question of step.questions) {
+  for (const group of groups) {
+    assert.ok(group.title.trim().length > 0, '有测验组缺标题（组标题是「这是在考什么」的路标）');
+    assert.ok(group.questions.length > 0, `${group.title} 没有题目`);
+    for (const question of group.questions) {
       assert.equal(validateQuestion(question), null, `${question.id} 题面不合法`);
       assert.equal(ids.has(question.id), false, `题目 id 重复：${question.id}`);
       ids.add(question.id);
@@ -133,6 +147,20 @@ test('测验：每题都过题面校验，题目 id 全局唯一，选项里的�
   }
 });
 
+test('深链别名：被吸收的旧 quiz 步 id 都能落到合并后的那一屏', () => {
+  assert.ok(GUIDE_ALIASES.size > 0, '别名表是空的：并屏合并过的旧 id 就没人接了');
+  for (const [oldId, mergedId] of GUIDE_ALIASES) {
+    assert.equal(index.indexOf.get(oldId), undefined, `${oldId} 不该还是独立一步（它已被并进 ${mergedId}）`);
+    assert.equal(index.chapterOf.get(oldId), undefined, `${oldId} 不该还挂在哪一章名下`);
+    assert.ok(index.indexOf.has(mergedId), `${oldId} 的合并目标 ${mergedId} 不存在`);
+    const brief = allSteps.find((step) => step.id === mergedId);
+    assert.ok(
+      brief !== undefined && brief.kind === 'brief' && (brief.quiz ?? []).length > 0,
+      `${mergedId} 合并了 ${oldId}，自己却没带测验组`
+    );
+  }
+});
+
 test('文案禁忌：没有方位称谓、没有裸花色字母，叫品一律写成 40♣ 这种', () => {
   for (const step of allSteps) {
     const text = textOf(step);
@@ -146,9 +174,8 @@ test('文案禁忌：没有方位称谓、没有裸花色字母，叫品一律�
 });
 
 test('依赖级牌点数的示例就地写明前提（凡是「某花色某点数 + 顺子」的句子都要带级牌）', () => {
-  for (const step of allSteps) {
-    if (step.kind !== 'quiz') continue;
-    for (const question of step.questions) {
+  for (const group of quizGroupsOf()) {
+    for (const question of group.questions) {
       const text = [
         question.prompt,
         ...question.options.flatMap((option) => [option.text, option.why]),

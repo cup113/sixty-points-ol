@@ -1,8 +1,9 @@
 import { SEATS, type Card, type Seat } from './cards.ts';
-import { bidOptions, type Bid, type BidCall, type BidOption } from './auction.ts';
+import { bidOptions, type Bid, type BidOption } from './auction.ts';
 import {
   auctionTurn,
   capturedPoints,
+  highestBid,
   isDeclarerSide,
   playTurn,
   type BidEntry,
@@ -137,7 +138,7 @@ function publicDealOf(state: GameState): PublicDealView | null {
     dealNo: deal.dealNo,
     dealerSeat: deal.dealerSeat,
     auction: deal.auction.map((e) => ({ ...e })),
-    highestBid: highestNonPass(deal.auction),
+    highestBid: highestBid(deal.auction),
     auctionTurn: auctionTurn(deal),
     contract: deal.contract,
     trump: deal.trump,
@@ -165,13 +166,4 @@ function publicDealOf(state: GameState): PublicDealView | null {
  */
 export function bidCandidates(view: PublicView, spread = 4): readonly BidOption[] {
   return bidOptions(view.deal?.highestBid ?? null, spread);
-}
-
-
-function highestNonPass(entries: readonly BidEntry[]): Bid | null {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const call: BidCall = entries[i]!.call;
-    if (call !== 'pass') return call;
-  }
-  return null;
 }

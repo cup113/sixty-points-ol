@@ -96,7 +96,7 @@ export function judgeBid(
   if (deal === null || deal.phase !== 'auction') {
     return { kind: 'illegal', reason: '当前不是叫牌阶段' };
   }
-  const bad = validateCall(attempt, highestBid(deal));
+  const bad = validateCall(attempt, highestBid(deal.auction));
   if (bad !== null) return { kind: 'illegal', reason: bad };
   if (!sameCall(attempt, target)) {
     return { kind: 'off-guide', reason: `这个叫品合法，但教程带你叫：${callText(target)}` };

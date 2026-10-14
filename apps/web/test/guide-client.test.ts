@@ -48,12 +48,14 @@ test('一步 = 一屏：每一步的内容整个落在 {#key step.id} 里', () =
   const close = page.indexOf('{/key}', open);
   assert.notEqual(close, -1, '{#key step.id} 没有闭合');
   const keyed = page.slice(open, close);
-  for (const kind of ['brief', 'quiz', 'deal', 'review'] as const) {
+  // guide-v2 起讲解与测验同屏：`quiz` 不再是独立步种，测验组渲染在 brief 分支里
+  for (const kind of ['brief', 'deal', 'review'] as const) {
     assert.ok(
       keyed.includes(`step.kind === '${kind}'`),
       `「${kind}」这一步不在 {#key step.id} 里：它的组件实例会被下一步复用`
     );
   }
+  assert.ok(keyed.includes('<BriefCard'), 'BriefCard 不在 {#key step.id} 里');
   assert.ok(keyed.includes('<QuizCard'), 'QuizCard 不在 {#key step.id} 里：题号会从上一屏漏过来');
   assert.ok(keyed.includes('<GuideBoard'), 'GuideBoard 不在 {#key step.id} 里：快照会从上一屏漏过来');
   assert.ok(keyed.includes('<GuideReview'), 'GuideReview 不在 {#key step.id} 里');
@@ -86,4 +88,69 @@ test('代理态进引擎当场抛错、普通对象走得好 —— 这就是快
     { name: 'DataCloneError' },
     '代理态没被挡住：dispatch 的 structuredClone 应当克隆不了它'
   );
+});
+
+// ── 交互重塑（guide-v2）：排序 / 节奏分档 / 导航提示的源码形状守卫 ─────────────
+// 每条都带**就地反证**：同一个判定函数跑一遍已知的坏形状必须红 —— 守卫不空转这件事
+// 由测试自己永久重证，不靠一次性注入实验（与 bid-panel.test.ts 的 panelOrder 同套路）。
+
+/** 判定：手牌上屏前过了引擎的 sortHand（真桌个人视图同一份序，CONTEXT.md「副牌在手牌里的显示序」） */
+function sortsHand(src: string): boolean {
+  return /sortHand\(/.test(src);
+}
+
+test('引导局手牌用引擎的 sortHand 排序：发牌序不许直接上屏', () => {
+  assert.ok(sortsHand(board), 'GuideBoard 没把手牌过 sortHand：用户看到的是发牌序，主牌不在前、花色不黑红交替');
+  // 反证：把调用改名的同一份源码必须过不了这条判定
+  const broken = board.replace(/sortHand\(/g, 'unsorted(');
+  assert.ok(!sortsHand(broken), '改掉 sortHand 调用后判定仍通过：这条守卫是空转的');
+});
+
+/** 判定：对手节奏分档（叫/埋 vs 出）且收墩有停留 */
+function pacedTiers(src: string): { tiers: boolean; hold: boolean; noFlatDelay: boolean } {
+  return {
+    tiers: /THINK_DELAY_MS\s*=/.test(src) && /PLAY_DELAY_MS\s*=/.test(src),
+    hold: /TRICK_HOLD_MS\s*=/.test(src) && /trickWon/.test(src),
+    noFlatDelay: !/OPPONENT_DELAY_MS/.test(src)
+  };
+}
+
+test('对手节奏分档 + 收墩停留：700ms 一刀切与「收墩即清场」都不许回潮', () => {
+  const pace = pacedTiers(board);
+  assert.ok(pace.tiers, 'GuideBoard 没有按动作分档的延迟常量（叫牌 1.5s / 出牌 1.1s）');
+  assert.ok(pace.hold, '收墩停留没了：events.trickWon 必须被消费（TRICK_HOLD_MS + trickWon 同时在）');
+  assert.ok(pace.noFlatDelay, '单一 OPPONENT_DELAY_MS 又回来了：教程要按动作分档，不是一刀切');
+  // 反证：抽掉分档常量与停留的坏形状必须被逐项判出来
+  const bad = pacedTiers(board.replace(/THINK_DELAY_MS = 1500;/, 'DELAY = 700;').replace(/TRICK_HOLD_MS = 2000;/, ''));
+  assert.equal(bad.tiers, false, '抽掉 THINK_DELAY_MS 后 tiers 判定仍通过：空转');
+  assert.equal(bad.hold, false, '抽掉 TRICK_HOLD_MS 后 hold 判定仍通过：空转');
+});
+
+/** 判定：叫牌历史进了引导局（复用真桌那份三列表格，不是第二份真相） */
+function showsAuctionHistory(src: string): boolean {
+  return /<AuctionHistory/.test(src);
+}
+
+test('引导局有叫牌历史表（复用 AuctionHistory，与真桌同一份）', () => {
+  assert.ok(showsAuctionHistory(board), 'GuideBoard 没挂 AuctionHistory：对手叫了什么只剩一句「N 手已叫」');
+  assert.ok(!showsAuctionHistory(board.replace(/<AuctionHistory[^]*?\/>/g, '')), '删掉挂载后判定仍通过：空转');
+});
+
+/** 判定：页面没有开发者向的页脚提示，且有主 CTA 位 */
+function hasUserNav(src: string): { clean: boolean; cta: boolean } {
+  return {
+    clean: !src.includes('深度链接') && !src.includes('翻步'),
+    cta: src.includes('data-guide-cta')
+  };
+}
+
+test('页脚不写开发者提示，「下一步」住进内容流的主 CTA 位', () => {
+  const nav = hasUserNav(page);
+  assert.ok(nav.clean, '页脚还在展示「← → 翻步 · 深度链接 ?s=…」：键盘与查询串是开发者的语言');
+  assert.ok(nav.cta, '内容底部没有主 CTA 位（data-guide-cta）：下一步只剩右下角一枚小钮');
+  // 反证：旧页脚那行字加回去，判定必须翻红
+  const oldFooter = page.replace('</footer>', `<span>← → 翻步 · 深度链接 ?s=c8-end</span></footer>`);
+  assert.equal(hasUserNav(oldFooter).clean, false, '旧页脚文案塞回去后判定仍通过：空转');
+  const noCta = page.replace('data-guide-cta', 'data-guide-legacy');
+  assert.equal(hasUserNav(noCta).cta, false, '换掉 CTA 钩子后判定仍通过：空转');
 });

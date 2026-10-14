@@ -14,7 +14,7 @@
   const names = $derived((client.table?.seats ?? []).map((seat) => seat.name));
   const myTurn = $derived(deal !== null && deal.phase === 'auction' && deal.auctionTurn === mySeat);
   /**
-   * 档位基准是引擎负载里的**最高叫品**（`deal.highestBid`，由 `highestNonPass` 从叫牌史算出）。
+   * 档位基准是引擎负载里的**最高叫品**（`deal.highestBid`，由引擎的 `highestBid` 从叫牌史算出）。
    * 这里读的是**一个字段**，不是自己遍历叫牌史 —— 面板不许变成第二份叫牌记录面
    * （记录面是 `AuctionInfo` / `AuctionHistory`，见 test/table-chrome.test.ts）。
    */
@@ -122,7 +122,7 @@
     <!-- 面板里唯一自己滚的一块：高度由上面的固定块决定，历史多了就在这里滚，
          绝不会淌到页脚底下（页脚不在这个滚动区里）。 -->
     <div data-bid-history="true" class="mt-1 min-h-0 flex-1 overflow-y-auto overscroll-contain">
-      <AuctionHistory {view} {mySeat} {names} />
+      <AuctionHistory {deal} {mySeat} {names} />
     </div>
   {/if}
 

@@ -115,6 +115,12 @@ export interface QuizQuestion {
   readonly note?: string;
 }
 
+/** 测验组：合并步里的一组题（保留组标题，如「哪些是分牌？」与「数一数」是两组） */
+export interface QuizGroup {
+  readonly title: string;
+  readonly questions: readonly QuizQuestion[];
+}
+
 /** 课程里的一步 */
 export type CourseStep =
   | {
@@ -122,13 +128,13 @@ export type CourseStep =
       readonly id: string;
       readonly title: string;
       readonly points: readonly string[];
+      /**
+       * 这一屏自带的测验组（可多组）：讲解在上、测验在下**同屏**，
+       * 全部组答对才放行下一步（门槛语义不变，只是不再分页）。
+       * 合并前这里是独立的 `quiz` 步 —— 分页让「读完讲解翻页才见题」断了档。
+       */
+      readonly quiz?: readonly QuizGroup[];
       readonly widget?: ConceptWidget;
-    }
-  | {
-      readonly kind: 'quiz';
-      readonly id: string;
-      readonly title: string;
-      readonly questions: readonly QuizQuestion[];
     }
   | {
       readonly kind: 'deal';

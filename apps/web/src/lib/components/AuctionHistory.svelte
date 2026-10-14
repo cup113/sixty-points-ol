@@ -1,7 +1,7 @@
 <script lang="ts">
-  import type { PublicView } from '@sixty/engine';
+  import { highestBid, type BidEntry, type Seat } from '@sixty/engine';
   import { SPECTATOR_LABEL_SEAT } from '$lib/role';
-  import { bidText, highestCall, whoLabel } from '$lib/labels';
+  import { bidText, whoLabel } from '$lib/labels';
 
   /**
    * 叫牌历史：三列表格，列 = 三位玩家（列序从发牌人起 = 叫牌顺位），行 = 一轮。
@@ -10,23 +10,26 @@
    * （2/3/4 个都可能），三家叫牌的对位关系反而看不出来；表格列宽固定、昵称超长就截断，
    * 一行读下来正好是这一轮三家的出声顺序。
    *
-   * **不自带滚动区**：面板（`BidPanel`）必须是唯一滚动区，这里只做普通文档流 ——
-   * 高度上限由面板的 `max-h-*` 与它自己的纵向滚动兜底（判据见 `src/lib/panel-guard.ts`）。
+   * props 只取**结构切片**（`auction` + `dealerSeat`）：真桌传公共视图的 `view.deal`，
+   * `/learn` 的引导局传引擎的 `DealState`——两边都天然满足这个形状，组件谁也不依赖。
+   * 最高叫品由引擎的 `highestBid`（唯一实现）从叫牌史算出，不在这里写第二份。
+   *
+   * **不自带滚动区**：宿主（`BidPanel` / 引导局）自己管滚动，这里只做普通文档流。
    */
   let {
-    view,
+    deal,
     mySeat = SPECTATOR_LABEL_SEAT,
     names = []
   }: {
-    view: PublicView;
+    /** 只读 `auction` 与 `dealerSeat` 两个字段；`null` = 还没发牌 */
+    deal: { readonly auction: readonly BidEntry[]; readonly dealerSeat: Seat } | null;
     /** 文案里的「我的座位」：观战者传 -1，于是都显示玩家名 */
     mySeat?: number;
     names?: readonly (string | null)[];
   } = $props();
 
-  const deal = $derived(view.deal);
   /** 最高叫品：表格里那一格标金加粗，与信息面顶部的大字呼应 */
-  const top = $derived(highestCall(view));
+  const top = $derived(deal === null ? null : highestBid(deal.auction));
 
   /** 列序从发牌人起：一行读下来就是这一轮三家的出声顺序 */
   const cols = $derived([0, 1, 2].map((step) => ((deal?.dealerSeat ?? 0) + step) % 3));
