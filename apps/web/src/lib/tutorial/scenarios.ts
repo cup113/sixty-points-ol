@@ -170,7 +170,7 @@ export const TRUMP_LADDER_GROUPS: readonly {
   { title: '大王', note: '最大的一张', cards: handOf('j1') },
   { title: '小王', note: '仅次于大王', cards: handOf('j0') },
   { title: '主级', note: '主花色里的那张级牌（示例 ♥5）', cards: handOf('H5') },
-  { title: '副级（三张相等）', note: '三门副牌里的级牌（示例 ♠5 ♦5 ♣5），三张完全一样大，平张时先出的赢', cards: handOf('S5', 'D5', 'C5') },
+  { title: '副级', note: '三门副牌里的级牌，三张一样大，平张时先出的赢', cards: handOf('S5', 'D5', 'C5') },
   { title: '主花色普通牌', note: '♥2 到 ♥A（跳过 ♥5，它是主级）', cards: handOf('HA') }
 ];
 

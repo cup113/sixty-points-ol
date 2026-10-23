@@ -50,7 +50,6 @@
   const env = 'mb-2 text-xs text-gold/70';
   const chip = 'rounded-md bg-white/10 px-2 py-1 text-xs';
 
-  const heartTrumps = trumpGroups(TRUMP_HEARTS);
   const ntTrumps = trumpGroups(TRUMP_NT);
   const clubSuit = sideSuitCards(TRUMP_HEARTS, 'C');
   const leadCases = LEAD_CASES.map((item) => ({ ...item, cards: cardsOf(item.keys) }));
@@ -74,56 +73,48 @@
     </ul>
   </div>
 {:else if widget.kind === 'point-places'}
+  <!-- 一张图说完「一墩」：三张牌摊在桌上，分就压在这几张里 —— 比分归赢家那句话好读 -->
   <div class={box}>
-    <p class={env}>一墩三张 —— 这一轮的分记给赢家（这墩里带 {trickDemoPoints} 分）</p>
+    <p class={env}>一墩就这么三张 —— 谁大，这 {trickDemoPoints} 分就归谁</p>
     <CardRow cards={TRICK_DEMO} trump={TRUMP_HEARTS} size="md" />
   </div>
 {:else if widget.kind === 'trump-groups'}
-  <div class="space-y-3">
-    <div class={box}>
-      <p class={env}>本副：{trumpText(TRUMP_HEARTS)} —— 共 {trumpCount(TRUMP_HEARTS)} 张主牌</p>
-      <div class="space-y-2">
-        {#each heartTrumps as group (group.title)}
-          <div>
-            <p class="mb-1 text-[11px] text-white/55">
-              <b class="text-ivory">{group.title}</b>（{group.cards.length} 张）· {group.hint}
-            </p>
-            <CardRow cards={group.cards} trump={TRUMP_HEARTS} size="sm" />
-          </div>
-        {/each}
-      </div>
-    </div>
-    <div class={box}>
-      <p class={env}>本副：{trumpText(TRUMP_NT)} —— 只有 {trumpCount(TRUMP_NT)} 张主牌</p>
+  <!-- 无主那一屏只摆无主：有主那 18 张是别的屏讲的事，摆在这里只会把「只剩 6 张」埋掉 -->
+  <div class={box}>
+    <p class={env}>
+      本副：{trumpText(TRUMP_NT)} —— 整副主牌只剩 {trumpCount(TRUMP_NT)} 张（有主时是 {trumpCount(TRUMP_HEARTS)} 张）
+    </p>
+    <div class="space-y-2">
       {#each ntTrumps as group (group.title)}
-        <div class="mb-1.5">
-          <p class="mb-1 text-[11px] text-white/55"><b class="text-ivory">{group.title}</b>（{group.cards.length} 张）</p>
+        <div>
+          <p class="mb-1 text-[12px] text-white/55">
+            <b class="text-ivory">{group.title}</b>（{group.cards.length} 张）· {group.hint}
+          </p>
           <CardRow cards={group.cards} trump={TRUMP_NT} size="sm" />
         </div>
       {/each}
-      <p class="text-[11px] text-white/50">无主时四张级牌完全相等，主牌的大小只剩「四张 5 &lt; 小王 &lt; 大王」。</p>
     </div>
   </div>
 {:else if widget.kind === 'trump-ladder'}
+  <!-- 座次是**从上到下**的一条阶梯：一张一行，标题与说明贴着自己那一行。
+       原来是一横排五组 + 底下再列五条重名的说明，尺寸一窄就挤成两行、说明还与卡片对不上号 -->
   <div class={box}>
-    <div class="flex flex-wrap items-end gap-2">
-      {#each TRUMP_LADDER_GROUPS as group, index (group.title)}
-        {#if index > 0}<span class="pb-6 text-white/30">→</span>{/if}
+    <p class={env}>主牌从大到小，一行一级</p>
+    <div class="space-y-2.5">
+      {#each TRUMP_LADDER_GROUPS as group (group.title)}
         <div>
-          <p class="mb-1 text-center text-[10px] text-white/50">{group.title}</p>
-          <CardRow cards={group.cards} trump={TRUMP_HEARTS} size="md" gap="gap-1" />
+          <p class="mb-1 text-[12px] leading-snug">
+            <b class="text-ivory">{group.title}</b>
+            <span class="text-white/45"> · {group.note}</span>
+          </p>
+          <CardRow cards={group.cards} trump={TRUMP_HEARTS} size="sm" gap="gap-1" />
         </div>
       {/each}
     </div>
-    <ul class="mt-2 space-y-0.5 text-[11px] text-white/60">
-      {#each TRUMP_LADDER_GROUPS as group (group.title)}
-        <li><b class="text-ivory">{group.title}</b>：{group.note}</li>
-      {/each}
-    </ul>
   </div>
 {:else if widget.kind === 'side-suit'}
   <div class={box}>
-    <p class={env}>本副：{trumpText(TRUMP_HEARTS)} —— ♣ 整门（{clubSuit.length} 张，里面没有 ♣5）</p>
+    <p class={env}>本副：{trumpText(TRUMP_HEARTS)} —— ♣ 整门 {clubSuit.length} 张，数一数，缺的正是 ♣5</p>
     <CardRow cards={clubSuit} trump={TRUMP_HEARTS} size="md" />
   </div>
 {:else if widget.kind === 'trump-run-cross'}
@@ -138,7 +129,7 @@
   </div>
 {:else if widget.kind === 'bid-demo'}
   <div class={box}>
-    <p class={env}>一段真实成交的叫牌（发牌人是你）</p>
+    <p class={env}>这副牌的叫牌，发牌人是你</p>
     <div class="flex flex-wrap gap-1.5">
       {#each DEMO_AUCTION as entry, index (index)}
         <span class={chip}>
@@ -147,19 +138,19 @@
         </span>
       {/each}
     </div>
-    <p class="mt-2 text-[12px] text-ivory">
-      → {TUTORIAL_NAMES[DEMO_CONTRACT.declarerSeat]} {DEMO_CONTRACT.points}{strainGlyph(DEMO_CONTRACT.strain)} 坐庄：主打
-      {strainGlyph(DEMO_CONTRACT.strain)}、本副级牌是他的 5、要抓够 {DEMO_CONTRACT.points} 分才算打成。
+    <p class="mt-2 text-[12px] leading-relaxed text-ivory">
+      → {TUTORIAL_NAMES[DEMO_CONTRACT.declarerSeat]} {DEMO_CONTRACT.points}{strainGlyph(DEMO_CONTRACT.strain)}
+      坐庄：主打 {strainGlyph(DEMO_CONTRACT.strain)}、要抓够 {DEMO_CONTRACT.points} 分。
     </p>
   </div>
 {:else if widget.kind === 'bury-demo'}
   <div class="space-y-3">
     <div class={box}>
-      <p class={env}>本副：{trumpText(TRUMP_HEARTS)}（真实为 20 张，这里取 12 张展示扇形）</p>
+      <p class={env}>本副：{trumpText(TRUMP_HEARTS)}（20 张，这里摊开 12 张）</p>
       <HandFan hand={BURY_HAND} trump={TRUMP_HEARTS} />
     </div>
     <div class={box}>
-      <p class="text-[11px] text-white/55">示例底牌（{kittyPoints} 分）</p>
+      <p class="text-[12px] text-white/55">从底下拿上来的三张，一共 {kittyPoints} 分</p>
       <CardRow cards={DEMO_KITTY} size="md" />
     </div>
   </div>
@@ -170,7 +161,7 @@
         <span class={chip}>{row.lastTrick} → 底分 × <b class="text-gold">{row.multiplier}</b></span>
       {/each}
     </div>
-    <ul class="mt-2 space-y-0.5 text-[11px]">
+    <ul class="mt-2 space-y-0.5 text-[12px]">
       <li>最后一轮<b class="text-emerald-300">庄家赢</b> → 加分，叫<b class="text-emerald-300">保底</b>。</li>
       <li>最后一轮<b class="text-rose-300">闲家赢</b> → 扣分，叫<b class="text-rose-300">抠底</b>。</li>
       <li class="text-white/60">底牌 10 分、末轮 2 张时，最后一轮的输赢就能摆动 ±20 分。</li>
@@ -182,11 +173,11 @@
     <div class="space-y-2">
       {#each leadCases as item, index (index)}
         <div class="flex flex-wrap items-center gap-2">
-          <span class={item.ok ? 'text-[11px] font-semibold text-emerald-300' : 'text-[11px] font-semibold text-rose-300'}>
+          <span class={item.ok ? 'text-[12px] font-semibold text-emerald-300' : 'text-[12px] font-semibold text-rose-300'}>
             {item.ok ? '✓' : '✗'}
           </span>
           <CardRow cards={item.cards} trump={TRUMP_HEARTS} size="md" dim={item.ok ? [] : item.cards.map(cardKey)} />
-          <span class="text-[11px] text-white/50">{item.note}</span>
+          <span class="text-[12px] text-white/50">{item.note}</span>
         </div>
       {/each}
     </div>
@@ -199,9 +190,6 @@
       <span class="pb-6 text-white/30">→</span>
       <TrickCluster cards={FOLLOW_ANSWER} trump={TRY_FOLLOW.trump} caption="你跟：♣3-4-6 + ♣Q" />
     </div>
-    <p class="mt-2 text-[11px] text-white/60">
-      手里 ♣ 有 5 张，够跟 4 张，但不能自由选：必须先把最长的三连（♣3-4-6，级牌 5 不在这一门）拿出来，再配一张。
-    </p>
   </div>
 {:else if widget.kind === 'ruff-contrast'}
   <div class={box}>
@@ -211,7 +199,6 @@
       <span class="pb-6 text-white/30">→</span>
       <TrickCluster cards={RUFF_WINNER} trump={TRUMP_HEARTS} caption="主牌里最小的三张" badge="赢墩" />
     </div>
-    <p class="mt-2 text-[11px] text-white/60">垫牌则相反：同长度、同一条顺子，不成结构就赢不了。</p>
   </div>
 {:else if widget.kind === 'settle-equation'}
   <div class={box}>
@@ -222,7 +209,7 @@
       <span class="text-white/40">=</span>
       <span>最终得分</span>
     </div>
-    <ul class="mt-2 space-y-0.5 text-[11px]">
+    <ul class="mt-2 space-y-0.5 text-[12px]">
       <li>庄家赢末轮（保底）：{KITTY_EQUATION.trickPoints} + {KITTY_EQUATION.kittyPoints} × {KITTY_EQUATION.multiplier} = <b class="text-emerald-300">{KITTY_EQUATION.madeFinal}</b> ≥ {KITTY_EQUATION.contract} → 打成</li>
       <li>闲家赢末轮（抠底）：{KITTY_EQUATION.trickPoints} − {KITTY_EQUATION.kittyPoints} × {KITTY_EQUATION.multiplier} = <b class="text-rose-300">{KITTY_EQUATION.setFinal}</b> &lt; {KITTY_EQUATION.contract} → 打输</li>
       <li class="text-white/55">闲家要打输庄家：保底时得严格超过 {bars.protectBar} 分，抠底时超过 {bars.digBar} 分——不是直觉的 100 − 定约 = {bars.naiveBar}。</li>
@@ -231,9 +218,9 @@
 {:else if widget.kind === 'upgrade-table'}
   <div class="space-y-3">
     <div class={box}>
-      <p class="text-[11px] text-white/55">打成 → 庄家升级（只看最终得分）</p>
+      <p class="text-[12px] text-white/55">打成 → 庄家升级（只看最终得分）</p>
       <div class="mt-1.5 overflow-hidden rounded-lg ring-1 ring-white/10">
-        <table class="w-full text-[11px]">
+        <table class="w-full text-[12px]">
           <thead class="bg-white/5 text-white/50">
             <tr><th class="px-3 py-1 text-left font-semibold">最终得分</th><th class="px-3 py-1 text-left font-semibold">庄家升级</th></tr>
           </thead>
@@ -249,7 +236,7 @@
       </div>
     </div>
     <div class={box}>
-      <p class="text-[11px] text-white/55">打输 → 庄家不动，两家闲家各升 ⌈差 ÷ 10⌉ 级</p>
+      <p class="text-[12px] text-white/55">打输 → 庄家不动，两家闲家各升 ⌈差 ÷ 10⌉ 级</p>
       <div class="mt-1.5 flex flex-wrap gap-1.5">
         {#each DEFENDER_STEPS as step (step.shortfall)}
           <span class={chip}>差 {step.shortfall} → 各升 <b class="text-gold">{step.levels}</b> 级</span>
@@ -257,18 +244,18 @@
       </div>
     </div>
     <div class={box}>
-      <p class="text-[11px] text-white/55">「升 N 级」就是从当前级别往前推 N 级，跨过 A 就进位</p>
+      <p class="text-[12px] text-white/55">「升 N 级」就是从当前级别往前推 N 级，跨过 A 就进位</p>
       <div class="mt-1.5 flex flex-wrap items-center gap-4">
         {#each LEVEL_DEMO as level, index (index)}
           <div class="text-center">
             <LevelBadge {level} />
-            <p class="mt-1 text-[10px] text-white/45">{levelLabel(level)}</p>
+            <p class="mt-1 text-[12px] text-white/45">{levelLabel(level)}</p>
           </div>
         {/each}
       </div>
       <div class="mt-2 space-y-1">
         {#each steps as step, index (index)}
-          <p class="rounded-lg bg-black/30 px-2.5 py-1 text-[11px]">
+          <p class="rounded-lg bg-black/30 px-2.5 py-1 text-[12px]">
             {levelLabel(step.from)} 升 {step.levels} 级 →
             <b class="text-gold">{levelLabel(step.to)}</b>
             <span class="ml-1 text-white/45">（{step.note}）</span>
