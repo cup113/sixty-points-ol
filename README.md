@@ -32,9 +32,13 @@ packages/mcp        MCP 工具面（stdio 入口 + 与传输无关的工具定�
   scripts/          mcp-check.ts（两条传输各打一整副 + 形状/在线/权威守卫）
 apps/web            SvelteKit 2 + Svelte 5 + Tailwind 4 + adapter-node
   src/lib/server/   SQLite（node:sqlite）、身份凭据、Gitee 会话与管理面、牌桌服务、SSE hub、
-                    MCP 进程内适配层、机器人调度、机器重演存档（replays，结算时同步算好，见 ADR-0016）
+                    MCP 进程内适配层、机器人调度、机器重演存档（replays，结算时同步算好，见 ADR-0016）、
+                    TWA 信任声明（assetlinks）
   src/routes/       大厅、牌桌页、新手引导（/learn）、文字教程（/rules）、管理面（/admin）、
-                    REST 动作接口（含入座/离座/加机器人）、Gitee OAuth（/api/auth/gitee/*）、SSE 流、MCP（/api/mcp）
+                    REST 动作接口（含入座/离座/加机器人）、Gitee OAuth（/api/auth/gitee/*）、SSE 流、
+                    MCP（/api/mcp）、Android 安装包的 /.well-known/assetlinks.json
+  src/service-worker.ts  应用壳缓存（ADR-0026：/api 直通、离线兜底、不 skipWaiting）
+  static/           manifest.webmanifest、icons/（PWA 三张图标）、sounds/、favicon
   src/lib/tutorial/ 概念示例数据（scenarios.ts，被引擎逐个核对）
   src/lib/guide/    新手引导的内核：课程结构（course.ts）、引导局客户端回放与强制交互、测验判分
   src/lib/guide/deals/  由 docs/guide 生成的引导局数据（勿手改，见 ADR-0025）
@@ -50,6 +54,7 @@ apps/web            SvelteKit 2 + Svelte 5 + Tailwind 4 + adapter-node
 CONTEXT.md          领域词汇表（术语与已敲定的规则歧义）
 docs/adr/           架构决策记录
 docs/guide/         引导局：<slug>.json（真实牌局提取的事实 + 引导词；candidates/ 不提交）
+deploy/twa/         Android 安装包（TWA）的 twa-manifest 模板与一次性配置说明（ADR-0026）
 tooling/            workspace-loader.mjs（`node --test` 的解析钩子：`@sixty/*` → `packages/*/src`）
 ```
 
@@ -477,7 +482,7 @@ DOMAIN=game.example.com docker compose --profile https up -d --build   # → htt
 - 镜像：`node:24-bookworm-slim` 两阶段构建（装依赖+构建 → 只带产物与运行期依赖），非 root 运行。
 - 数据：命名卷 `sixty-data` 挂到容器 `/data`（`SIXTY_DB=/data/sixty.db`）。牌局状态、身份、座位与观战记录、事件日志都在这里，容器重建/升级不丢；重启续局已实测。
   **这一行只对 `docker compose` 与 Coolify 的 Docker Compose 资源生效**：Coolify 用 **Docker Image** 资源时不会自动带上它，必须手动加 Persistent Storage，见下文「Coolify」的 A 路径。
-- 环境变量全部带默认值，可用 `${X:-默认}` 直接改：`PORT`（容器内端口，默认 3000）、`PUBLIC_PORT`（宿主映射，默认同 PORT）、`SIXTY_DB`、`DOMAIN`（仅 https profile）；另有一组可选的 Gitee / 管理员变量（见上文「Gitee 登录与管理员」），留空即整个功能隐身。
+- 环境变量全部带默认值，可用 `${X:-默认}` 直接改：`PORT`（容器内端口，默认 3000）、`PUBLIC_PORT`（宿主映射，默认同 PORT）、`SIXTY_DB`、`DOMAIN`（仅 https profile）；另有两组可选变量，留空即整个功能隐身：Gitee 登录 / 管理员（见上文「Gitee 登录与管理员」）与 Android 安装包的信任声明 `SIXTY_TWA_PACKAGE` / `SIXTY_TWA_FINGERPRINTS`（见上文「PWA 与 Android 安装包」）。
   **`ORIGIN` 例外：不要用 `${ORIGIN:-}` 这种写法**（宿主未设置时会注入空串导致容器起不来），需要时就写完整 URL 或整行留空不定义，见上文「本地运行」的警示。
 - 健康检查：容器内 `GET /` 返回 200；`docker compose ps` 里看到 `healthy` 即就绪。
 - 升级：`git pull && docker compose up -d --build`。
@@ -553,7 +558,100 @@ Coolify 用预构建镜像：新建资源 → **Docker Image**（不是 Docker C
 - `docker-compose.yml` 已带 `traefik.http.middlewares.gzip.compress=false`（Coolify 默认会注入 gzip 中间件，必须关掉）。
 - 用自带的 Caddy（`--profile https`）时，`deploy/Caddyfile` 对 SSE 路径单独设 `flush_interval -1`，其余路径正常压缩。
 
-### 本机沙箱下的注意事项
+### PWA 与 Android 安装包（TWA）
+
+站点本身就是可安装的 PWA，另有一个工作流把它包成 Android 安装包（见 ADR-0026）。
+两者的共同点是：**没有第二套代码** —— APK 打开的就是这套线上站点，登录、牌桌、MCP 一条不变。
+
+| 组成 | 在哪 |
+| --- | --- |
+| 清单 | `apps/web/static/manifest.webmanifest`（`standalone`、竖屏、毡面绿） |
+| 图标 | `apps/web/static/icons/`：192、512、maskable 512（由 `favicon.svg` 的几何重绘；maskable 版满铺并把「60」收进安全区） |
+| Service Worker | `apps/web/src/service-worker.ts`（SvelteKit 内建机制，`register` 默认开，不引 `vite-plugin-pwa`） |
+| TWA 模板 | `deploy/twa/twa-manifest.template.json` |
+| 打包工作流 | `.github/workflows/apk.yml`（手动触发） |
+
+**Service Worker 只做壳**：`/api/`（含 SSE 与 `/api/mcp`）与带 `Range` 的请求一律直通，不缓存；
+预缓存只有构建产物与 manifest/图标/favicon（音效约 730KB 不预缓存）；导航网络优先，断网时回壳，
+连壳都没有就给一页带重试的离线说明。它**刻意不** `skipWaiting()`：牌桌是长开标签，中途换代会把
+正在打的一副换成另一份壳，新版本等下次打开页面生效。
+
+**局域网 http 下没有 SW、也没有安装入口** —— 那是安全上下文的硬限制（`localhost` 除外），与现状一致。
+
+### Android 安装包（TWA）
+
+```bash
+gh workflow run apk.yml -f domain=game.example.com       # 其余输入有默认值
+```
+
+推 `v*` 标签也会自动出一个包（取值改从仓库变量读，见下），并挂到同名 Release 上。
+
+产物：`sixty-<包名>.apk`（直装）+ `BUILD-INFO.md`（记下包名与 SHA-256 指纹）。
+
+要用自己的签名（正式分发必须，否则每次构建的指纹都不一样、assetlinks 永远对不上）。**签名材料按「泄露了会怎样」分类**：
+
+| Secret | 为什么是 secret |
+| --- | --- |
+| `ANDROID_KEYSTORE_B64` | keystore 文件本身：泄露 = 别人能发你的更新 |
+| `ANDROID_KEYSTORE_PASSWORD` | store 口令，同上 |
+| `ANDROID_KEY_PASSWORD` | key 口令，同上 |
+
+其余都不是秘密，放在 **Variables** 里（Secret 只会让「可推导的值没配」在发布时才卡住你）：
+
+| Variable | 作用 |
+| --- | --- |
+| `ANDROID_CERT_SHA256` | 签名证书的 SHA-256 指纹（`BUILD-INFO.md` 里有）。**钉住它**：一旦设了，CI 会在指纹变化时**当场失败**（换钥匙的包照样装得上，却永远升级不了已装的那份，这件事只在发布日才被发现）；首次发布前它是空的，只告警 |
+| `ANDROID_KEY_ALIAS` | 密钥别名，缺省 `sixty` —— 它是 keystore **里面**的一个标签，可推导 |
+| `SIXTY_DOMAIN` | 标签构建用的域名（手动触发时可填这个输入，变量可留空） |
+| `ANDROID_PACKAGE_ID` / `ANDROID_APP_NAME` | 标签构建用的包名 / 应用名，缺省与手动触发的默认值一致 |
+
+第一次建 keystore：
+
+```bash
+keytool -genkeypair -v -keystore android.keystore -storetype PKCS12 \
+  -alias sixty -keyalg RSA -keysize 2048 -validity 10000
+```
+
+口令只经环境变量进容器、只经 `keytool -storepass:env` 进 keytool（**不进 argv**，进程列表里看不见）；
+keystore 解到 `$RUNNER_TEMP`（工作区之外，任何 artifact 通配都扫不到），构建结束即删除。
+
+工作流跑完还会核对产物：签名者不能是 `Android Debug`、包名与 `versionCode` 必须是本次输入的那些（工具缺失时告警跳过，不让它变成假红）。
+
+**TWA 全屏（没有地址栏）还需要服务端认这门亲**：在部署环境里配好下面两个变量，
+`https://<域名>/.well-known/assetlinks.json` 就会吐出那条声明。不配则整条路由 404（功能隐身），
+APK 仍能装能用，只是带着浏览器地址栏。
+
+| 变量 | 作用 |
+| --- | --- |
+| `SIXTY_TWA_PACKAGE` | Android 包名，必须与工作流里的 `package_id` 一致。留空 = 关闭 |
+| `SIXTY_TWA_FINGERPRINTS` | 签名证书的 SHA-256 指纹（`AB:CD:…`，可逗号分隔多个）。留空 = 关闭 |
+
+工作流跑完会核对一次站点上的 assetlinks 并告警；也可以自己验：
+
+```bash
+curl -s https://<域名>/.well-known/assetlinks.json | head
+```
+
+> **前提是域名公网 HTTPS 可达**：bubblewrap 生成工程时要按 `twa-manifest.json` 里的地址
+> 拉图标与 manifest，`localhost` 或内网地址打不出包。APK 与域名一一绑定，换域名要重打。
+
+### 国内用户实际会遇到什么（写在前面，省得当成 bug 查）
+
+- **微信 / QQ 内置浏览器**里没有「添加到主屏幕」：那类分享链接只能当**下载入口**（点开 → 下载 APK → 安装），
+  想用网页版就复制到系统浏览器打开。这是内置浏览器的限制，不是站点没做成 PWA。
+- **很多国产 ROM 没有支持 TWA 的浏览器**（只有厂商自带浏览器、没有 Chrome）。模板里因此写的是
+  `fallbackType: "webview"`：那种机器上应用在**自己的 WebView 里**打开站点，而不是把用户甩到系统浏览器
+  或一个空页（缺省的 `customtabs` 就是后者）。
+- **装不上 / 点开没反应**：未签名的包可能被 Defender 或厂商「安装校验」拦下，需要在手机上允许一次（更多信息 → 仍要运行）。
+- **iOS**：Safari「分享 → 添加到主屏幕」，走 manifest 的 `standalone`，没有 APK 这条路。
+
+### 图标怎么重生成
+
+图标是从 `favicon.svg` 的几何重绘的（径向渐变 `#17714f → #0d4432 → #072b1f`、圆角 112、内缩 26 的金色描边环、
+金色 `60`），512 画布出身，maskable 版满铺且「60」落在 80% 直径的安全圈内。换 logo 时把三张一起重出，
+`apps/web/test/pwa.test.ts` 会核对「声明的尺寸 == 文件里的 IHDR 尺寸」、以及 manifest 与 `app.html`、TWA 模板的配色是否还一致。
+
+## 本机沙箱下的注意事项
 
 `pnpm dev` / `pnpm build` / `docker` 需要 spawn 子进程与访问 Docker 命名管道，在受限沙箱里会 `EPERM`；在自己机器或 CI 上不受影响（镜像构建已在 `.github/workflows/ci.yml` 里跑，本地沙箱受限只影响本地 build/dev）。若镜像构建在 esbuild 步骤报错，把 `pnpm-workspace.yaml` 里的 `allowBuilds: esbuild` 改成 `true` 再构建（本仓库默认关掉它，是因为它只是可选的原生二进制补装，关掉后构建同样可跑）。
 

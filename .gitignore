@@ -15,3 +15,8 @@ vite.config.ts.timestamp-*
 .deploy-check/
 # 引导局候选：guide:extract 的中间产物（挑中的挪成 docs/guide/<slug>.json），不进仓库
 docs/guide/candidates/
+# Android 安装包（deploy/twa）：签名材料与 bubblewrap 的生成物，绝不进仓库。
+# 只锚定仓库根：deploy/twa/ 里那份模板是要提交的。
+*.keystore*
+*.jks
+/twa/

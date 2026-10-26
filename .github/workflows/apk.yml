@@ -1,0 +1,370 @@
+name: Android APK (TWA)
+
+# 把线上站点包成一个 Android 安装包（Trusted Web Activity，见 ADR-0026）。
+#
+# 两种触发：
+#   - 手动（workflow_dispatch）：需要**这一份部署的实际域名**，那不是能写死的常量；
+#   - 推 `v*` 标签：域名等取值改成从仓库变量读（见下表），发版时自动出一个包。
+# 都不在 pull_request 上跑：fork 拿不到 secret，PR 里也不该产出可安装的包。
+#
+# 产物：app-release-signed.apk（直装）+ app-release-bundle.aab（上架用，本期不出 Play）。
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: '站点域名（如 game.example.com，不要带协议）；必须公网 HTTPS 可达'
+        required: true
+        type: string
+      package_id:
+        description: 'Android 包名（装上后再改就要换包）'
+        required: true
+        default: 'io.github.cup113.sixty'
+        type: string
+      app_name:
+        description: '桌面上的应用名'
+        required: true
+        default: '六十分'
+        type: string
+      orientation:
+        description: '屏幕方向'
+        required: true
+        default: 'portrait'
+        type: choice
+        options: [portrait, any, default]
+      version_name:
+        description: 'versionName；留空 = run-<短 sha>'
+        required: false
+        type: string
+      version_code:
+        description: 'versionCode（整数，只增不减）；留空 = 按 UTC 的 yymmddhh 生成'
+        required: false
+        type: string
+      release_tag:
+        description: '可选：把产物挂到这个 Release（不存在则创建）'
+        required: false
+        type: string
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  BUBBLEWRAP_IMAGE: ghcr.io/googlechromelabs/bubblewrap:latest
+
+# 仓库变量（Settings → Secrets and variables → Actions → Variables）。都不是秘密：
+#   SIXTY_DOMAIN        标签构建用的域名（手动触发时可填，此处可留空）
+#   ANDROID_PACKAGE_ID  标签构建用的包名（缺省 io.github.cup113.sixty）
+#   ANDROID_APP_NAME    标签构建用的应用名（缺省 六十分）
+#   ANDROID_KEY_ALIAS   密钥别名 —— 它是 keystore **里面**的一个标签，可推导，所以不是秘密
+#   ANDROID_CERT_SHA256 签名证书的 SHA-256 指纹 —— 公开信息，钉住它，CI 才能在换钥匙时当场发现
+jobs:
+  apk:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.SIXTY_DOMAIN != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      release_tag: ${{ steps.norm.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # 输入一律经 env 传进 shell：直接 `${{ inputs.x }}` 插值进脚本等于把
+      # 用户输入当代码执行（GitHub 明确警告的那一类注入）。
+      - name: 规范化输入
+        id: norm
+        env:
+          DOMAIN_INPUT: ${{ inputs.domain }}
+          PACKAGE_INPUT: ${{ inputs.package_id }}
+          NAME_INPUT: ${{ inputs.app_name }}
+          ORIENTATION_INPUT: ${{ inputs.orientation }}
+          VERSION_NAME_INPUT: ${{ inputs.version_name }}
+          VERSION_CODE_INPUT: ${{ inputs.version_code }}
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+          DOMAIN_VAR: ${{ vars.SIXTY_DOMAIN }}
+          PACKAGE_VAR: ${{ vars.ANDROID_PACKAGE_ID }}
+          APP_NAME_VAR: ${{ vars.ANDROID_APP_NAME }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          domain="${DOMAIN_INPUT:-${DOMAIN_VAR:-}}"
+          domain="${domain#https://}"; domain="${domain#http://}"; domain="${domain%/}"
+          if [ -z "$domain" ]; then
+            echo "::error::没有域名：手动触发请填 domain，标签构建请配仓库变量 SIXTY_DOMAIN"
+            exit 1
+          fi
+          case "$domain" in
+            */*|*\ *) echo "::error::domain 只能是一段主机名：$domain"; exit 1 ;;
+          esac
+          package="${PACKAGE_INPUT:-${PACKAGE_VAR:-io.github.cup113.sixty}}"
+          if ! printf '%s' "$package" | grep -Eq '^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$'; then
+            echo "::error::包名不合法（至少要两段，每段字母开头）：$package"
+            exit 1
+          fi
+          version_name="${VERSION_NAME_INPUT:-run-${GITHUB_SHA::7}}"
+          # yymmddhh：8 位、远小于 Play 的上限 2100000000，且随时间单调。
+          # 同一小时内重跑会拿到**相同**的 versionCode —— Android 只在更小时拒绝安装
+          # （INSTALL_FAILED_VERSION_DOWNGRADE），相同是可以覆盖安装的；要上 Play 才必须严格递增。
+          version_code="${VERSION_CODE_INPUT:-$(date -u +%y%m%d%H)}"
+          if ! printf '%s' "$version_code" | grep -Eq '^[0-9]+$'; then
+            echo "::error::versionCode 必须是整数：$version_code"
+            exit 1
+          fi
+          release_tag="${RELEASE_TAG_INPUT:-}"
+          if [ -z "$release_tag" ] && [ "$REF_TYPE" = "tag" ]; then
+            release_tag="$REF_NAME"
+          fi
+          {
+            echo "domain=$domain"
+            echo "package=$package"
+            echo "app_name=${NAME_INPUT:-${APP_NAME_VAR:-六十分}}"
+            echo "orientation=${ORIENTATION_INPUT:-portrait}"
+            echo "version_name=$version_name"
+            echo "version_code=$version_code"
+            echo "release_tag=$release_tag"
+          } >> "$GITHUB_OUTPUT"
+
+      # keytool 只用来准备/读取 keystore；Gradle 的 JDK 在容器里（镜像自带 17）
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # 签名材料的分类（都别搞反）：
+      #   secret  —— keystore 文件、store 口令、key 口令：泄露就等于别人能发你的更新
+      #   非秘密 —— 别名（keystore 里的一个标签）、证书指纹（公开信息）
+      # 口令只经环境变量与 `-storepass:env` 走，**不进 argv**（`-storepass xxx` 在进程列表里看得见）。
+      # keystore 落在 $RUNNER_TEMP（工作区之外），所以任何 upload-artifact 通配都扫不到它。
+      - name: 准备签名材料
+        id: sign
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ vars.ANDROID_KEY_ALIAS || 'sixty' }}
+          EXPECTED_FINGERPRINT: ${{ vars.ANDROID_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          work="$RUNNER_TEMP/twa"
+          mkdir -p "$work"
+          echo "WORK=$work" >> "$GITHUB_ENV"
+
+          if [ -n "${KEYSTORE_B64:-}" ]; then
+            echo "使用仓库 secret 里的 keystore（指纹稳定，assetlinks 可以钉死）"
+            printf '%s' "$KEYSTORE_B64" | base64 -d > "$work/android.keystore"
+            : "${KEYSTORE_PASSWORD:?配了 ANDROID_KEYSTORE_B64 就必须同时配 ANDROID_KEYSTORE_PASSWORD}"
+            : "${KEY_PASSWORD:?配了 ANDROID_KEYSTORE_B64 就必须同时配 ANDROID_KEY_PASSWORD}"
+            ks_pass="$KEYSTORE_PASSWORD"
+            key_pass="$KEY_PASSWORD"
+          else
+            echo "::warning::没有配置 ANDROID_KEYSTORE_B64：本次现场生成一次性 keystore。"
+            echo "::warning::它的指纹每次都不一样，assetlinks 因此对不上，也不能覆盖安装旧版 —— 只适合试装。"
+            echo "::warning::正式分发请配好那三个 secret（见 deploy/twa/README.md）。"
+            ks_pass="$(openssl rand -hex 16)"
+            key_pass="$ks_pass"
+            KS_PASS="$ks_pass" keytool -genkeypair -v \
+              -keystore "$work/android.keystore" -storetype PKCS12 \
+              -alias "$KEY_ALIAS" -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass:env KS_PASS \
+              -dname "CN=sixty-points-ol, OU=adhoc, O=adhoc, C=CN" >/dev/null 2>&1
+          fi
+
+          # 指纹：读的是证书本身，不是我们的参数（参数填错也照样读得出真指纹）
+          fingerprint="$(KS_PASS="$ks_pass" keytool -list -v \
+            -keystore "$work/android.keystore" \
+            -storepass:env KS_PASS | grep -oE '([0-9A-F]{2}:){31}[0-9A-F]{2}' | head -n 1)"
+          if [ -z "$fingerprint" ]; then
+            echo "::error::没能从 keystore 读出 SHA-256 指纹"
+            exit 1
+          fi
+          echo "SHA-256 指纹：$fingerprint"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
+          # 钉住指纹：第一次发布时它还是空的（得先有一次签名的产物才知道），那时只提醒；
+          # 一旦设了就硬断言 —— 换了钥匙的包照样装得上，却永远升级不了已装的那份，
+          # 而这件事只在发布当天才会被发现。
+          expected="$(printf '%s' "${EXPECTED_FINGERPRINT:-}" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+          actual="$(printf '%s' "$fingerprint" | tr -d ':[:space:]')"
+          if [ -z "$expected" ]; then
+            echo "::warning::仓库变量 ANDROID_CERT_SHA256 还没设：把 $fingerprint 填进去，"
+            echo "::warning::下次换钥匙时 CI 才会当场发现（而不是发出去之后）。"
+          elif [ "$expected" != "$actual" ]; then
+            echo "::error::签名指纹与仓库变量 ANDROID_CERT_SHA256 不一致 —— 这个包装不到已有的安装上。"
+            echo "::error::  期望：$expected"
+            echo "::error::  实际：$actual"
+            exit 1
+          else
+            echo "指纹与仓库变量 ANDROID_CERT_SHA256 一致"
+          fi
+
+          {
+            echo "BUBBLEWRAP_KEYSTORE_PASSWORD=$ks_pass"
+            echo "BUBBLEWRAP_KEY_PASSWORD=$key_pass"
+          } >> "$GITHUB_ENV"
+
+      # 模板里的 ${...} 由 envsubst 填：packageId / host / 图标 URL / 版本 / keystore 路径
+      - name: 生成 twa-manifest.json
+        env:
+          DOMAIN: ${{ steps.norm.outputs.domain }}
+          PACKAGE_ID: ${{ steps.norm.outputs.package }}
+          APP_NAME: ${{ steps.norm.outputs.app_name }}
+          ORIENTATION: ${{ steps.norm.outputs.orientation }}
+          VERSION_NAME: ${{ steps.norm.outputs.version_name }}
+          VERSION_CODE: ${{ steps.norm.outputs.version_code }}
+          KEYSTORE_PATH: /workspace/android.keystore
+          KEY_ALIAS: ${{ vars.ANDROID_KEY_ALIAS || 'sixty' }}
+        run: |
+          set -euo pipefail
+          envsubst < deploy/twa/twa-manifest.template.json > "$WORK/twa-manifest.json"
+          cat "$WORK/twa-manifest.json"
+
+      # 镜像自带 JDK 17 与 Android SDK/构建工具，`bubblewrap doctor` 在构建镜像时就跑过
+      # （license 已接受），所以这里不需要任何交互输入。
+      #
+      # 两步都不能省：`update` 从 twa-manifest.json 重新生成 Android 工程并写
+      # manifest-checksum.txt；少了它，`build` 会停下来问「要不要更新工程」——CI 里没人回答。
+      # 密码走 BUBBLEWRAP_KEYSTORE_PASSWORD / BUBBLEWRAP_KEY_PASSWORD（官方给 CI 的口子）。
+      - name: bubblewrap update
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$WORK:/workspace" -w /workspace \
+            -e BUBBLEWRAP_KEYSTORE_PASSWORD -e BUBBLEWRAP_KEY_PASSWORD \
+            "$BUBBLEWRAP_IMAGE" update --skipVersionUpgrade
+
+      - name: bubblewrap build
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$WORK:/workspace" -w /workspace \
+            -e BUBBLEWRAP_KEYSTORE_PASSWORD -e BUBBLEWRAP_KEY_PASSWORD \
+            "$BUBBLEWRAP_IMAGE" build --skipPwaValidation
+
+      # 验产物而不是验绿勾：签的是谁的证书、包名与 versionCode 是不是本次输入的那个。
+      # 工具不在就直接跳过并说清楚（runner 上有没有 apksigner/aapt2 不该让整条流水线红）。
+      - name: 核对产物（签名者 / 包名 / versionCode）
+        env:
+          PACKAGE_ID: ${{ steps.norm.outputs.package }}
+          VERSION_CODE: ${{ steps.norm.outputs.version_code }}
+        run: |
+          set -euo pipefail
+          apk="$WORK/app-release-signed.apk"
+          test -s "$apk" || { echo "::error::没有产出已签名的 APK"; exit 1; }
+          sdk="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          pick() { ls -d "$sdk"/build-tools/*/"$1" 2>/dev/null | sort -V | tail -n 1 || true; }
+
+          signer="$(pick apksigner)"
+          if [ -z "$signer" ]; then
+            echo "::warning::runner 上没有 apksigner，跳过「这份 APK 是谁签的」核对"
+          else
+            certs="$("$signer" verify --print-certs "$apk")"
+            printf '%s\n' "$certs"
+            if printf '%s' "$certs" | grep -qi 'Android Debug'; then
+              echo "::error::这是 debug 签名：它永远升不了级，不能发出去"
+              exit 1
+            fi
+          fi
+
+          badging_bin="$(pick aapt2)"
+          if [ -z "$badging_bin" ]; then
+            echo "::warning::runner 上没有 aapt2，跳过包名/版本核对"
+          else
+            first_line="$("$badging_bin" dump badging "$apk" | head -n 1)"
+            printf '%s\n' "$first_line"
+            printf '%s' "$first_line" | grep -q "name='$PACKAGE_ID'" \
+              || { echo "::error::APK 的包名不是 $PACKAGE_ID"; exit 1; }
+            printf '%s' "$first_line" | grep -q "versionCode='$VERSION_CODE'" \
+              || { echo "::error::APK 的 versionCode 不是 $VERSION_CODE"; exit 1; }
+          fi
+
+      - name: 站点上的 assetlinks.json 对得上吗
+        env:
+          DOMAIN: ${{ steps.norm.outputs.domain }}
+          PACKAGE_ID: ${{ steps.norm.outputs.package }}
+          FINGERPRINT: ${{ steps.sign.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          url="https://$DOMAIN/.well-known/assetlinks.json"
+          if ! body="$(curl -fsS --max-time 20 "$url")"; then
+            echo "::warning::$url 取不到。APK 仍可安装，但打开时带浏览器地址栏（不是全屏 TWA）。"
+            echo "::warning::在服务端配置 SIXTY_TWA_PACKAGE=$PACKAGE_ID 与 SIXTY_TWA_FINGERPRINTS=$FINGERPRINT 后重试。"
+            exit 0
+          fi
+          if printf '%s' "$body" | grep -qF "$PACKAGE_ID" && printf '%s' "$body" | grep -qF "$FINGERPRINT"; then
+            echo "assetlinks 已就绪：装上后是全屏，没有地址栏。"
+          else
+            echo "::warning::$url 存在，但没有「$PACKAGE_ID / $FINGERPRINT」这一条。"
+            echo "::warning::把服务端的 SIXTY_TWA_FINGERPRINTS 设成 $FINGERPRINT（可逗号分隔多个），然后重装。"
+          fi
+
+      - name: 收进 dist 并写一份指纹备忘
+        env:
+          DOMAIN: ${{ steps.norm.outputs.domain }}
+          PACKAGE_ID: ${{ steps.norm.outputs.package }}
+          FINGERPRINT: ${{ steps.sign.outputs.fingerprint }}
+          VERSION_NAME: ${{ steps.norm.outputs.version_name }}
+          VERSION_CODE: ${{ steps.norm.outputs.version_code }}
+        run: |
+          set -euo pipefail
+          ls -l "$WORK/app-release-signed.apk" "$WORK/app-release-bundle.aab"
+          mkdir -p dist
+          cp "$WORK/app-release-signed.apk" "dist/sixty-$PACKAGE_ID.apk"
+          {
+            echo "# 六十分 APK 构建信息"
+            echo
+            echo "- 域名：https://$DOMAIN"
+            echo "- 包名：$PACKAGE_ID"
+            echo "- SHA-256 指纹：\`$FINGERPRINT\`"
+            echo "- versionName：$VERSION_NAME（versionCode $VERSION_CODE）"
+            echo "- 提交：$GITHUB_SHA"
+            echo
+            echo "服务端要配的两行："
+            echo '```'
+            echo "SIXTY_TWA_PACKAGE=$PACKAGE_ID"
+            echo "SIXTY_TWA_FINGERPRINTS=$FINGERPRINT"
+            echo '```'
+            echo
+            echo "仓库变量要钉的一行（下一次换钥匙时 CI 才会当场发现）："
+            echo '```'
+            echo "ANDROID_CERT_SHA256=$FINGERPRINT"
+            echo '```'
+          } > dist/BUILD-INFO.md
+          cat dist/BUILD-INFO.md
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: sixty-apk
+          path: dist/*
+          if-no-files-found: error
+
+      # keystore 与工程都不留在 runner 的磁盘上（$RUNNER_TEMP 之外还有缓存与日志）
+      - name: 清理签名材料
+        if: always()
+        run: rm -rf "${RUNNER_TEMP}/twa"
+
+  # 单独的作业才拿得到 contents: write —— 只有真要挂 Release 时才跑
+  attach:
+    needs: apk
+    if: needs.apk.outputs.release_tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: sixty-apk
+          path: dist
+      - name: 挂到 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.apk.outputs.release_tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # 标签触发时 Release 可能还不存在：建一个只有 APK 的，别去改已有说明
+          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$REPO" --title "$TAG" \
+              --notes "六十分 $TAG 的 Android 安装包（TWA）。包名与签名指纹见 BUILD-INFO.md。"
+          fi
+          gh release upload "$TAG" --repo "$REPO" dist/* --clobber

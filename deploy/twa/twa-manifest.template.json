@@ -1,0 +1,31 @@
+{
+  "packageId": "${PACKAGE_ID}",
+  "host": "${DOMAIN}",
+  "name": "${APP_NAME}",
+  "launcherName": "${APP_NAME}",
+  "display": "standalone",
+  "orientation": "${ORIENTATION}",
+  "themeColor": "#0b3d2e",
+  "themeColorDark": "#072b1f",
+  "navigationColor": "#0b3d2e",
+  "navigationColorDark": "#072b1f",
+  "navigationDividerColor": "#0b3d2e",
+  "navigationDividerColorDark": "#072b1f",
+  "backgroundColor": "#0d4432",
+  "enableNotifications": false,
+  "startUrl": "/",
+  "iconUrl": "https://${DOMAIN}/icons/icon-512.png",
+  "maskableIconUrl": "https://${DOMAIN}/icons/icon-maskable-512.png",
+  "webManifestUrl": "https://${DOMAIN}/manifest.webmanifest",
+  "splashScreenFadeOutDuration": 300,
+  "appVersionName": "${VERSION_NAME}",
+  "appVersionCode": ${VERSION_CODE},
+  "fallbackType": "webview",
+  "minSdkVersion": 23,
+  "features": {},
+  "signingKey": {
+    "path": "${KEYSTORE_PATH}",
+    "alias": "${KEY_ALIAS}"
+  },
+  "generatorApp": "bubblewrap-cli"
+}
