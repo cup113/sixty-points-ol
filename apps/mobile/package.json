@@ -1,0 +1,18 @@
+{
+  "name": "mobile",
+  "private": true,
+  "version": "0.1.0",
+  "description": "六十分 Android 壳（Capacitor）：WebView 指向线上站点，见 ADR-0027",
+  "scripts": {
+    "create:android": "cap add android",
+    "sync": "cap sync android",
+    "open": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/core": "^8.5.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.3"
+  }
+}

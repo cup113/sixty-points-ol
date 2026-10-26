@@ -7,3 +7,8 @@
 *.ico binary
 *.mp3 binary
 *.db binary
+# Gradle wrapper：jar 是二进制；gradlew 必须是 LF（CRLF 会让 shebang 失效），
+# .bat 反过来要 CRLF（cmd 对 LF 只是「通常能跑」）
+*.jar binary
+gradlew text eol=lf
+*.bat text eol=crlf

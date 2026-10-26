@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  覆盖 @capacitor/android 自带的同名颜色。
+  库里的缺省值 colorPrimary 是靛蓝 #3F51B5 —— 不改的话，启动画面与系统状态栏会漏出
+  一个跟六十分毫无关系的品牌色（这是官方模板的已知形态，不是我们的错觉）。
+-->
+<resources>
+    <color name="colorPrimary">#0d4432</color>
+    <color name="colorPrimaryDark">#0b3d2e</color>
+    <color name="colorAccent">#c8a24a</color>
+</resources>

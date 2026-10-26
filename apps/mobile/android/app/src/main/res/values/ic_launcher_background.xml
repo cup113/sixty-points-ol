@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 自适应图标的背景层：与站点 theme_color 同一个墨绿（前景是 mipmap-*/ic_launcher_foreground.png）。
+         模板自带的是 #FFFFFF，配深色标记会糊成一片。 -->
+    <color name="ic_launcher_background">#0d4432</color>
+</resources>

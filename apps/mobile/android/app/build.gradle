@@ -1,0 +1,103 @@
+apply plugin: 'com.android.application'
+
+// 版本号与签名材料一律从**环境**来：构建期取值不写回受版本控制的文件，
+// 也就没有「改了忘还原」这条路（CI 设，本地不设就走占位/空签名）。
+def envVersionCode = System.getenv("SIXTY_VERSION_CODE")
+def envVersionName = System.getenv("SIXTY_VERSION_NAME")
+
+// 签名四件套（别名不是秘密：它是 keystore 内部的一个标签，可推导，所以有缺省）
+//
+// 局部变量**不能**叫 keyAlias / keyPassword：那样会在 `signingConfigs { release { } }`
+// 里遮蔽同名属性，`keyAlias x` 于是被派发成「调用这个 String」，报
+// `No signature of method: java.lang.String.call()`。名字加前缀就没这问题。
+def signingStorePath = System.getenv("SIXTY_KEYSTORE_PATH")
+def signingStorePassword = System.getenv("SIXTY_KEYSTORE_PASSWORD")
+def signingAlias = System.getenv("SIXTY_KEY_ALIAS") ?: "sixty"
+def signingKeyPassword = System.getenv("SIXTY_KEY_PASSWORD")
+def hasReleaseKey =
+    signingStorePath != null && !signingStorePath.isEmpty() &&
+    signingStorePassword != null && !signingStorePassword.isEmpty() &&
+    signingKeyPassword != null && !signingKeyPassword.isEmpty()
+
+android {
+    namespace = "io.github.cup113.sixty"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "io.github.cup113.sixty"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        // Groovy 里 `versionCode (expr)` 会被派发成「调用那个还没赋值的属性」，
+        // 配置期直接 IllegalArgumentException: Value is null —— 必须带等号。
+        versionCode = envVersionCode != null ? envVersionCode.toInteger() : 1
+        versionName = envVersionName != null ? envVersionName : "0.0.0-local"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        release {
+            if (hasReleaseKey) {
+                storeFile file(signingStorePath)
+                storePassword signingStorePassword
+                keyAlias signingAlias
+                keyPassword signingKeyPassword
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // 没有 key 就**不**挂签名配置：下面那段会在真要出发布包时直接失败，
+            // 绝不产出一个未签名（或 debug 签名）的「release」让人误以为能用。
+            if (hasReleaseKey) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+}
+
+// 缺 key 必须大声失败。debug 包不受影响（本地照样能跑）。
+gradle.taskGraph.whenReady { graph ->
+    def wants = ['assembleRelease', 'bundleRelease', 'installRelease', 'packageRelease']
+    if (!hasReleaseKey && graph.allTasks.any { it.name in wants }) {
+        throw new GradleException(
+            "缺少发布签名材料：设 SIXTY_KEYSTORE_PATH / SIXTY_KEYSTORE_PASSWORD / " +
+            "SIXTY_KEY_PASSWORD（别名 SIXTY_KEY_ALIAS，缺省 sixty）。" +
+            "debug 构建不受此限。"
+        )
+    }
+}
+
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

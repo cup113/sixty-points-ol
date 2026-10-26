@@ -408,9 +408,9 @@ async function viewOf(code: string, credential: string): Promise<RestPayload> {
 }
 
 async function main(): Promise<void> {
-  // 0) PWA 外壳（ADR-0026）：manifest 必须是能下载的 JSON，assetlinks 只允许「隐身或合法」两态。
-  //    这两条都是**出货**才看得见的属性（`<link rel="manifest">` 指错、MIME 不对、点目录路由没被扫描到），
-  //    源码守卫抓不到，所以在这里对真服务器各打一次。
+  // 0) PWA 外壳（ADR-0026）：manifest 必须是能下载的 JSON。
+  //    这是**出货**才看得见的属性（`<link rel="manifest">` 指错、MIME 不对），源码守卫抓不到，
+  //    所以在这里对真服务器打一次。
   const manifestResponse = await fetch(`${BASE}/manifest.webmanifest`);
   assert(manifestResponse.ok, `manifest.webmanifest 取不到：${manifestResponse.status}`);
   const manifest = (await manifestResponse.json()) as {
@@ -426,34 +426,6 @@ async function main(): Promise<void> {
       (manifest.icons ?? []).some((icon) => icon.sizes === '512x512'),
     'manifest 缺少 192x192 / 512x512 图标（Chrome 的可安装条件）'
   );
-
-  // assetlinks：没配 SIXTY_TWA_* 时是 404（不配即隐身）；配了就必须是那份 statements 数组。
-  // 两种都不接受的状态（500、HTML 错误页、空数组）正是「配置写错却静默降级」的形状。
-  const assetlinksResponse = await fetch(`${BASE}/.well-known/assetlinks.json`);
-  assert(
-    assetlinksResponse.status === 404 || assetlinksResponse.status === 200,
-    `assetlinks.json 只能回 404（未启用）或 200（已启用），实际 ${assetlinksResponse.status}`
-  );
-  if (assetlinksResponse.status === 200) {
-    const statements = (await assetlinksResponse.json()) as {
-      relation?: string[];
-      target?: { namespace?: string; package_name?: string; sha256_cert_fingerprints?: string[] };
-    }[];
-    assert(
-      Array.isArray(statements) && statements.length > 0,
-      'assetlinks.json 是 200 但内容不是 statement 数组：TWA 会静默退化成带地址栏的形态'
-    );
-    const statement = statements[0]!;
-    assert(statement.target?.namespace === 'android_app', 'assetlinks.json 的 target.namespace 不是 android_app');
-    assert(
-      typeof statement.target?.package_name === 'string' && /^[A-Za-z][\w]*(\.[A-Za-z][\w]*)+$/.test(statement.target.package_name),
-      `assetlinks.json 的包名不合法：${String(statement.target?.package_name)}`
-    );
-    assert(
-      (statement.target?.sha256_cert_fingerprints ?? []).every((value) => /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/.test(value)),
-      'assetlinks.json 的指纹不是 32 组两位大写十六进制'
-    );
-  }
 
   const stamp = Date.now() % 100000;
   const players = await Promise.all([0, 1, 2].map((i) => claim(`界面${i}-${stamp}`)));

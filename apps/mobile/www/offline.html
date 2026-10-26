@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>六十分 · 连不上</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #0d4432;
+        color: #f4ead2;
+        font-family: system-ui, -apple-system, 'Noto Sans SC', sans-serif;
+      }
+      main {
+        box-sizing: border-box;
+        display: flex;
+        min-height: 100%;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        padding: 32px 24px calc(32px + env(safe-area-inset-bottom));
+        text-align: center;
+      }
+      h1 {
+        margin: 0;
+        font-size: 20px;
+        letter-spacing: 0.02em;
+      }
+      p {
+        margin: 0;
+        max-width: 22em;
+        font-size: 14px;
+        line-height: 1.7;
+        color: #cfe0d3;
+      }
+      button {
+        margin-top: 6px;
+        border: 0;
+        border-radius: 999px;
+        padding: 12px 28px;
+        background: #c8a24a;
+        color: #23180a;
+        font-size: 15px;
+        font-weight: 600;
+        font-family: inherit;
+      }
+      small {
+        max-width: 24em;
+        font-size: 12px;
+        line-height: 1.6;
+        color: #8fae98;
+      }
+      code {
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>连不上六十分</h1>
+      <p>对局在服务器上，这里需要联网。检查一下网络，或者稍后再试。</p>
+      <button type="button" onclick="location.replace(location.href)">重试</button>
+      <small>
+        如果一直停在这一页，也可能是本机的 <code>Android System WebView</code> 太旧
+        （低于 Chromium 90）：到应用商店更新它，再打开六十分。
+      </small>
+    </main>
+  </body>
+</html>

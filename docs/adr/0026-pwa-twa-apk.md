@@ -1,5 +1,9 @@
 # PWA 外壳与 Android 安装包（TWA）
 
+> **已撤回**（见 ADR-0027）：PWA 那半边仍然有效；Android 安装包从 TWA 换成 Capacitor 壳，
+> `deploy/twa/`、`/.well-known/assetlinks.json` 与 `SIXTY_TWA_*` 服务端变量都已删除。
+> 下面保留的是当时的决策记录，不是现状。
+
 站点按 PWA 标准补全：`static/manifest.webmanifest`（名/图标/standalone/主题色）、`static/icons/` 三张 PNG（192、512、maskable 512）、`app.html` 挂清单，以及 SvelteKit **内建**的 `src/service-worker.ts`（`register` 默认开，不引 `vite-plugin-pwa`）。Android 包走 **TWA（Trusted Web Activity）**：`.github/workflows/apk.yml` 在 `workflow_dispatch` 里用官方镜像 `ghcr.io/googlechromelabs/bubblewrap`（自带 JDK 17 与 Android SDK，构建镜像时已跑过 `yes | bubblewrap doctor`）从 `deploy/twa/twa-manifest.template.json` 生成工程并签名，产物是 `app-release-signed.apk`（直装）与 `.aab`。
 
 理由：国内用户习惯「下载一个安装包点开装上」，而 Play 不在分发路径上；TWA 把**同一份**线上站点包成应用，不产生第二套代码（对比 Capacitor/原生壳：那要复制一层 UI 与鉴权，而本项目的身份、SSE、MCP 全在服务端）；`fallbackType: "webview"` 专治国内 ROM 常常没有支持 TWA 的浏览器 —— 缺省 `customtabs` 会把用户甩到系统浏览器或一个空页，`webview` 则留在应用内。SW 用框架自带机制而非 `vite-plugin-pwa`：那个插件的价值在预渲染工作流，而这里要的只有「壳缓存 + 一条不许缓存的边界」，自己写反而能把 `/api/` 直通写在第一行。
