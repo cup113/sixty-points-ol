@@ -158,6 +158,7 @@ export function forceLeaveSeat(code: string, userId: number): { ok: boolean; mes
 }
 
 function deleteTableRows(tableId: number): void {
+  db.prepare('DELETE FROM announcements WHERE table_id = ?').run(tableId);
   db.prepare('DELETE FROM replays WHERE table_id = ?').run(tableId);
   db.prepare('DELETE FROM events WHERE table_id = ?').run(tableId);
   db.prepare('DELETE FROM games WHERE table_id = ?').run(tableId);
@@ -166,7 +167,7 @@ function deleteTableRows(tableId: number): void {
   db.prepare('DELETE FROM tables WHERE id = ?').run(tableId);
 }
 
-/** 级联删牌桌：五张从表 + 主表一起删。删后广播一次，让活着的 SSE 连接立刻取不到桌而断流。 */
+/** 级联删牌桌：六张从表 + 主表一起删。删后广播一次，让活着的 SSE 连接立刻取不到桌而断流。 */
 export function deleteTableById(tableId: number): boolean {
   const exists = db.prepare('SELECT 1 FROM tables WHERE id = ?').get(tableId);
   if (exists === undefined) return false;
@@ -236,6 +237,8 @@ export function deleteUser(userId: number, actorId: number): DeleteUserResult {
     }
     db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
     db.prepare('DELETE FROM spectators WHERE user_id = ?').run(userId);
+    // 他的桌边消息：座位行删了它就没有落点，留着还会在再入座时复活
+    db.prepare('DELETE FROM announcements WHERE user_id = ?').run(userId);
     db.prepare('DELETE FROM users WHERE id = ?').run(userId);
   });
 

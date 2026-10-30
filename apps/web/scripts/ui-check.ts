@@ -115,6 +115,16 @@ async function act(code: string, credential: string, action: unknown): Promise<v
   if (!response.ok) throw new Error(`动作失败（${response.status}）：${await response.text()}`);
 }
 
+/** 发一条桌边消息（ADR-0028）：短句 / 表情 / 暂离的写端与动作接口同一套凭据 */
+async function social(code: string, credential: string, body: unknown): Promise<void> {
+  const response = await fetch(`${BASE}/api/tables/${code}/social`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}` },
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) throw new Error(`桌边消息失败（${response.status}）：${await response.text()}`);
+}
+
 /** 取页面里第一个样式表链接；抓不到就直接报错，绝不静默跳过（否则守卫会变成空转） */
 function cssHrefOf(html: string): string {
   const match = /<link[^>]+href="([^"]+\.css)"/.exec(html);
@@ -1170,7 +1180,7 @@ async function main(): Promise<void> {
   //      这里用的正是一个**跨了两代重组的旧 quiz 步 id**：别名账本必须把它接回 x-follow 那一屏。
   const quizStep = await page('/learn?s=c2-follow-single');
   assert(!quizStep.includes('**'), '测验屏把 **星号** 原样端上屏（题面/选项/解释的粗体应经 RichText 渲染）');
-  assert(quizStep.includes('上家领出 ♣8-9-10-J 四张顺子'), '旧测验步的深链没有落到结构优先那一屏（题干没渲染出来）');
+  assert(quizStep.includes('上家领出 4 张 ♣ 顺子'), '旧测验步的深链没有落到结构优先那一屏（题干没渲染出来）');
   assert(quizStep.includes('data-brief'), '旧测验步的深链没有落到简述屏上（只有题、没有讲解）');
   assert(quizStep.includes('data-quiz'), '测验步没有渲染成测验');
   assert(quizStep.includes('♣3-4-6'), '测验选项没有渲染出牌面文字');
@@ -1215,6 +1225,28 @@ async function main(): Promise<void> {
   const home = await page('/', players[0]!.credential);
   assert(home.includes('href="/learn"'), '大厅没有指向新手引导的入口');
   assert(rules.includes('href="/learn"'), '文字教程页没有指向新手引导的入口');
+
+  // 12) 桌边消息（ADR-0028）：短句以**一条气泡**挂在说话人的座位卡上，且内容被转义；
+  //     暂离是同一条气泡、带「还剩 N 分」；入口在我那条底栏里；输入框只在弹层打开时才有
+  //     （SSR 首帧里不许出现，否则等于把聊天框常驻在牌桌上）。
+  await social(code, players[1]!.credential, { kind: 'text', text: '<b>界面</b> 你先' });
+  const withMessage = await page(`/table/${code}`, players[0]!.credential);
+  assert(withMessage.includes('data-announcement="text"'), '桌边短句没有渲染成座位气泡（缺 data-announcement）');
+  assert(
+    withMessage.includes('&lt;b>界面&lt;/b>'),
+    '短句里的尖括号没有被转义：消息被当成 HTML 插进了页面'
+  );
+  assert(!withMessage.includes('<b>界面</b>'), '短句被原样当成 HTML 插进了页面');
+  assert(/<button[^>]*data-announcement="text"/.test(withMessage), '气泡不是按钮：点一下收不起来');
+  assert(withMessage.includes('data-social="true"'), '「我」底栏里没有桌边消息的入口');
+  assert(withMessage.includes('aria-label="桌边消息"'), '桌边消息入口没有可读的名字');
+  assert(!/<input/.test(withMessage), '页面首帧就渲染了输入框：它只该在弹层打开时出现');
+
+  await social(code, players[2]!.credential, { kind: 'away', minutes: 15 });
+  const withAway = await page(`/table/${code}`, players[0]!.credential);
+  assert(withAway.includes('data-announcement="away"'), '暂离没有渲染成同一条气泡（缺 data-announcement="away"）');
+  assert(/暂离[\s\S]{0,40}还剩 1[45] 分/.test(withAway), '暂离气泡没有写清「还剩 N 分」');
+  console.log('桌边消息：短句是一条可点掉的座位气泡（尖括号已转义），暂离复用它并带剩余分钟；入口只在「我」底栏，输入框只活在弹层里');
 
   console.log('界面结构：position 工具类无混用，毡面是「顶卡 / 内容槽 / 我的底栏」三行格（顶行两张对手卡，不再各自绝对定位）');
   console.log('文案：邀请码可点复制，常驻提示已清空，? 按阶段给说明，界面无方位称谓');

@@ -17,6 +17,7 @@
   import LeaveConfirm from '$lib/components/LeaveConfirm.svelte';
   import LobbyPanel from '$lib/components/LobbyPanel.svelte';
   import SeatCard from '$lib/components/SeatCard.svelte';
+  import SocialControl from '$lib/components/SocialControl.svelte';
   import SoundControl from '$lib/components/SoundControl.svelte';
   import TabRail from '$lib/components/TabRail.svelte';
   import TableDrawer from '$lib/components/TableDrawer.svelte';
@@ -420,6 +421,8 @@
           level={levelAt(seat)}
           online={seatAt(seat)?.online ?? false}
           bot={seatAt(seat)?.bot ?? false}
+          announcement={seatAt(seat)?.announcement ?? null}
+          bubbleSide={index === 0 ? 'left' : 'right'}
           isMe={seated && seat === (you?.seat ?? -1)}
           isTurn={isTurnAt(seat)}
           isDeclarer={deal?.declarerSeat === seat}
@@ -471,11 +474,16 @@
           level={levelAt(anchor)}
           online={seatAt(anchor)?.online ?? false}
           bot={seatAt(anchor)?.bot ?? false}
+          announcement={seatAt(anchor)?.announcement ?? null}
           isMe={seated}
           isTurn={isTurnAt(anchor)}
           isDeclarer={deal?.declarerSeat === anchor}
           class="mx-auto w-full max-w-[var(--rail-w)]"
-        />
+        >
+          {#snippet trailing()}
+            <SocialControl {client} />
+          {/snippet}
+        </SeatCard>
       {/if}
     </div>
 

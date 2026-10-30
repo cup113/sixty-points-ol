@@ -152,6 +152,7 @@ export function removeBot(code: string, actorId: number, seat: number): BotResul
 
   transaction(() => {
     db.prepare('DELETE FROM seats WHERE table_id = ? AND seat = ?').run(table.id, seat);
+    db.prepare('DELETE FROM announcements WHERE table_id = ? AND user_id = ?').run(table.id, target.user_id);
     db.prepare('DELETE FROM spectators WHERE table_id = ? AND user_id = ?').run(table.id, target.user_id);
     db.prepare('DELETE FROM users WHERE id = ? AND is_bot = 1').run(target.user_id);
   });

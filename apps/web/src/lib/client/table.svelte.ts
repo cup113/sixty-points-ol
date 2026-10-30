@@ -100,7 +100,13 @@ export class TableClient {
     try {
       const response = await fetch(path, {
         ...init,
-        headers: { 'content-type': 'application/json', ...(init.headers ?? {}) }
+        headers: {
+          // 让 SvelteKit 的错误响应也走 JSON：动作失败的原因才能在客户端原样上屏，
+          // 而不是退化成「操作失败（400）」。
+          accept: 'application/json',
+          'content-type': 'application/json',
+          ...(init.headers ?? {})
+        }
       });
       const payload = (await response.json().catch(() => null)) as { message?: string } | null;
       if (!response.ok) {
@@ -122,6 +128,45 @@ export class TableClient {
       method: 'POST',
       body: JSON.stringify({ action })
     }).then((payload) => payload !== null);
+  }
+
+  /**
+   * 桌边消息（ADR-0028）：表情 / 短句 / 暂离共用这一个写端。
+   *
+   * 与动作请求刻意分开，**不碰 `this.error`**：失败原因是「发得太快了」这类要贴在弹层里的话，
+   * 不该跑到页头那条红色横幅上、把毡面顶下去；它也不清 `selected` ——
+   * 说一句话与手上正在拟选的牌是两件正交的事。
+   *
+   * 返回 `null` 表示成功，否则是给用户看的那一句原因。
+   */
+  async #social(body: unknown): Promise<string | null> {
+    this.busy = true;
+    try {
+      const response = await fetch(`/api/tables/${this.code}/social`, {
+        method: 'POST',
+        headers: { accept: 'application/json', 'content-type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+      if (!response.ok) return payload?.message ?? `没发出去（${response.status}）`;
+      return null;
+    } catch (cause) {
+      return cause instanceof Error ? cause.message : '网络错误';
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  emote(key: string): Promise<string | null> {
+    return this.#social({ kind: 'emote', key });
+  }
+
+  say(text: string): Promise<string | null> {
+    return this.#social({ kind: 'text', text });
+  }
+
+  away(minutes: number): Promise<string | null> {
+    return this.#social({ kind: 'away', minutes });
   }
 
   /** 入座：继承该座位的级别与手牌；角色会随下一帧负载变成 player */

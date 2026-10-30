@@ -1,17 +1,21 @@
 <script lang="ts">
+  import type { Snippet } from 'svelte';
   import type { Level } from '@sixty/engine';
+  import type { SeatAnnouncement } from '$lib/shared';
+  import AnnouncementBubble from './AnnouncementBubble.svelte';
   import LevelBadge from './LevelBadge.svelte';
 
   /**
    * 座位卡。两种形态：
    *
-   * - `card`（默认）：两张**对手**卡，钉在毡面顶行两角；纯展示。
+   * - `card`（默认）：两张**对手**卡，钉在毡面顶行两角；卡片本身是纯展示，唯一的交互是
+   *   卡下方那条**桌边消息**气泡（点一下在本地收起，见 ADR-0028）。
    * - `bar`：「我」那一条**底栏**（跨宽、一行），住在毡面第三行 —— 位置本身就是「这是我」，
-   *   所以不再画「我」徽标。
+   *   所以不再画「我」徽标；右端有社交入口（`trailing`）。
    *
    * **动作面不在这里**：早先卡片底下有一整行「+ 机器人 / 请离」，那是它比对手卡高出一整行、
-   * 进而压住状态条与叫牌面板上沿的直接原因（见 ADR-0020）。机器人那两个动作现在只在
-   * 抽屉的「牌桌」页（`TablePanel`），毡面因此只剩身份信息。
+   *   进而压住状态条与叫牌面板上沿的直接原因（见 ADR-0020）。机器人那两个动作现在只在
+   *   抽屉的「牌桌」页（`TablePanel`），毡面因此只剩身份信息。
    *
    * 调用方必须自己给定位类（`class`）：Tailwind 产物里 `.relative` 排在 `.absolute` 之后，
    * 同一元素混用两者时 relative 胜出，座位卡会塌回文档流、全挤在毡面左上角。
@@ -25,6 +29,9 @@
     online = false,
     bot = false,
     variant = 'card',
+    announcement = null,
+    bubbleSide = 'left',
+    trailing,
     class: klass = ''
   }: {
     name: string | null;
@@ -37,6 +44,12 @@
     bot?: boolean;
     /** card = 顶行两角的对手卡；bar = 毡面底部「我」那一条 */
     variant?: 'card' | 'bar';
+    /** 这一座位此刻的桌边消息（ADR-0028）；气泡是 absolute，不占卡片高度 */
+    announcement?: SeatAnnouncement | null;
+    /** 气泡贴在座位卡**下方**、靠左还是靠右（两张对手卡各朝外，窄屏上不越过毡面） */
+    bubbleSide?: 'left' | 'right';
+    /** 「我」底栏右端的社交入口（由页面传入，卡片本身不持有客户端状态） */
+    trailing?: Snippet;
     class?: string;
   } = $props();
 
@@ -108,6 +121,12 @@
     {#if level}
       <LevelBadge {level} class="ml-auto" />
     {/if}
+    {#if trailing}
+      <div class="flex shrink-0 items-center">{@render trailing()}</div>
+    {/if}
+    {#if announcement !== null && !empty}
+      <AnnouncementBubble {announcement} side="bar" />
+    {/if}
   </div>
 {:else}
   <div
@@ -149,5 +168,8 @@
         <LevelBadge {level} class="shrink-0" />
       {/if}
     </div>
+    {#if announcement !== null && !empty}
+      <AnnouncementBubble {announcement} side={bubbleSide} />
+    {/if}
   </div>
 {/if}
