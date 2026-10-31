@@ -59,8 +59,11 @@ README 的「暂未实现」里把它写作「聊天/表情」。这一条把它
   （在座才能发、2 秒限速、观战 403、到点不返回、牌局动作只清暂离、离座带走消息）。
 - `apps/web/test/table-chrome.test.ts` 的 `socialSourceCheck`：入口只在「我」底栏、
   气泡必须是本地可收起的绝对定位按钮、目录只有 `social.ts` 一份、服务端有限速与表情校验、
-  `announcements` 是「一桌一座位一条」；含五条反证（入口挪页头、气泡回流内、气泡写服务端、
-  控制条写死表情、去掉限速）。
+  `announcements` 是「一桌一座位一条」；含六条反证（入口挪页头、气泡回流内、气泡写服务端、
+  控制条写死表情、去掉限速、切档判据退回 `target.closest`）。它另外钉住**面板外点击必须用
+  `composedPath()`**：点「暂离」/「←」会同步换掉被点的按钮，`target.closest` 在窗口处理器里
+  已经找不到社交根，面板会自己关掉、永远进不到时间档位（真机验收第一轮抓到的就是这个，
+  其余功能正常）。
 - `apps/web/scripts/ui-check.ts`：出货 HTML 上验短句真的渲染成气泡、尖括号被转义、
   暂离气泡带「还剩 N 分」、入口带可读名字、首帧没有输入框。
 - `packages/mcp/scripts/mcp-check.ts` 的形状守卫：`SeatInfo.announcement` 必须与

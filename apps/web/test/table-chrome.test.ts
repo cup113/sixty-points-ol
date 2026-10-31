@@ -2377,11 +2377,20 @@ function socialSourceCheck(s: SocialSources): string | null {
   if (/fetch\(|client\.|broadcast/.test(bubble)) return '气泡在写服务端：点掉一条消息不该让全桌跟着消失';
   if (!bubble.includes('title="点一下收起"')) return '气泡没有说明它可以点掉';
 
+  const control = code(s.control);
   if (/Date\.now\(|fetch\(|\$state|document\./.test(s.social)) return 'social.ts 不是纯函数（时间/网络/状态混进来了）';
-  if (!s.control.includes('AWAY_MINUTES')) return '暂离档位没有从 social.ts 读（会出现第二份档位表）';
-  if (!s.control.includes('MAX_MESSAGE_LENGTH')) return '长度上限没有从 social.ts 读（前后端会各写一个数）';
-  if (s.control.includes('👍')) return '控制条里写死了一颗表情字形（应读 EMOTES）';
-  if (!s.control.includes('<input')) return '控制条里没有输入框：短句无处可写';
+  if (!control.includes('AWAY_MINUTES')) return '暂离档位没有从 social.ts 读（会出现第二份档位表）';
+  if (!control.includes('MAX_MESSAGE_LENGTH')) return '长度上限没有从 social.ts 读（前后端会各写一个数）';
+  if (control.includes('👍')) return '控制条里写死了一颗表情字形（应读 EMOTES）';
+  if (!control.includes('<input')) return '控制条里没有输入框：短句无处可写';
+  // 点「暂离」/「←」会同步换掉被点的按钮；窗口处理器若用 target.closest，target 已脱离
+  // 文档，面板会自己关掉、永远进不到时间档位（真机验收抓到的那个失败）。
+  if (!control.includes('composedPath()')) {
+    return '面板外点击没有用 composedPath：切换「暂离」档位时会自己关掉';
+  }
+  if (/target\.closest\(/.test(control)) {
+    return '面板外点击用了 target.closest：切换档位时按钮已脱离 DOM，面板会自己关掉';
+  }
 
   if (!s.tables.includes('postAnnouncement')) return '服务端没有发消息的写端';
   if (!s.tables.includes('isEmoteKey') || !s.tables.includes('ANNOUNCEMENT_RATE_LIMIT_MS')) {
@@ -2449,6 +2458,17 @@ test('反证：入口挪进页头 / 气泡回到流内 / 气泡写服务端 / �
     }) ?? '',
     /限速/,
     '去掉限速没有被判出来'
+  );
+  assert.match(
+    socialSourceCheck({
+      ...SOCIAL_SOURCES,
+      control: socialControl.replace(
+        'event.composedPath()',
+        "(event.target as Element).closest('[data-social-root]')"
+      )
+    }) ?? '',
+    /composedPath/,
+    '窗口点击判据退回 target.closest（切换档位时会自己关掉）没有被判出来'
   );
   assert.match(
     socialSourceCheck({ ...SOCIAL_SOURCES, control: socialControl.replace('<input', '<textarea') }) ?? '',

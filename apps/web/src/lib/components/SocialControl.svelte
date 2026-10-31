@@ -69,8 +69,13 @@
 
   /** 点面板外才收起：面板、表情钮与触发器都在 `[data-social-root]` 里 */
   function onWindowClick(event: MouseEvent): void {
-    const target = event.target;
-    if (target instanceof Element && target.closest('[data-social-root]') !== null) return;
+    // 用 composedPath 而不是 `target.closest`：点「暂离」/「←」会同步把被点的那个按钮从 DOM
+    // 里换掉（主面板 ↔ 时间档位），窗口处理器跑的时候 target 已经脱离文档，`closest` 找不到
+    // 社交根，于是面板会「自己关掉」、永远进不到时间档位。composedPath 是派发时定下的路径，
+    // 不受这之后的重渲染影响。
+    if (event.composedPath().some((node) => node instanceof Element && node.hasAttribute('data-social-root'))) {
+      return;
+    }
     open = false;
   }
 </script>
