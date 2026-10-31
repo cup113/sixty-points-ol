@@ -2324,3 +2324,209 @@ const style = \`left:\${spot.insetPct}%;width:\${spot.widthPct}%\`;`
     '这条守卫对合规的最小片段也报错（过宽）'
   );
 });
+
+// ---------------------------------------------------------------------------
+// 桌边消息（ADR-0028）
+// ---------------------------------------------------------------------------
+
+const socialSource = read('../src/lib/social.ts');
+const socialControl = read('../src/lib/components/SocialControl.svelte');
+const announcementBubble = read('../src/lib/components/AnnouncementBubble.svelte');
+const sharedSource = read('../src/lib/shared.ts');
+const tablesSource = read('../src/lib/server/tables.ts');
+const dbSource = read('../src/lib/server/db.ts');
+
+interface SocialSources {
+  readonly page: string;
+  readonly seatCard: string;
+  readonly bubble: string;
+  readonly control: string;
+  readonly social: string;
+  readonly tables: string;
+  readonly db: string;
+  readonly shared: string;
+}
+
+/**
+ * 桌边消息的形状守卫。它守的不是「文案对不对」，而是四条结构边界：
+ *
+ * 1. **入口只有一个，而且在「我」底栏上** —— 不在页头（页头白名单已满），也不在操作条
+ *    （那一行要留给牌局动作）；观战者没有底栏，所以**没有入口**这件事是结构性的，不靠按钮禁用；
+ * 2. **气泡是绝对定位的按钮** —— 它是座位卡上的浮层，不参与流式布局；点一下只在**本地**隐藏
+ *    （`dismissedId`），不发请求、不广播（谁点掉的只对谁生效，别人不该被你替他们关掉消息）；
+ * 3. **一个数据源** —— 表情目录、暂离档位、长度上限全部来自 `social.ts`；
+ *    控制条里写死一颗 `👍` 或一个「5 分」就是第二份目录；
+ * 4. **纯函数那一半真的纯** —— `social.ts` 不许碰时间、网络或 `$state`；消息的寿命由服务端
+ *    算成 `remainingMs`，浏览器只做倒数。
+ */
+function socialSourceCheck(s: SocialSources): string | null {
+  const header = headerOf(s.page);
+  if (header.includes('SocialControl')) return '社交入口跑进了页头（页头只允许大厅 / 邀请码 / 桌况簇 / 声音）';
+
+  const bar = /variant="bar"[\s\S]*?<\/SeatCard>/.exec(code(s.page))?.[0] ?? '';
+  if (!bar.includes('SocialControl')) return '社交入口不在「我」那条底栏里（观战者因此仍可能看到一个不该有的入口）';
+  if (!s.seatCard.includes('{@render trailing()}')) return '底栏没有给社交入口留插槽（入口只能在组件外面漂着）';
+
+  if ((s.seatCard.match(/<AnnouncementBubble/g) ?? []).length < 2) {
+    return '两种座位卡形态没有都渲染气泡（对手卡与我的底栏各有一次）';
+  }
+  const bubble = code(s.bubble);
+  if (!/<button/.test(bubble)) return '气泡不是按钮：点一下收不起';
+  if (!bubble.includes('bubble absolute')) return '气泡不是 absolute：它会挤动座位卡与毡面的行高';
+  if (!bubble.includes('dismissedId = announcement.id')) return '气泡没有记住「这条被我点掉过」';
+  if (/fetch\(|client\.|broadcast/.test(bubble)) return '气泡在写服务端：点掉一条消息不该让全桌跟着消失';
+  if (!bubble.includes('title="点一下收起"')) return '气泡没有说明它可以点掉';
+
+  // 倒数定时器必须跟着 `visible` 停表：只读服务端那一帧的 remainingMs 时，气泡到点后
+  // 已经不在 DOM 里，interval 仍会每秒空转到下一帧（牌桌安静时下一帧可能很久才来）。
+  if (!bubble.includes('if (!visible) return;')) {
+    return '气泡的倒数定时器没有跟着可见性停表：到点后它会一直空转';
+  }
+  if (bubble.includes('$derived(announcement.remainingMs > 0)')) {
+    return '气泡的定时器又只看服务端那一帧的 remainingMs：到点不会停表';
+  }
+
+  // 气泡的包含块必须由座位卡**自己的定位类**给出：不能挂在 `backdrop-blur-sm` 上。
+  // 后者一旦被去掉（低端机上的性能取舍），`absolute` 的气泡就会跳到 `.felt` 边上。
+  if (!s.seatCard.includes("'relative flex h-10")) {
+    return '「我」底栏没有显式 relative：气泡的包含块会落到毡面上';
+  }
+  if (!s.seatCard.includes("'relative rounded-2xl")) {
+    return '对手卡没有显式 relative：气泡的包含块会落到毡面上';
+  }
+  if (s.seatCard.includes("klass.length > 0 ? klass : 'relative'")) {
+    return '座位卡的定位类又退回兜底：调用方传了 class 时 relative 不生效';
+  }
+  // 座位卡上的 backdrop-filter 同时是层叠上下文，气泡自己的 z-30 逃不出它：整行必须抬到
+  // 内容槽（叫牌面板）之上，否则气泡被面板盖住、看不见也点不到。
+  const seatsRow = /<div[^>]*data-felt-row="seats"[^>]*>/.exec(code(s.page))?.[0] ?? '';
+  if (!seatsRow.includes('z-10')) {
+    return '座位行没有抬到内容槽之上：叫牌面板会盖住桌边消息气泡';
+  }
+
+  const control = code(s.control);
+  if (/Date\.now\(|fetch\(|\$state|document\./.test(s.social)) return 'social.ts 不是纯函数（时间/网络/状态混进来了）';
+  if (!control.includes('AWAY_MINUTES')) return '暂离档位没有从 social.ts 读（会出现第二份档位表）';
+  if (!control.includes('MAX_MESSAGE_LENGTH')) return '长度上限没有从 social.ts 读（前后端会各写一个数）';
+  if (control.includes('👍')) return '控制条里写死了一颗表情字形（应读 EMOTES）';
+  if (!control.includes('<input')) return '控制条里没有输入框：短句无处可写';
+  // 点「暂离」/「←」会同步换掉被点的按钮；窗口处理器若用 target.closest，target 已脱离
+  // 文档，面板会自己关掉、永远进不到时间档位（真机验收抓到的那个失败）。
+  if (!control.includes('composedPath()')) {
+    return '面板外点击没有用 composedPath：切换「暂离」档位时会自己关掉';
+  }
+  if (/target\.closest\(/.test(control)) {
+    return '面板外点击用了 target.closest：切换档位时按钮已脱离 DOM，面板会自己关掉';
+  }
+
+  if (!s.tables.includes('postAnnouncement')) return '服务端没有发消息的写端';
+  if (!s.tables.includes('isEmoteKey') || !s.tables.includes('ANNOUNCEMENT_RATE_LIMIT_MS')) {
+    return '服务端没有校验表情键 / 没有限速';
+  }
+  if (!s.db.includes('CREATE TABLE IF NOT EXISTS announcements')) return '数据库里没有 announcements 表';
+  if (!s.db.includes('UNIQUE (table_id, user_id)')) return 'announcements 不是「一个座位至多一条」';
+
+  if (!s.shared.includes('announcement')) return '负载形状里没有 announcement（SSR 与 SSE 都读不到）';
+  if (/@html|innerHTML/.test(s.bubble + s.control)) return '桌边消息走了 HTML 注入';
+  if (s.page.includes('<input')) return '页面里出现输入框（输入框只属于社交弹层）';
+  return null;
+}
+
+const SOCIAL_SOURCES: SocialSources = {
+  page,
+  seatCard,
+  bubble: announcementBubble,
+  control: socialControl,
+  social: socialSource,
+  tables: tablesSource,
+  db: dbSource,
+  shared: sharedSource
+};
+
+test('桌边消息：入口只在「我」底栏、气泡是本地可收起的绝对浮层、目录只有一份', () => {
+  const problem = socialSourceCheck(SOCIAL_SOURCES);
+  assert.equal(problem, null, problem ?? '');
+});
+
+test('反证：入口挪进页头 / 气泡回到流内 / 气泡写服务端 / 控制条写死表情 / 去掉限速 / 座位卡去掉 relative / 定时器不停表，都必须被判出来', () => {
+  assert.match(
+    socialSourceCheck({ ...SOCIAL_SOURCES, page: page.replace('<header', '<header><SocialControl {client} />') }) ?? '',
+    /页头/,
+    '入口挪进页头没有被判出来'
+  );
+  assert.match(
+    socialSourceCheck({
+      ...SOCIAL_SOURCES,
+      bubble: announcementBubble.replace('bubble absolute', 'bubble relative')
+    }) ?? '',
+    /absolute/,
+    '气泡回到流内没有被判出来'
+  );
+  assert.match(
+    socialSourceCheck({
+      ...SOCIAL_SOURCES,
+      bubble: announcementBubble.replace("dismissedId = announcement.id;", "dismissedId = announcement.id;\n      void fetch('/x');")
+    }) ?? '',
+    /写服务端/,
+    '气泡偷偷发请求没有被判出来'
+  );
+  assert.match(
+    socialSourceCheck({
+      ...SOCIAL_SOURCES,
+      control: socialControl.replace('<div class="grid grid-cols-4 gap-1">', '<div class="grid grid-cols-4 gap-1">👍')
+    }) ?? '',
+    /写死/,
+    '控制条写死表情没有被判出来'
+  );
+  assert.match(
+    socialSourceCheck({
+      ...SOCIAL_SOURCES,
+      tables: tablesSource.replaceAll('ANNOUNCEMENT_RATE_LIMIT_MS', '0')
+    }) ?? '',
+    /限速/,
+    '去掉限速没有被判出来'
+  );
+  assert.match(
+    socialSourceCheck({
+      ...SOCIAL_SOURCES,
+      control: socialControl.replace(
+        'event.composedPath()',
+        "(event.target as Element).closest('[data-social-root]')"
+      )
+    }) ?? '',
+    /composedPath/,
+    '窗口点击判据退回 target.closest（切换档位时会自己关掉）没有被判出来'
+  );
+  assert.match(
+    socialSourceCheck({ ...SOCIAL_SOURCES, control: socialControl.replace('<input', '<textarea') }) ?? '',
+    /输入框/,
+    '没有输入框的合规片段应报「没有输入框」，而不是被别的判据抢先'
+  );
+  assert.match(
+    socialSourceCheck({
+      ...SOCIAL_SOURCES,
+      seatCard: seatCard.replace("'relative rounded-2xl", "'rounded-2xl")
+    }) ?? '',
+    /包含块|relative/,
+    '座位卡去掉相对定位没有被判出来：气泡会跟着毛玻璃一起漂走'
+  );
+  assert.match(
+    socialSourceCheck({
+      ...SOCIAL_SOURCES,
+      bubble: announcementBubble.replace(
+        'if (!visible) return;',
+        'if (announcement.remainingMs <= 0) return;'
+      )
+    }) ?? '',
+    /停表|空转/,
+    '倒数定时器不跟可见性停表没有被判出来：到点后它会一直空转'
+  );
+  assert.match(
+    socialSourceCheck({
+      ...SOCIAL_SOURCES,
+      page: page.replace('class="relative z-10 flex items-start', 'class="flex items-start')
+    }) ?? '',
+    /盖住|内容槽/,
+    '座位行不抬到内容槽之上没有被判出来：气泡会被叫牌面板盖住'
+  );
+});

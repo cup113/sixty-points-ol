@@ -8,7 +8,18 @@ import {
   type GameState,
   type Seat
 } from '@sixty/engine';
-import type { Role, SeatInfo, StreamPayload, TableView } from '../shared';
+import type { Role, SeatAnnouncement, SeatInfo, StreamPayload, TableView } from '../shared';
+import {
+  ANNOUNCEMENT_RATE_LIMIT_MS,
+  EMOTE_TTL_MS,
+  TEXT_TTL_MS,
+  isAwayMinutes,
+  isEmoteKey,
+  messageProblem,
+  normalizeMessage,
+  type AnnouncementKind,
+  type SocialPost
+} from '../social';
 import { INVITE_CODE_ALPHABET, INVITE_CODE_LENGTH } from '../invite';
 import { projectionFor, resolveArrivalRole } from '../role';
 import { db, now, transaction } from './db';
@@ -306,6 +317,8 @@ export function leaveSeat(code: string, userId: number): ActionResult {
   }
   transaction(() => {
     db.prepare('DELETE FROM seats WHERE table_id = ? AND user_id = ?').run(table.id, userId);
+    // 离座就带走自己的桌边消息：座位空了，气泡没有可挂的地方；再坐回来也不该复活
+    db.prepare('DELETE FROM announcements WHERE table_id = ? AND user_id = ?').run(table.id, userId);
     db.prepare('INSERT OR IGNORE INTO spectators (table_id, user_id, joined_at) VALUES (?, ?, ?)').run(
       table.id,
       userId,
@@ -358,16 +371,50 @@ function actionAgeMs(tableId: number): number | null {
   return Number.isFinite(at) ? Math.max(0, Date.now() - at) : null;
 }
 
+/**
+ * 座位行 + 该座位最近一条桌边消息（没有就是四个 NULL）。
+ *
+ * 消息在**同一条查询**里 LEFT JOIN 出来：每一帧 SSE 都要重算 `tableView`，
+ * 再为三个座位各查一次消息表是纯多出来的往返。
+ */
+type SeatRowWithAnnouncement = SeatRow & {
+  is_bot: number;
+  ann_id: number | null;
+  ann_kind: string | null;
+  ann_body: string | null;
+  ann_expires: string | null;
+};
+
+/**
+ * 数据库里的那一行 → 负载里的那一条；过期、脏数据、未知种类一律当作没有消息。
+ *
+ * `remainingMs` 由服务端算，浏览器只负责本地倒数 —— 与「距上一步」计时同一条纪律：
+ * 时钟不跨端比较，且过期不需要服务端定时器（下一次读负载时自然就没了）。
+ */
+function announcementOf(row: SeatRowWithAnnouncement, nowMs: number): SeatAnnouncement | null {
+  const { ann_id: id, ann_kind: kind, ann_body: body, ann_expires: expires } = row;
+  if (id === null || kind === null || expires === null) return null;
+  if (kind !== 'emote' && kind !== 'text' && kind !== 'away') return null;
+  if (kind === 'emote' && !isEmoteKey(body)) return null;
+  if (kind === 'text' && (body === null || body.length === 0)) return null;
+  const remainingMs = Date.parse(expires) - nowMs;
+  if (!(remainingMs > 0)) return null;
+  return { id, kind, body, remainingMs };
+}
+
 export function tableView(table: TableInfo): TableView {
   const rows = db
     .prepare(
-      `SELECT s.seat AS seat, s.user_id AS user_id, u.name AS name, u.is_bot AS is_bot
+      `SELECT s.seat AS seat, s.user_id AS user_id, u.name AS name, u.is_bot AS is_bot,
+              a.id AS ann_id, a.kind AS ann_kind, a.body AS ann_body, a.expires_at AS ann_expires
        FROM seats s JOIN users u ON u.id = s.user_id
+       LEFT JOIN announcements a ON a.table_id = s.table_id AND a.user_id = s.user_id
        WHERE s.table_id = ? ORDER BY s.seat`
     )
-    .all(table.id) as unknown as (SeatRow & { is_bot: number })[];
-  const bySeat = new Map<number, SeatRow & { is_bot: number }>();
+    .all(table.id) as unknown as SeatRowWithAnnouncement[];
+  const bySeat = new Map<number, SeatRowWithAnnouncement>();
   for (const row of rows) bySeat.set(row.seat, row);
+  const nowMs = Date.now();
   const seats: SeatInfo[] = [0, 1, 2].map((seat) => {
     const row = bySeat.get(seat);
     return {
@@ -377,7 +424,8 @@ export function tableView(table: TableInfo): TableView {
       // 「在线」= 有 SSE 订阅，或最近有请求（MCP 侧没有 SSE，只能靠请求说话，见 hub.ts）；
       // 机器人的请求就是它出的每一手牌 —— 打牌时亮、停手一个窗口后转灰，如实
       online: row ? isUserOnline(table.id, row.user_id) || isRecentlyActive(row.user_id) : false,
-      bot: row ? row.is_bot === 1 : false
+      bot: row ? row.is_bot === 1 : false,
+      announcement: row ? announcementOf(row, nowMs) : null
     };
   });
   const seatedCount = seats.filter((s) => s.userId !== null).length;
@@ -446,6 +494,80 @@ export function payloadFor(table: TableInfo, userId: number): StreamPayload {
   return viewFor(table, userId);
 }
 
+export type SocialResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly message: string; readonly status?: number };
+
+/**
+ * 发一条桌边消息（表情 / 短句 / 暂离）：一个座位只留**最近一条**，新消息覆盖旧消息。
+ *
+ * 三条边界都在服务端：
+ * - **在座才能发**：观战者没有座位卡可挂，也不该往别人的桌上灌消息；
+ * - **2 秒一条**：消息会广播给全桌，刷屏的成本不该由别人承担；
+ * - **暂离只是一条带寿命的消息**：到点自然过期，牌局动作会提前把它删掉（见 `applyTableAction`）。
+ *
+ * 不做幂等键：重发在语义上就是「再说一条」，与 `claim` 那类不可核对的动作不同。
+ */
+export function postAnnouncement(code: string, userId: number, post: SocialPost): SocialResult {
+  const table = getTableByCode(code);
+  if (table === null) return { ok: false, message: '牌桌不存在' };
+  if (seatOf(table, userId) === null) {
+    return { ok: false, status: 403, message: '你在观战，入座后才能发消息' };
+  }
+
+  const at = Date.now();
+  // 限速读的是**独立的台账**，不是消息行：暂离被一次牌局动作删掉、或离座后再入座，
+  // 都不该把「2 秒一条」一起清零 —— 窗口属于人，不属于那条消息（ADR-0028 §7）。
+  const last = db
+    .prepare('SELECT posted_at FROM announcement_throttle WHERE table_id = ? AND user_id = ?')
+    .get(table.id, userId) as { posted_at: string } | undefined;
+  if (last !== undefined && at - Date.parse(last.posted_at) < ANNOUNCEMENT_RATE_LIMIT_MS) {
+    return { ok: false, status: 429, message: '发得太快了，歇一下' };
+  }
+
+  let kind: AnnouncementKind;
+  let body: string | null = null;
+  let ttlMs: number;
+  if (post.kind === 'emote') {
+    if (!isEmoteKey(post.key)) return { ok: false, message: '不认识这个表情' };
+    kind = 'emote';
+    body = post.key;
+    ttlMs = EMOTE_TTL_MS;
+  } else if (post.kind === 'text') {
+    const problem = messageProblem(post.text);
+    if (problem !== null) return { ok: false, message: problem };
+    kind = 'text';
+    body = normalizeMessage(post.text);
+    ttlMs = TEXT_TTL_MS;
+  } else {
+    if (!isAwayMinutes(post.minutes)) return { ok: false, message: '暂离时长不在档位里' };
+    kind = 'away';
+    ttlMs = post.minutes * 60_000;
+  }
+
+  // REPLACE 撞 (table_id, user_id) 的唯一键：旧行删掉、新行拿到一个新 id ——
+  // 客户端靠这个 id 区分「同一条」与「新的一条」（点掉过的旧气泡不该压住新消息）。
+  // 限速台账与消息同事务写：消息落库成功才算「发过一次」，失败不该吃掉下一条的窗口。
+  transaction(() => {
+    db.prepare(
+      `REPLACE INTO announcements (table_id, user_id, kind, body, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(
+      table.id,
+      userId,
+      kind,
+      body,
+      new Date(at).toISOString(),
+      new Date(at + ttlMs).toISOString()
+    );
+    db.prepare(
+      'REPLACE INTO announcement_throttle (table_id, user_id, posted_at) VALUES (?, ?, ?)'
+    ).run(table.id, userId, new Date(at).toISOString());
+  });
+  broadcast(table.id);
+  return { ok: true };
+}
+
 /** 服务器权威地执行一个动作：座位号一律由服务端根据身份推导（见 ADR-0002） */
 export function applyTableAction(code: string, userId: number, action: Action): ActionResult {
   const table = getTableByCode(code);
@@ -488,6 +610,12 @@ export function applyTableAction(code: string, userId: number, action: Action): 
     if (replay !== null) saveReplay(table.id, replay);
     // 开新对局：dealNo 从 1 重新计数，旧重演必须整表清掉（见 db.ts 的表注释）
     if (action.type === 'newGame') clearReplays(table.id);
+    // 牌局动作是「我回来了」最硬的证据：暂离消息在出手那一刻消失。
+    // 只删 away —— 短句与表情照旧活到自己的 TTL，别让下一次出手把刚说的话吞掉。
+    db.prepare("DELETE FROM announcements WHERE table_id = ? AND user_id = ? AND kind = 'away'").run(
+      table.id,
+      userId
+    );
   });
   broadcast(table.id);
   // 状态变了，轮到机器人的话让它想（见 bots.ts / ADR-0015）。

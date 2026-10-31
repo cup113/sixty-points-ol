@@ -31,9 +31,9 @@ export function fakeTableView(code = 'ABC123', online = true, spectatorCount = 0
   return {
     code,
     seats: [
-      { seat: 0, userId: 1, name: '甲', online: true, bot: false },
-      { seat: 1, userId: 2, name: '乙', online, bot: false },
-      { seat: 2, userId: 3, name: '丙', online: false, bot: false }
+      { seat: 0, userId: 1, name: '甲', online: true, bot: false, announcement: null },
+      { seat: 1, userId: 2, name: '乙', online, bot: false, announcement: null },
+      { seat: 2, userId: 3, name: '丙', online: false, bot: false, announcement: null }
     ],
     seatedCount: 3,
     ready: true,

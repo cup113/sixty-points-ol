@@ -1,4 +1,5 @@
 import type { PersonalView, PublicView } from '@sixty/engine';
+import type { AnnouncementKind } from './social';
 
 /** 观众角色：座位上的人和不在座位上的人（见 CONTEXT.md「观战者」） */
 export type Role = 'player' | 'spectator';
@@ -12,6 +13,23 @@ export const BOT_LIMIT = 2;
 /** 玩家独有的一份信息：观战者为 null。类型取自引擎的个人视图，避免两处各写一遍 */
 export type PlayerHand = PersonalView['you'];
 
+/**
+ * 某座位此刻那**一条**桌边消息（表情 / 短句 / 暂离）。
+ *
+ * 为什么只留一条：气泡只有一处落点，它挂在座位卡上而不是一条独立的聊天栏里；
+ * 新消息覆盖旧消息，刷新不会补历史（ADR-0028）。`body` 对暂离为 null ——
+ * 暂离的文案由剩余的毫秒数算出来，不把「还剩 14 分」存进数据库。
+ */
+export interface SeatAnnouncement {
+  /** 数据库行 id：新消息 = 新 id，客户端据此判断「这条我之前点掉过没有」 */
+  readonly id: number;
+  readonly kind: AnnouncementKind;
+  /** emote = 目录键；text = 那一句话；away = null */
+  readonly body: string | null;
+  /** 还能看见多久（毫秒）。与 `actionAgeMs` 同一条纪律：传剩余/年龄，不传时间戳 */
+  readonly remainingMs: number;
+}
+
 export interface SeatInfo {
   readonly seat: number;
   readonly userId: number | null;
@@ -19,6 +37,8 @@ export interface SeatInfo {
   readonly online: boolean;
   /** 这个座位是不是**机器人**（服务器代打的无凭据身份，见 ADR-0015）：座位卡据此显示徽标与「请离」 */
   readonly bot: boolean;
+  /** 这一座位此刻的桌边消息；空座与没有消息时为 null */
+  readonly announcement: SeatAnnouncement | null;
 }
 
 export interface TableView {

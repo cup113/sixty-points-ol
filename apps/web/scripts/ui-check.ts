@@ -5,7 +5,8 @@
  * 1. Tailwind 的 position 工具类不可叠加 —— 产物里 .relative 排在 .absolute 之后，
  *    同一元素同时带两者时 relative 胜出，座位卡会塌回文档流、三张叠在毡面左上角。
  *    （ADR-0020 之后毡面是三行格、顶行两张对手卡走正常文档流，所以「座位卡定位类唯一为
- *    absolute」那条判据改成了「顶行的对手卡**自己不许定位**」+「三个行钩子齐备且有序」。）
+ *    absolute」那条判据改成了「顶行的对手卡只许 `relative`（桌边消息气泡的包含块，仍在
+ *    流内）」+「三个行钩子齐备且有序」。）
  * 2. 说明文案只允许活在「?」弹层里：页面上不得再出现已删除的常驻提示，
  *    并且每一阶段都必须有那个「?」入口（title 随阶段变化）。
  * 3. 邀请码必须是一个可点的按钮（点它复制邀请链接），且界面上一律用玩家名，
@@ -113,6 +114,16 @@ async function act(code: string, credential: string, action: unknown): Promise<v
     body: JSON.stringify({ action })
   });
   if (!response.ok) throw new Error(`动作失败（${response.status}）：${await response.text()}`);
+}
+
+/** 发一条桌边消息（ADR-0028）：短句 / 表情 / 暂离的写端与动作接口同一套凭据 */
+async function social(code: string, credential: string, body: unknown): Promise<void> {
+  const response = await fetch(`${BASE}/api/tables/${code}/social`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}` },
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) throw new Error(`桌边消息失败（${response.status}）：${await response.text()}`);
 }
 
 /** 取页面里第一个样式表链接；抓不到就直接报错，绝不静默跳过（否则守卫会变成空转） */
@@ -490,11 +501,18 @@ async function main(): Promise<void> {
     `毡面顶行应是两张对手卡，实际 ${topCards.length} 张：${topCards.map((c) => c.slice(0, 80)).join(' | ')}`
   );
   for (const value of topCards) {
-    const found = positionClasses(value);
+    // `relative` 是例外：它不脱离文档流，只给桌边消息的气泡一个包含块（ADR-0028）。
+    // 其余定位类（absolute / fixed / sticky）与 top-* 那套仍然是旧形状。
+    const found = positionClasses(value).filter((name) => name !== 'relative');
     assert(
       found.length === 0,
-      `顶行的对手卡又自己定位了（[${found.join(' + ')}]）：它们是三行格的第一行，走正常文档流` +
-        `（旧形状的三个 top-* 正是 #3 #5 那些重叠的来源）—— ${value.slice(0, 120)}`
+      `顶行的对手卡用了会脱离文档流的定位（[${found.join(' + ')}]）：它们是三行格的第一行，` +
+        `走正常文档流（旧形状的三个 top-* 正是 #3 #5 那些重叠的来源）—— ${value.slice(0, 120)}`
+    );
+    assert(
+      value.includes('relative'),
+      `顶行的对手卡没有 relative：桌边消息的气泡会以毡面为包含块（去掉毛玻璃就跳走）—— ` +
+        `${value.slice(0, 120)}`
     );
     assert(value.includes('w-36'), `顶行的对手卡没了固定宽度（缺 w-36）：${value.slice(0, 120)}`);
   }
@@ -1170,7 +1188,7 @@ async function main(): Promise<void> {
   //      这里用的正是一个**跨了两代重组的旧 quiz 步 id**：别名账本必须把它接回 x-follow 那一屏。
   const quizStep = await page('/learn?s=c2-follow-single');
   assert(!quizStep.includes('**'), '测验屏把 **星号** 原样端上屏（题面/选项/解释的粗体应经 RichText 渲染）');
-  assert(quizStep.includes('上家领出 ♣8-9-10-J 四张顺子'), '旧测验步的深链没有落到结构优先那一屏（题干没渲染出来）');
+  assert(quizStep.includes('上家领出 4 张 ♣ 顺子'), '旧测验步的深链没有落到结构优先那一屏（题干没渲染出来）');
   assert(quizStep.includes('data-brief'), '旧测验步的深链没有落到简述屏上（只有题、没有讲解）');
   assert(quizStep.includes('data-quiz'), '测验步没有渲染成测验');
   assert(quizStep.includes('♣3-4-6'), '测验选项没有渲染出牌面文字');
@@ -1215,6 +1233,28 @@ async function main(): Promise<void> {
   const home = await page('/', players[0]!.credential);
   assert(home.includes('href="/learn"'), '大厅没有指向新手引导的入口');
   assert(rules.includes('href="/learn"'), '文字教程页没有指向新手引导的入口');
+
+  // 12) 桌边消息（ADR-0028）：短句以**一条气泡**挂在说话人的座位卡上，且内容被转义；
+  //     暂离是同一条气泡、带「还剩 N 分」；入口在我那条底栏里；输入框只在弹层打开时才有
+  //     （SSR 首帧里不许出现，否则等于把聊天框常驻在牌桌上）。
+  await social(code, players[1]!.credential, { kind: 'text', text: '<b>界面</b> 你先' });
+  const withMessage = await page(`/table/${code}`, players[0]!.credential);
+  assert(withMessage.includes('data-announcement="text"'), '桌边短句没有渲染成座位气泡（缺 data-announcement）');
+  assert(
+    withMessage.includes('&lt;b>界面&lt;/b>'),
+    '短句里的尖括号没有被转义：消息被当成 HTML 插进了页面'
+  );
+  assert(!withMessage.includes('<b>界面</b>'), '短句被原样当成 HTML 插进了页面');
+  assert(/<button[^>]*data-announcement="text"/.test(withMessage), '气泡不是按钮：点一下收不起来');
+  assert(withMessage.includes('data-social="true"'), '「我」底栏里没有桌边消息的入口');
+  assert(withMessage.includes('aria-label="桌边消息"'), '桌边消息入口没有可读的名字');
+  assert(!/<input/.test(withMessage), '页面首帧就渲染了输入框：它只该在弹层打开时出现');
+
+  await social(code, players[2]!.credential, { kind: 'away', minutes: 15 });
+  const withAway = await page(`/table/${code}`, players[0]!.credential);
+  assert(withAway.includes('data-announcement="away"'), '暂离没有渲染成同一条气泡（缺 data-announcement="away"）');
+  assert(/暂离[\s\S]{0,40}还剩 1[45] 分/.test(withAway), '暂离气泡没有写清「还剩 N 分」');
+  console.log('桌边消息：短句是一条可点掉的座位气泡（尖括号已转义），暂离复用它并带剩余分钟；入口只在「我」底栏，输入框只活在弹层里');
 
   console.log('界面结构：position 工具类无混用，毡面是「顶卡 / 内容槽 / 我的底栏」三行格（顶行两张对手卡，不再各自绝对定位）');
   console.log('文案：邀请码可点复制，常驻提示已清空，? 按阶段给说明，界面无方位称谓');

@@ -80,6 +80,30 @@ CREATE TABLE IF NOT EXISTS replays (
   created_at TEXT NOT NULL,
   PRIMARY KEY (table_id, deal_no)
 );
+-- 桌边消息（ADR-0028）：一个座位同一时刻至多一条（表情 / 短句 / 暂离），新消息覆盖旧的。
+-- 没有历史表：气泡消失之后就不该再找得回来，所以这里只有**最近一条**。
+-- expires_at 是绝对时刻，但浏览器永远只收到剩余毫秒（见 shared.ts 的 SeatAnnouncement）；
+-- id 每次写入都会换（REPLACE 会删旧行、插新行），客户端据此判断哪条被点掉过。
+CREATE TABLE IF NOT EXISTS announcements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  table_id INTEGER NOT NULL REFERENCES tables(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  kind TEXT NOT NULL CHECK (kind IN ('emote', 'text', 'away')),
+  body TEXT,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  UNIQUE (table_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_announcements_table ON announcements (table_id);
+-- 限速台账（ADR-0028 §7）：只记「这个人在这一桌最近一次成功发消息的时刻」。
+-- 不复用 announcements.created_at：那张表一个座位只有一行，而牌局动作会删掉暂离、
+-- 离座会删掉整条消息 —— 限速窗口会跟着消息的寿命一起被重置。窗口属于**人**，不属于消息。
+CREATE TABLE IF NOT EXISTS announcement_throttle (
+  table_id INTEGER NOT NULL REFERENCES tables(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  posted_at TEXT NOT NULL,
+  PRIMARY KEY (table_id, user_id)
+);
 `);
 
 // 机器人座位（ADR-0015）：老库补列。上面的 CREATE TABLE 只对新建库生效，

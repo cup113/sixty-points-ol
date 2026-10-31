@@ -14,6 +14,17 @@ import type { PlayerSeat, PublicView } from '@sixty/engine';
 /** 座位上的玩家 = `player`；不在座位上的人（观战者）= `spectator` */
 export type Role = 'player' | 'spectator';
 
+/** 桌边消息的种类（ADR-0028）：表情 / 短句 / 暂离，三者共用一个座位气泡 */
+export type AnnouncementKind = 'emote' | 'text' | 'away';
+
+/** 某座位最近一条桌边消息；`body` 对暂离为 null，`remainingMs` 是剩余时间而不是时间戳 */
+export interface SeatAnnouncement {
+  readonly id: number;
+  readonly kind: AnnouncementKind;
+  readonly body: string | null;
+  readonly remainingMs: number;
+}
+
 export interface SeatInfo {
   readonly seat: number;
   readonly userId: number | null;
@@ -21,6 +32,8 @@ export interface SeatInfo {
   readonly online: boolean;
   /** 机器人座位（服务器代打的无凭据身份，见 ADR-0015）；`mcp-check` 的形状守卫会逐字段核对 */
   readonly bot: boolean;
+  /** 这一座位此刻的桌边消息（表情 / 短句 / 暂离）；没有时为 null */
+  readonly announcement: SeatAnnouncement | null;
 }
 
 export interface TableView {
@@ -65,7 +78,14 @@ export interface TableSummary {
  * 忘了形状守卫立刻红 —— `actionAgeMs`（浏览器的「距上一步」计时）就是这么进来的；
  * `bot`（机器人座位）同理。
  */
-export const SEAT_FIELDS: readonly (keyof SeatInfo)[] = ['seat', 'userId', 'name', 'online', 'bot'];
+export const SEAT_FIELDS: readonly (keyof SeatInfo)[] = [
+  'seat',
+  'userId',
+  'name',
+  'online',
+  'bot',
+  'announcement'
+];
 export const TABLE_FIELDS: readonly (keyof TableView)[] = [
   'code',
   'seats',
