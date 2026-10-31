@@ -12,9 +12,9 @@ import {
   type Strain
 } from './cards.ts';
 import { isPass, isHigherBid, validateCall, type Bid, type BidCall } from './auction.ts';
-import { leadInfo, validateFollow, validateLead } from './validate.ts';
-import { trickWinner, type TrickPlay } from './trick.ts';
-import { longestRun, sortHand, type TrumpModel } from './order.ts';
+import { leadInfo, claimLastTrickRange, validateFollow, validateLead } from './validate.ts';
+import { canWinTrickNow, trickWinner, type TrickPlay } from './trick.ts';
+import { sortHand, type TrumpModel } from './order.ts';
 
 export type { TrickPlay };
 
@@ -442,9 +442,28 @@ export function dispatch(prev: GameState, action: Action, rng: RNG): DispatchRes
       if (action.seat !== playTurn(deal)) return fail(err('not_your_turn', '还没轮到你出牌'));
 
       const hand = deal.hands[action.seat]!;
-      const maxLast = longestRun(hand, deal.trump);
-      if (!Number.isInteger(action.lastTrick) || action.lastTrick < 1 || action.lastTrick > maxLast) {
-        return fail(err('bad_last_trick', `末轮张数要落在 1..${maxLast}（手上最长顺子）`));
+      // 认赢连**当前这一墩**一起收（结算把它整墩判给认赢者），所以这一墩他还没赢下来的话，
+      // 认领在发起那一刻就已经不成立了 —— 这是必要条件里的最后一环，引擎直接拒，不交给两张票。
+      if (!canWinTrickNow(hand, deal.trick.plays, deal.trump)) {
+        return fail(
+          err('claim_unwinnable', '这一墩你已经赢不了了：认赢连这一墩一起收，先出一手压得住的牌')
+        );
+      }
+      const range = claimLastTrickRange(hand, deal.trick.plays, deal.trump);
+      if (range === null) return fail(err('bad_last_trick', '手上没有能收尾的顺子'));
+      if (
+        !Number.isInteger(action.lastTrick) ||
+        action.lastTrick < range.min ||
+        action.lastTrick > range.max
+      ) {
+        return fail(
+          err(
+            'bad_last_trick',
+            range.min === range.max
+              ? `末轮张数只能是 ${range.max}（这一墩打完就结束了）`
+              : `末轮张数要落在 ${range.min}..${range.max}`
+          )
+        );
       }
       if (!Number.isFinite(action.expiresAt)) return fail(err('bad_expires', '认赢截止时刻不合法'));
 

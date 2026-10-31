@@ -5,10 +5,13 @@ import {
   classOfSet,
   compareProfiles,
   isRun,
+  longestRun,
   segments,
+  topRunCards,
   type CardClass,
   type TrumpModel
 } from './order.ts';
+import type { TrickPlay } from './trick.ts';
 
 export interface LeadInfo {
   readonly cardClass: CardClass;
@@ -121,4 +124,57 @@ export function checkPlay(
   const info = leadInfo(lead, t);
   if (info === null) return '牌局状态异常';
   return validateFollow(hand, cards, info, t);
+}
+
+// ---------------------------------------------------------------------------
+// 认赢（ADR-0028）：这一墩他这么快能不能赢、末轮能报多大
+// ---------------------------------------------------------------------------
+
+/** 认赢能报的末轮张数区间（底牌倍数），闭区间 */
+export interface ClaimLastTrick {
+  readonly min: number;
+  readonly max: number;
+}
+
+/**
+ * 轮到**你**出牌时，末轮张数 x 的合法区间；null 表示这手牌没有可报的值。
+ *
+ * x 是「收尾那一墩我领出几张」，所以它同时被三件事钳住：
+ * - 手上真有一条 x 张的顺子（领出多张必须是顺子）；
+ * - 这一墩我还得先打掉 `size` 张 —— 之后的墩才是我的「剩下」；
+ * - 三家等长（`hand.length === size`）时这一墩**就是末墩**，x 只能等于这一墩的张数。
+ *
+ * 这是必要条件不是充分条件：那条顺子留不留得到末轮，只有牌手自己判断（对手的票也不核它）。
+ * 屏幕与工具面都读这一处，不各算一份。
+ */
+export function claimLastTrickRange(
+  hand: readonly Card[],
+  plays: readonly TrickPlay[],
+  t: TrumpModel
+): ClaimLastTrick | null {
+  const run = longestRun(hand, t);
+  if (run < 1) return null; // 空手：一张也领不出
+  if (plays.length === 0) return { min: 1, max: run }; // 领出：这一墩的大小由我自己挑
+
+  const size = plays[0]!.cards.length;
+  if (hand.length < size) return null; // 出牌数超过手牌数：不是合法局面
+  if (hand.length === size) return { min: size, max: size };
+
+  const max = Math.min(hand.length - size, run);
+  return max < 1 ? null : { min: 1, max };
+}
+
+/**
+ * 他在这一墩「最好也只能这样出」的那一手 —— 给**排在他后面**的对手问一句
+ * 「他最好的一手我压得住吗」。本门够就跟本门最强的 n 连，本门空着就找 n 连主（杀牌），
+ * 其余情况他这一墩赢不了（null）。
+ */
+export function bestFollow(hand: readonly Card[], lead: readonly Card[], t: TrumpModel): Card[] | null {
+  const size = lead.length;
+  const cls = classOfSet(lead, t);
+  if (cls === null) return null;
+  const holding = hand.filter((card) => cardClass(card, t) === cls);
+  if (holding.length >= size) return topRunCards(holding, size, t);
+  if (holding.length > 0 || cls === 'T') return null;
+  return topRunCards(hand.filter((card) => cardClass(card, t) === 'T'), size, t);
 }

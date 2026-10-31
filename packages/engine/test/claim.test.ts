@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { dispatch, playTurn, type Action, type GameState } from '../src/state.ts';
 import { publicView } from '../src/view.ts';
 import { longestRun } from '../src/order.ts';
+import { canWinTrickNow } from '../src/trick.ts';
+import { claimLastTrickRange } from '../src/validate.ts';
 import { cardKey } from '../src/cards.ts';
 import { c, mulberry32, rigPlayDeal } from './helpers.ts';
 
@@ -31,7 +33,7 @@ const declare = (seat: 0 | 1 | 2, lastTrick = 1): Action => ({
 /** 两家各两张、底牌 25 分：庄家（座位 0）领出，随时可以认赢 */
 function twoCardsEach(): GameState {
   return rigPlayDeal(
-    [[c('C', 5), c('C', 10)], [c('C', 3), c('C', 4)], [c('D', 3), c('D', 4)]],
+    [[c('C', 5), c('C', 10)], [c('C', 6), c('C', 4)], [c('D', 3), c('D', 4)]],
     KITTY_25
   );
 }
@@ -74,6 +76,75 @@ describe('认赢：发起', () => {
     assert.equal(declared.deal!.claim!.claimant, 1);
     assert.equal(declared.deal!.claim!.revealed.length, 2);
     assert.equal(playTurn(declared.deal!), null);
+  });
+});
+
+describe('认赢：这一墩赢不赢得了', () => {
+  it('跟牌时这一墩已经赢不了：引擎直接拒，不交给两张票', () => {
+    // 座位 0 领 ♣5，座位 1 只有 ♣3♣4：跟 ♣5 压不过（也没主牌），这一墩必归座位 0。
+    // 认赢把当前这一墩一起收走，所以这种认领在发起那一刻就不成立。
+    const base = rigPlayDeal(
+      [[c('C', 5), c('C', 10)], [c('C', 3), c('C', 4)], [c('D', 3), c('D', 4)]],
+      KITTY_25
+    );
+    const afterLead = apply(base, { type: 'play', seat: 0, cards: [c('C', 5)] });
+    assert.equal(rejectedCode(afterLead, declare(1)), 'claim_unwinnable');
+  });
+
+  it('桌上已经有人杀着：本门顺子压不过，要更高的主牌连才救得回来', () => {
+    const trump = { strain: 'H', rank: 7 } as const;
+    const plays = [
+      { seat: 0 as const, cards: [c('C', 9), c('C', 8)] },
+      { seat: 1 as const, cards: [c('H', 2), c('H', 3)] }
+    ];
+    // 他是第三家：手里有更高的 ♣ 顺子也没用（副牌压不过杀牌）
+    assert.equal(canWinTrickNow([c('C', 13), c('C', 12)], plays, trump), false);
+    // 缺门、两张更高的连主：才能反杀
+    assert.equal(canWinTrickNow([c('H', 5), c('H', 6)], plays, trump), true);
+  });
+
+  it('缺门杀牌算赢；半跟 + 垫牌不算；空墩恒算', () => {
+    const trump = { strain: 'H', rank: 7 } as const;
+    const lead = [{ seat: 0 as const, cards: [c('C', 13), c('C', 12)] }];
+    // 缺门、两张连主：一杀就赢
+    assert.equal(canWinTrickNow([c('H', 2), c('H', 3)], lead, trump), true);
+    // 有 ♣2 就得先跟一张 ♣，剩下那张垫 —— 结构性跟牌赢不了
+    assert.equal(canWinTrickNow([c('C', 2), c('H', 3)], lead, trump), false);
+    // 轮我领出：还没有人压我
+    assert.equal(canWinTrickNow([c('C', 2)], [], trump), true);
+  });
+});
+
+describe('认赢：末轮张数的区间', () => {
+  it('跟牌要扣掉这一墩：三家三张、他领一张 → 最多 2（手上最长顺子正好 2）', () => {
+    const base = rigPlayDeal(
+      [[c('C', 2), c('D', 2), c('S', 2)], [c('C', 4), c('C', 5), c('C', 9)], [c('D', 3), c('D', 4), c('D', 5)]],
+      KITTY_25
+    );
+    const afterLead = apply(base, { type: 'play', seat: 0, cards: [c('C', 2)] });
+    const plays = afterLead.deal!.trick!.plays;
+    assert.deepEqual(claimLastTrickRange(afterLead.deal!.hands[1]!, plays, afterLead.deal!.trump!), {
+      min: 1,
+      max: 2
+    });
+    assert.equal(apply(afterLead, declare(1, 2)).deal!.claim!.lastTrick, 2);
+    assert.equal(rejectedCode(afterLead, declare(1, 3)), 'bad_last_trick');
+  });
+
+  it('三家等长时这一墩就是末墩：x 只能等于它', () => {
+    // 三家各两张、座位 0 领两张顺子 → 座位 1 打完这一墩，三家同时空手
+    const base = rigPlayDeal(
+      [[c('C', 2), c('C', 3)], [c('C', 4), c('C', 5)], [c('D', 3), c('D', 4)]],
+      KITTY_25
+    );
+    const afterLead = apply(base, { type: 'play', seat: 0, cards: [c('C', 2), c('C', 3)] });
+    const plays = afterLead.deal!.trick!.plays;
+    assert.deepEqual(claimLastTrickRange(afterLead.deal!.hands[1]!, plays, afterLead.deal!.trump!), {
+      min: 2,
+      max: 2
+    });
+    assert.equal(rejectedCode(afterLead, declare(1, 1)), 'bad_last_trick');
+    assert.equal(apply(afterLead, declare(1, 2)).deal!.claim!.lastTrick, 2);
   });
 });
 
@@ -158,12 +229,12 @@ describe('认赢：剩余全收的结算', () => {
     const failed = apply(declared, { type: 'claimAnswer', seat: 1, agree: false });
     const played = apply(
       apply(
-        apply(apply(failed, { type: 'play', seat: 0, cards: [c('C', 5)] }), { type: 'play', seat: 1, cards: [c('C', 3)] }),
+        apply(apply(failed, { type: 'play', seat: 0, cards: [c('C', 5)] }), { type: 'play', seat: 1, cards: [c('C', 4)] }),
         { type: 'play', seat: 2, cards: [c('D', 3)] }
       ),
       { type: 'play', seat: 0, cards: [c('C', 10)] }
     );
-    const scored = apply(apply(played, { type: 'play', seat: 1, cards: [c('C', 4)] }), {
+    const scored = apply(apply(played, { type: 'play', seat: 1, cards: [c('C', 6)] }), {
       type: 'play',
       seat: 2,
       cards: [c('D', 4)]
