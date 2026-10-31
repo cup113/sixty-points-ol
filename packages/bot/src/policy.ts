@@ -21,7 +21,11 @@
  * 搜索 / 学习牌谱仍然不做。
  */
 import {
+  ALL_CLASSES,
+  bestFollow,
   bestProfile,
+  bestRunTop,
+  canWinTrickNow,
   cardClass,
   cardLevel,
   cardPoints,
@@ -37,7 +41,6 @@ import {
   STRAIN_RANK,
   STRAINS,
   SUITS,
-  topLevel,
   trickWinner,
   validateCall,
   type Bid,
@@ -266,29 +269,21 @@ export function partnerSeatOf(seat: Seat, deal: { readonly contract: Contract | 
   return rest.length === 1 ? rest[0]! : null;
 }
 
-/** 顶张所在的连续链长度：跟牌要凑出 n 张同门单段顺子才可能赢，光有一张大牌不够 */
-function topChainLength(holding: readonly Card[], t: TrumpModel): number {
-  const levels = [...new Set(holding.map((card) => cardLevel(card, t)))].sort((a, b) => a - b);
-  let len = 1;
-  for (let i = levels.length - 1; i > 0; i--) {
-    if (levels[i - 1] !== levels[i]! - 1) break;
-    len += 1;
-  }
-  return len;
-}
-
 /**
  * 认赢的投票（ADR-0028）：「我还能不能从他手里拿下一墩？」
  *
- * 只用两样东西：**我自己的手牌** + **他亮出来的牌**（不偷看第三家、不搜索）。两处判据
- * 都按「不论他领多大」来要求，因为领出张数由他挑：
- * - **同门压顶**：我这一门的顶张比他大，且我的顶张所在顺子**不短于**他这一门最长的一条
- *   （他领 n 张时我必须凑出 n 张同门单段顺子才可能赢；结构性跟牌赢不了）；
- * - **缺门杀牌**：他某一门有牌、我一张都没有，而我的主牌顺子不短于他那一门最长的一条 ——
- *   他迟早得领那一门，我一杀就赢。
+ * 只用两样东西：**我自己的手牌** + **他亮出来的牌**（不偷看第三家、不搜索）。四条判据：
+ * - **当前这一墩**：认领连这一墩一起收，所以「他压不过现在桌上最好的那手」直接否掉；
+ *   我要是还排在他后面，就问「他最好也只能这样出，我压得住吗」（这一墩的张数是固定的，
+ *   不是他能挑的，所以不能拿「他最长的一条」比）；
+ * - **同门压顶**：我这一门能凑出**他那门最长一条**那么长的段，且顶张比他大；
+ * - **缺门杀牌**：他某一门有牌、我一张都没有，而我的主牌凑得出他那条的长度 —— 他迟早
+ *   得领那一门，我一杀就赢；
+ * - **空手**：一张牌都没有，往后的墩一墩也拿不到。
  *
- * 两票合起来因此是一次真核对：两个对手都说「拿不下一墩」，他就真的一墩不失。
  * 判不出就投同意（认输）—— 继续打也拿不到便宜，那是两条都是输的路里更省时的。
+ * 偏差方向是刻意的：**宁可误拒，不可误认** —— 误拒只丢一次快赢（牌局照常打完），
+ * 误认会把不该给的墩判给他、算错分。
  */
 export function claimVote(view: PublicView, you: PlayerSeat): boolean {
   const deal = view.deal;
@@ -299,22 +294,39 @@ export function claimVote(view: PublicView, you: PlayerSeat): boolean {
   const t = deal.trump;
   const mine = you.hand;
   const his = claim.revealed;
+  const plays = deal.trick?.plays ?? [];
 
-  for (const cls of ['T', ...SUITS] as const) {
-    const myClass = mine.filter((card) => cardClass(card, t) === cls);
-    const hisClass = his.filter((card) => cardClass(card, t) === cls);
-    if (myClass.length === 0 || hisClass.length === 0) continue;
-    if (topLevel(myClass, t) > topLevel(hisClass, t) && topChainLength(myClass, t) >= longestRun(hisClass, t)) {
+  // ① 他连当前这一墩都赢不了 → 这一票就是反对（引擎也会直接拒这种认领，这里兜旧状态）
+  if (!canWinTrickNow(his, plays, t)) return false;
+
+  // ② 我还在他后面：他最好也只能这样出，我压得住就赢这一墩
+  if (plays.length > 0 && !plays.some((play) => play.seat === you.seat)) {
+    const best = bestFollow(his, plays[0]!.cards, t);
+    if (best !== null && canWinTrickNow(mine, [...plays, { seat: claim.claimant, cards: best }], t)) {
       return false;
     }
   }
 
+  // ③ 已经出完牌：往后的墩一墩也拿不到
+  if (mine.length === 0) return true;
+
+  // ④ 往后他领出的每一门：按他那门最长的一条比（领出张数由他挑，所以按最长的那条要求自己）
+  for (const cls of ALL_CLASSES) {
+    const hisClass = his.filter((card) => cardClass(card, t) === cls);
+    if (hisClass.length === 0) continue;
+    const myClass = mine.filter((card) => cardClass(card, t) === cls);
+    if (myClass.length === 0) continue;
+    const need = longestRun(hisClass, t);
+    if (bestRunTop(myClass, need, t) > bestRunTop(hisClass, need, t)) return false;
+  }
+
+  // ⑤ 缺门杀牌：他这门有牌、我一张没有，我的主牌能凑出他那条的长度
   const myTrumps = mine.filter((card) => cardClass(card, t) === 'T');
   for (const cls of SUITS) {
     const hisClass = his.filter((card) => cardClass(card, t) === cls);
-    const myClass = mine.filter((card) => cardClass(card, t) === cls);
-    if (hisClass.length === 0 || myClass.length > 0) continue;
-    if (longestRun(myTrumps, t) >= longestRun(hisClass, t)) return false;
+    if (hisClass.length === 0) continue;
+    if (mine.some((card) => cardClass(card, t) === cls)) continue;
+    if (bestRunTop(myTrumps, longestRun(hisClass, t), t) >= 0) return false;
   }
 
   return true;
