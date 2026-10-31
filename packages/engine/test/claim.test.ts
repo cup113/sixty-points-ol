@@ -139,6 +139,39 @@ describe('认赢：不成立就当场拒', () => {
     assert.equal(rejectedCode(base, claim(0)), 'claim_refuted');
   });
 
+  it('对手只捏着更小的主牌：一轮一轮抽干就赢了 → 成立（实测里被误拒的那一手）', () => {
+    // 将牌 ♦、级牌 2：四张 2 全是主牌，而对手只剩 ♦A ♦K 两张小主牌 —— 他从 2 领起，
+    // 对手必须跟，每轮抽掉一张、且每轮都是他赢；抽完对手一张主牌也没有了。
+    const trump = { strain: 'D', rank: 2 } as const;
+    assert.equal(
+      claimUnbeatable([c('D', 2), c('H', 2), c('S', 2), c('C', 2)], [c('D', 14), c('D', 13), c('C', 14)], trump),
+      true
+    );
+    // 对手的主牌比他多一张 → 抽不干，仍要拒
+    assert.equal(claimUnbeatable([c('D', 2)], [c('D', 14), c('D', 13)], trump), false);
+    // 对手有一张比天还大的主牌（大王）→ 拒
+    assert.equal(claimUnbeatable([c('D', 2), c('H', 2)], [BJ], trump), false);
+    // 副牌那一条照旧：他这条顺子之外，对手还有更大的同门牌就拒
+    assert.equal(claimUnbeatable([c('D', 2), c('H', 2), c('S', 3)], [c('S', 4)], trump), false);
+  });
+
+  it('抽干主牌之后领副牌：同门最大几张 → 当场结算', () => {
+    const base = rigPlayDeal(
+      [
+        [c('D', 2), c('H', 2), c('S', 2), c('C', 2)],
+        [c('D', 14), c('D', 13), c('C', 14), c('C', 13)],
+        [c('H', 11), c('H', 8), c('H', 7), c('H', 6)]
+      ],
+      KITTY_25,
+      { trump: { strain: 'D', rank: 2 } }
+    );
+    const declared = apply(base, claim(0));
+    const summary = declared.deal!.summary!;
+    assert.equal(summary.claim!.cards, 12, '剩余全收：三家手上那 12 张');
+    // 四张 2 里只有两张是「不同层」（将牌自己那张 14，其余三张同为 13），所以末轮能领 2 张
+    assert.equal(summary.claim!.lastTrick, 2);
+  });
+
   it('他的门里有对手更大的牌 → claim_refuted', () => {
     const base = rigPlayDeal(
       [[c('S', 13), c('S', 12)], [c('S', 14), c('S', 2)], [c('S', 4), c('S', 5)]],

@@ -445,7 +445,9 @@ export function dispatch(prev: GameState, action: Action, rng: RNG): DispatchRes
       // 二、剩下的牌他真的一墩不失：每门都是剩下的最大几张，而且所有主牌都在他手上
       const others = SEATS.filter((seat) => seat !== action.seat).flatMap((seat) => deal.hands[seat]!);
       if (!claimUnbeatable(hand, others, deal.trump)) {
-        return fail(err('claim_refuted', '剩下的牌你还赢不完全：有人还压得住你，或者还有主牌能杀'));
+        return fail(
+          err('claim_refuted', '剩下的牌你还赢不完全：有人还压得住你，或者对手的主牌你还抽不干')
+        );
       }
       const lastTrick = claimLastTrickSize(hand, plays, deal.trump);
       if (lastTrick === null) return fail(err('claim_refuted', '手上没有能收尾的顺子'));

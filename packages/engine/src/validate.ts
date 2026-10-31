@@ -159,12 +159,19 @@ export function claimLastTrickSize(
 }
 
 /**
- * 认赢**成不成立**（ADR-0028）：他手上每一门都是「这门剩下的最大几张」，而且**所有剩下的主牌**
- * 都在他手上。
+ * 认赢**成不成立**（ADR-0028）：**他领出的每一墩都赢**，两条判据。
  *
- * 为什么这两条就是判据：他迟早要把每一张牌都领出去 —— 任何一张「不是这门最大」的牌，总会被
- * 对手一张更大的同门牌压掉；而对手只要还捏着一张主牌，他领副牌时就能杀一墩。反过来，两条都
- * 成立时他从顶往下领，谁也压不过、也没人杀得了（当前这一墩另由 `canWinTrickNow` 把守）。
+ * 一、**主牌抽得干**：把他和对手的主牌各自从大到小排好，第 i 大的他要比第 i 大的对手大
+ * （所以他也必须不比对手少）。于是他一张张领主牌，对手必须跟，每轮抽掉一张、并且每轮都是他赢；
+ * 抽完之后对手一张主牌也没有了。
+ *
+ * 二、**副牌都是这一门剩下的最大几张**：每一门他最低的那张，也要比对手这门里最高的那张大。
+ * 否则那张迟早要被他领出去（他会赢下每一墩，所以每一张牌最后都是他领），而对手一张更大的同门牌
+ * 就把它压掉了。
+ *
+ * 为什么抽干主牌要放在副牌之前：对手只要还剩一张主牌，他领副牌时就能杀 —— 主牌不抽干，副牌
+ * 再大也不安全。反过来两条都成立时，他从主牌往下领，谁也压不过、也没人杀得了（当前这一墩
+ * 另由 `canWinTrickNow` 把守）。
  *
  * 偏严是刻意的：它也会误拒一些真认赢（比如某一门正好是一条对手跟不出的顺子）——
  * 误拒只丢一次快赢（牌局照常打完），误判会把不该给的墩判给他、算错分。
@@ -174,20 +181,35 @@ export function claimUnbeatable(
   opponents: readonly Card[],
   t: TrumpModel
 ): boolean {
-  // 主牌一张都不能在对手手上：他杀不了我领出的主牌，却杀得了我领的副牌
-  if (opponents.some((card) => cardClass(card, t) === 'T')) return false;
+  const trumpsOf = (cards: readonly Card[]): number[] =>
+    cards
+      .filter((card) => cardClass(card, t) === 'T')
+      .map((card) => cardLevel(card, t))
+      .sort((a, b) => b - a);
+
+  // 一、主牌逐张压过：第 i 大的都要比对手第 i 大的大（顺带也要求他不比对手少）
+  const mine = trumpsOf(hand);
+  const theirs = trumpsOf(opponents);
+  if (theirs.length > mine.length) return false;
+  for (let i = 0; i < theirs.length; i += 1) {
+    if (mine[i]! <= theirs[i]!) return false;
+  }
+
+  // 二、副牌：我这一门最低的那张也要比对手这门最高的那张大
   const floor = new Map<CardClass, number>();
   for (const card of hand) {
     const cls = cardClass(card, t);
+    if (cls === 'T') continue; // 主牌由上面那条管
     const level = cardLevel(card, t);
     const current = floor.get(cls);
     if (current === undefined || level < current) floor.set(cls, level);
   }
   for (const card of opponents) {
     const cls = cardClass(card, t);
-    const mine = floor.get(cls);
-    if (mine === undefined) continue; // 我这一门没有牌：他压不着我
-    if (cardLevel(card, t) > mine) return false;
+    if (cls === 'T') continue; // 同上
+    const mineLevel = floor.get(cls);
+    if (mineLevel === undefined) continue; // 我这一门没有牌：他压不着我
+    if (cardLevel(card, t) > mineLevel) return false;
   }
   return true;
 }
