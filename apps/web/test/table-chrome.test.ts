@@ -2377,6 +2377,33 @@ function socialSourceCheck(s: SocialSources): string | null {
   if (/fetch\(|client\.|broadcast/.test(bubble)) return '气泡在写服务端：点掉一条消息不该让全桌跟着消失';
   if (!bubble.includes('title="点一下收起"')) return '气泡没有说明它可以点掉';
 
+  // 倒数定时器必须跟着 `visible` 停表：只读服务端那一帧的 remainingMs 时，气泡到点后
+  // 已经不在 DOM 里，interval 仍会每秒空转到下一帧（牌桌安静时下一帧可能很久才来）。
+  if (!bubble.includes('if (!visible) return;')) {
+    return '气泡的倒数定时器没有跟着可见性停表：到点后它会一直空转';
+  }
+  if (bubble.includes('$derived(announcement.remainingMs > 0)')) {
+    return '气泡的定时器又只看服务端那一帧的 remainingMs：到点不会停表';
+  }
+
+  // 气泡的包含块必须由座位卡**自己的定位类**给出：不能挂在 `backdrop-blur-sm` 上。
+  // 后者一旦被去掉（低端机上的性能取舍），`absolute` 的气泡就会跳到 `.felt` 边上。
+  if (!s.seatCard.includes("'relative flex h-10")) {
+    return '「我」底栏没有显式 relative：气泡的包含块会落到毡面上';
+  }
+  if (!s.seatCard.includes("'relative rounded-2xl")) {
+    return '对手卡没有显式 relative：气泡的包含块会落到毡面上';
+  }
+  if (s.seatCard.includes("klass.length > 0 ? klass : 'relative'")) {
+    return '座位卡的定位类又退回兜底：调用方传了 class 时 relative 不生效';
+  }
+  // 座位卡上的 backdrop-filter 同时是层叠上下文，气泡自己的 z-30 逃不出它：整行必须抬到
+  // 内容槽（叫牌面板）之上，否则气泡被面板盖住、看不见也点不到。
+  const seatsRow = /<div[^>]*data-felt-row="seats"[^>]*>/.exec(code(s.page))?.[0] ?? '';
+  if (!seatsRow.includes('z-10')) {
+    return '座位行没有抬到内容槽之上：叫牌面板会盖住桌边消息气泡';
+  }
+
   const control = code(s.control);
   if (/Date\.now\(|fetch\(|\$state|document\./.test(s.social)) return 'social.ts 不是纯函数（时间/网络/状态混进来了）';
   if (!control.includes('AWAY_MINUTES')) return '暂离档位没有从 social.ts 读（会出现第二份档位表）';
@@ -2421,7 +2448,7 @@ test('桌边消息：入口只在「我」底栏、气泡是本地可收起的�
   assert.equal(problem, null, problem ?? '');
 });
 
-test('反证：入口挪进页头 / 气泡回到流内 / 气泡写服务端 / 控制条写死表情 / 去掉限速，都必须被判出来', () => {
+test('反证：入口挪进页头 / 气泡回到流内 / 气泡写服务端 / 控制条写死表情 / 去掉限速 / 座位卡去掉 relative / 定时器不停表，都必须被判出来', () => {
   assert.match(
     socialSourceCheck({ ...SOCIAL_SOURCES, page: page.replace('<header', '<header><SocialControl {client} />') }) ?? '',
     /页头/,
@@ -2474,5 +2501,32 @@ test('反证：入口挪进页头 / 气泡回到流内 / 气泡写服务端 / �
     socialSourceCheck({ ...SOCIAL_SOURCES, control: socialControl.replace('<input', '<textarea') }) ?? '',
     /输入框/,
     '没有输入框的合规片段应报「没有输入框」，而不是被别的判据抢先'
+  );
+  assert.match(
+    socialSourceCheck({
+      ...SOCIAL_SOURCES,
+      seatCard: seatCard.replace("'relative rounded-2xl", "'rounded-2xl")
+    }) ?? '',
+    /包含块|relative/,
+    '座位卡去掉相对定位没有被判出来：气泡会跟着毛玻璃一起漂走'
+  );
+  assert.match(
+    socialSourceCheck({
+      ...SOCIAL_SOURCES,
+      bubble: announcementBubble.replace(
+        'if (!visible) return;',
+        'if (announcement.remainingMs <= 0) return;'
+      )
+    }) ?? '',
+    /停表|空转/,
+    '倒数定时器不跟可见性停表没有被判出来：到点后它会一直空转'
+  );
+  assert.match(
+    socialSourceCheck({
+      ...SOCIAL_SOURCES,
+      page: page.replace('class="relative z-10 flex items-start', 'class="flex items-start')
+    }) ?? '',
+    /盖住|内容槽/,
+    '座位行不抬到内容槽之上没有被判出来：气泡会被叫牌面板盖住'
   );
 });

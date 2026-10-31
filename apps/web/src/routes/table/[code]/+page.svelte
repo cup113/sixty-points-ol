@@ -412,7 +412,10 @@
       {/if}
     </div>
 
-    <div data-felt-row="seats" class="flex items-start justify-between gap-2">
+    <!-- `z-10`：座位卡带 `backdrop-filter`，本身就是一个层叠上下文；桌边消息气泡的 `z-30`
+         逃不出它。整行抬到内容槽（叫牌面板）之上，气泡才不会被面板盖住 —— 代价是气泡会压住
+         一点叫牌记录，这是 ADR-0028 接受的。 -->
+    <div data-felt-row="seats" class="relative z-10 flex items-start justify-between gap-2">
       <!-- 左＝下家、右＝上家；观战者没有「我」，两张卡都显示玩家名。
            这两张是**纯展示**：卡片上的「+ 机器人 / 请离」已撤到抽屉的「牌桌」页（ADR-0020）。 -->
       {#each [leftSeat, rightSeat] as seat, index (seat)}

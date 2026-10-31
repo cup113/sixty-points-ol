@@ -5,7 +5,8 @@
  * 1. Tailwind 的 position 工具类不可叠加 —— 产物里 .relative 排在 .absolute 之后，
  *    同一元素同时带两者时 relative 胜出，座位卡会塌回文档流、三张叠在毡面左上角。
  *    （ADR-0020 之后毡面是三行格、顶行两张对手卡走正常文档流，所以「座位卡定位类唯一为
- *    absolute」那条判据改成了「顶行的对手卡**自己不许定位**」+「三个行钩子齐备且有序」。）
+ *    absolute」那条判据改成了「顶行的对手卡只许 `relative`（桌边消息气泡的包含块，仍在
+ *    流内）」+「三个行钩子齐备且有序」。）
  * 2. 说明文案只允许活在「?」弹层里：页面上不得再出现已删除的常驻提示，
  *    并且每一阶段都必须有那个「?」入口（title 随阶段变化）。
  * 3. 邀请码必须是一个可点的按钮（点它复制邀请链接），且界面上一律用玩家名，
@@ -500,11 +501,18 @@ async function main(): Promise<void> {
     `毡面顶行应是两张对手卡，实际 ${topCards.length} 张：${topCards.map((c) => c.slice(0, 80)).join(' | ')}`
   );
   for (const value of topCards) {
-    const found = positionClasses(value);
+    // `relative` 是例外：它不脱离文档流，只给桌边消息的气泡一个包含块（ADR-0028）。
+    // 其余定位类（absolute / fixed / sticky）与 top-* 那套仍然是旧形状。
+    const found = positionClasses(value).filter((name) => name !== 'relative');
     assert(
       found.length === 0,
-      `顶行的对手卡又自己定位了（[${found.join(' + ')}]）：它们是三行格的第一行，走正常文档流` +
-        `（旧形状的三个 top-* 正是 #3 #5 那些重叠的来源）—— ${value.slice(0, 120)}`
+      `顶行的对手卡用了会脱离文档流的定位（[${found.join(' + ')}]）：它们是三行格的第一行，` +
+        `走正常文档流（旧形状的三个 top-* 正是 #3 #5 那些重叠的来源）—— ${value.slice(0, 120)}`
+    );
+    assert(
+      value.includes('relative'),
+      `顶行的对手卡没有 relative：桌边消息的气泡会以毡面为包含块（去掉毛玻璃就跳走）—— ` +
+        `${value.slice(0, 120)}`
     );
     assert(value.includes('w-36'), `顶行的对手卡没了固定宽度（缺 w-36）：${value.slice(0, 120)}`);
   }

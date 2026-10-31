@@ -17,8 +17,9 @@
    *   进而压住状态条与叫牌面板上沿的直接原因（见 ADR-0020）。机器人那两个动作现在只在
    *   抽屉的「牌桌」页（`TablePanel`），毡面因此只剩身份信息。
    *
-   * 调用方必须自己给定位类（`class`）：Tailwind 产物里 `.relative` 排在 `.absolute` 之后，
-   * 同一元素混用两者时 relative 胜出，座位卡会塌回文档流、全挤在毡面左上角。
+   * **定位类是组件自己的**：根节点恒带 `relative`，气泡 / 庄冠 / 「我」徽标都以它为包含块。
+   * 不能靠 `backdrop-blur-sm` 来建立包含块 —— 去掉毛玻璃（低端机上常见的性能取舍）之后，
+   * `absolute` 的气泡会跳到 `.felt` 边上、离开发言人。调用方的 `class` 只管宽度与边距。
    */
   let {
     name,
@@ -107,7 +108,7 @@
   <div
     data-seat-bar="true"
     class={[
-      'flex h-10 items-center gap-2 rounded-2xl px-2.5 ring-1 backdrop-blur-sm',
+      'relative flex h-10 items-center gap-2 rounded-2xl px-2.5 ring-1 backdrop-blur-sm',
       isMe ? 'bg-gold/10 ring-gold/40' : 'bg-black/30 ring-white/10',
       empty && 'opacity-60',
       klass
@@ -131,10 +132,10 @@
 {:else}
   <div
     class={[
-      'rounded-2xl p-2.5 ring-1 backdrop-blur-sm sm:p-3',
+      'relative rounded-2xl p-2.5 ring-1 backdrop-blur-sm sm:p-3',
       isMe ? 'bg-gold/10 ring-gold/40' : 'bg-black/30 ring-white/10',
       empty && 'opacity-60',
-      klass.length > 0 ? klass : 'relative'
+      klass
     ]}
   >
     {#if isDeclarer}

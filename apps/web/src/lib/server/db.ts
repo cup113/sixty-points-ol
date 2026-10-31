@@ -95,6 +95,15 @@ CREATE TABLE IF NOT EXISTS announcements (
   UNIQUE (table_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_announcements_table ON announcements (table_id);
+-- 限速台账（ADR-0028 §7）：只记「这个人在这一桌最近一次成功发消息的时刻」。
+-- 不复用 announcements.created_at：那张表一个座位只有一行，而牌局动作会删掉暂离、
+-- 离座会删掉整条消息 —— 限速窗口会跟着消息的寿命一起被重置。窗口属于**人**，不属于消息。
+CREATE TABLE IF NOT EXISTS announcement_throttle (
+  table_id INTEGER NOT NULL REFERENCES tables(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  posted_at TEXT NOT NULL,
+  PRIMARY KEY (table_id, user_id)
+);
 `);
 
 // 机器人座位（ADR-0015）：老库补列。上面的 CREATE TABLE 只对新建库生效，

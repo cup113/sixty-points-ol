@@ -516,10 +516,12 @@ export function postAnnouncement(code: string, userId: number, post: SocialPost)
   }
 
   const at = Date.now();
+  // 限速读的是**独立的台账**，不是消息行：暂离被一次牌局动作删掉、或离座后再入座，
+  // 都不该把「2 秒一条」一起清零 —— 窗口属于人，不属于那条消息（ADR-0028 §7）。
   const last = db
-    .prepare('SELECT created_at FROM announcements WHERE table_id = ? AND user_id = ?')
-    .get(table.id, userId) as { created_at: string } | undefined;
-  if (last !== undefined && at - Date.parse(last.created_at) < ANNOUNCEMENT_RATE_LIMIT_MS) {
+    .prepare('SELECT posted_at FROM announcement_throttle WHERE table_id = ? AND user_id = ?')
+    .get(table.id, userId) as { posted_at: string } | undefined;
+  if (last !== undefined && at - Date.parse(last.posted_at) < ANNOUNCEMENT_RATE_LIMIT_MS) {
     return { ok: false, status: 429, message: '发得太快了，歇一下' };
   }
 
@@ -545,17 +547,23 @@ export function postAnnouncement(code: string, userId: number, post: SocialPost)
 
   // REPLACE 撞 (table_id, user_id) 的唯一键：旧行删掉、新行拿到一个新 id ——
   // 客户端靠这个 id 区分「同一条」与「新的一条」（点掉过的旧气泡不该压住新消息）。
-  db.prepare(
-    `REPLACE INTO announcements (table_id, user_id, kind, body, created_at, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(
-    table.id,
-    userId,
-    kind,
-    body,
-    new Date(at).toISOString(),
-    new Date(at + ttlMs).toISOString()
-  );
+  // 限速台账与消息同事务写：消息落库成功才算「发过一次」，失败不该吃掉下一条的窗口。
+  transaction(() => {
+    db.prepare(
+      `REPLACE INTO announcements (table_id, user_id, kind, body, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(
+      table.id,
+      userId,
+      kind,
+      body,
+      new Date(at).toISOString(),
+      new Date(at + ttlMs).toISOString()
+    );
+    db.prepare(
+      'REPLACE INTO announcement_throttle (table_id, user_id, posted_at) VALUES (?, ?, ?)'
+    ).run(table.id, userId, new Date(at).toISOString());
+  });
   broadcast(table.id);
   return { ok: true };
 }

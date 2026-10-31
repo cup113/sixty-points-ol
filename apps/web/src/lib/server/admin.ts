@@ -159,6 +159,7 @@ export function forceLeaveSeat(code: string, userId: number): { ok: boolean; mes
 
 function deleteTableRows(tableId: number): void {
   db.prepare('DELETE FROM announcements WHERE table_id = ?').run(tableId);
+  db.prepare('DELETE FROM announcement_throttle WHERE table_id = ?').run(tableId);
   db.prepare('DELETE FROM replays WHERE table_id = ?').run(tableId);
   db.prepare('DELETE FROM events WHERE table_id = ?').run(tableId);
   db.prepare('DELETE FROM games WHERE table_id = ?').run(tableId);
@@ -239,6 +240,8 @@ export function deleteUser(userId: number, actorId: number): DeleteUserResult {
     db.prepare('DELETE FROM spectators WHERE user_id = ?').run(userId);
     // 他的桌边消息：座位行删了它就没有落点，留着还会在再入座时复活
     db.prepare('DELETE FROM announcements WHERE user_id = ?').run(userId);
+    // 限速台账跟着人走：user_id 已经没有对应用户，这条窗口不该留成孤儿行
+    db.prepare('DELETE FROM announcement_throttle WHERE user_id = ?').run(userId);
     db.prepare('DELETE FROM users WHERE id = ?').run(userId);
   });
 

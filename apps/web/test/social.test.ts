@@ -41,8 +41,10 @@ const {
   getTableByCode,
   leaveSeat,
   postAnnouncement,
+  takeSeat,
   tableView
 } = await import('../src/lib/server/tables.ts');
+const { deleteTableById, deleteUser } = await import('../src/lib/server/admin.ts');
 
 // ---------------------------------------------------------------------------
 // 纯函数
@@ -184,12 +186,16 @@ test('新消息换新 id：点掉过的旧气泡不会压住下一条', () => {
   const first = seatOf(code, ids[0]!)?.announcement?.id;
   assert.equal(typeof first, 'number');
 
-  // 把 created_at 往前挪，绕开 2 秒限速（这里测的是 id 换代，不是限速）
+  // 把消息与限速台账都往前挪，绕开 2 秒限速（这里测的是 id 换代，不是限速）
+  const past = new Date(Date.now() - 3_000).toISOString();
   db.prepare('UPDATE announcements SET created_at = ? WHERE table_id = ? AND user_id = ?').run(
-    new Date(Date.now() - 3_000).toISOString(),
+    past,
     tableId,
     ids[0]!
   );
+  db.prepare(
+    'UPDATE announcement_throttle SET posted_at = ? WHERE table_id = ? AND user_id = ?'
+  ).run(past, tableId, ids[0]!);
   assert.deepEqual(postAnnouncement(code, ids[0]!, { kind: 'text', text: '第二句' }), { ok: true });
   const second = seatOf(code, ids[0]!)?.announcement?.id;
   assert.equal(typeof second, 'number');
@@ -206,6 +212,75 @@ test('限速：同一个人 2 秒内第二条被 429 拒绝，别人不受影响
 
   // 另一个人照常能发
   assert.deepEqual(postAnnouncement(code, ids[1]!, { kind: 'emote', key: 'clap' }), { ok: true });
+});
+
+test('限速的窗口属于人：牌局动作删掉暂离之后，2 秒内仍然限速', () => {
+  const { code, ids } = fixture();
+  const dealt = applyTableAction(code, ids[0]!, { type: 'deal' });
+  assert.equal(dealt.ok, true);
+  const state = getGameState(getTableByCode(code)!.id);
+  const deal = state?.deal ?? null;
+  if (deal === null) throw new Error('发牌之后没有 deal');
+  const actor = ids[auctionTurn(deal)]!;
+
+  assert.deepEqual(postAnnouncement(code, actor, { kind: 'away', minutes: 5 }), { ok: true });
+  assert.equal(applyTableAction(code, actor, { type: 'bid', seat: 0, call: 'pass' }).ok, true);
+  assert.equal(seatOf(code, actor)?.announcement, null, '出手之后暂离该消失');
+
+  const blocked = postAnnouncement(code, actor, { kind: 'emote', key: 'nice' });
+  assert.equal(blocked.ok, false, '删掉消息不该把 2 秒限速一起清零');
+  assert.equal(blocked.ok ? undefined : blocked.status, 429);
+});
+
+test('限速的窗口跨过离座再入座：座位换回来也不重置', () => {
+  const { code, ids } = fixture();
+  assert.deepEqual(postAnnouncement(code, ids[0]!, { kind: 'emote', key: 'nice' }), { ok: true });
+  assert.equal(leaveSeat(code, ids[0]!).ok, true);
+  const taken = takeSeat(code, ids[0]!);
+  assert.ok('seat' in taken, '再入座失败');
+
+  const blocked = postAnnouncement(code, ids[0]!, { kind: 'emote', key: 'party' });
+  assert.equal(blocked.ok, false, '离座再入座不该把 2 秒限速一起带走');
+  assert.equal(blocked.ok ? undefined : blocked.status, 429);
+});
+
+test('限速台账过期后放行：窗口之内才拒，过了窗口就照常发', () => {
+  const { code, tableId, ids } = fixture();
+  assert.deepEqual(postAnnouncement(code, ids[0]!, { kind: 'emote', key: 'nice' }), { ok: true });
+  db.prepare('UPDATE announcement_throttle SET posted_at = ? WHERE table_id = ? AND user_id = ?').run(
+    new Date(Date.now() - 3_000).toISOString(),
+    tableId,
+    ids[0]!
+  );
+  assert.deepEqual(postAnnouncement(code, ids[0]!, { kind: 'emote', key: 'party' }), { ok: true });
+});
+
+test('删桌与删人都会带走限速台账（不留孤儿行）', () => {
+  const first = fixture();
+  assert.deepEqual(postAnnouncement(first.code, first.ids[0]!, { kind: 'emote', key: 'nice' }), {
+    ok: true
+  });
+  assert.equal(deleteTableById(first.tableId), true);
+  assert.equal(
+    (db
+      .prepare('SELECT COUNT(*) AS n FROM announcement_throttle WHERE table_id = ?')
+      .get(first.tableId) as { n: number }).n,
+    0,
+    '删桌之后还留着这一桌的限速行'
+  );
+
+  const second = fixture();
+  assert.deepEqual(postAnnouncement(second.code, second.ids[1]!, { kind: 'emote', key: 'clap' }), {
+    ok: true
+  });
+  assert.equal(deleteUser(second.ids[1]!, second.ids[0]!).ok, true);
+  assert.equal(
+    (db
+      .prepare('SELECT COUNT(*) AS n FROM announcement_throttle WHERE user_id = ?')
+      .get(second.ids[1]!) as { n: number }).n,
+    0,
+    '删人之后还留着这个人的限速行'
+  );
 });
 
 test('观战者：坐满的桌再进来的人只能看，不能发（403）', () => {

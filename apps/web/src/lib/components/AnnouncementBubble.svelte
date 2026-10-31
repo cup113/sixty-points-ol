@@ -31,13 +31,6 @@
     if (announcement !== null) anchorAt = Date.now();
   });
 
-  const live = $derived(announcement.remainingMs > 0);
-  $effect(() => {
-    if (!live) return;
-    const id = setInterval(() => (tick += 1), 1000);
-    return () => clearInterval(id);
-  });
-
   const remaining = $derived.by(() => {
     void tick;
     if (anchorAt === 0) return announcement.remainingMs;
@@ -45,6 +38,15 @@
   });
 
   const visible = $derived(announcement.id !== dismissedId && remaining > 0);
+
+  // 定时器跟着**可见性**走，而不是只跟服务端那一帧的 remainingMs：后者在一帧之内是常量，
+  // 到点由本地倒数把它翻成 false。只读它的话，倒数走完气泡已经不在 DOM 里，interval
+  // 却会一直空转到下一帧 —— 而牌桌安静时下一帧可能很久才来。点掉气泡同样停表。
+  $effect(() => {
+    if (!visible) return;
+    const id = setInterval(() => (tick += 1), 1000);
+    return () => clearInterval(id);
+  });
   const awayText = $derived(announcement.kind === 'away' ? awayRemainingText(remaining) : null);
   const glyph = $derived(announcement.kind === 'emote' ? emoteGlyph(announcement.body) : '');
   const content = $derived(

@@ -299,6 +299,16 @@ async function viewOf(code: string, credential: string): Promise<SeatView> {
   return (await response.json()) as SeatView;
 }
 
+/** 发一条桌边消息（ADR-0028）：截图场景用它们把三颗气泡摆上屏 */
+async function postSocial(code: string, credential: string, body: unknown): Promise<void> {
+  const response = await apiFetch(`${base}/api/tables/${code}/social`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}` },
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) throw new Error(`发桌边消息失败（${response.status}）：${await response.text()}`);
+}
+
 /* ---------- 截图 ---------- */
 
 interface Shot {
@@ -312,6 +322,12 @@ interface Shot {
   readonly captureIndex: 0 | 1 | 2;
   /** 点开之后才有的形态（如展开「▶ 跳叫」） */
   readonly clicks?: readonly string[];
+  /**
+   * 给三个座位各发一条桌边消息（短句 / 长句 / 暂离）再拍：三颗气泡不可能落空 ——
+   * 不管哪一位被拍成「我」，两张对手卡与底栏都各有一颗。
+   * 这一屏量的是**气泡相对自己那张卡**的位置，以及去掉 `backdrop-filter` 之后它还挂不挂得住。
+   */
+  readonly social?: boolean;
   /**
    * 把局面推到「一墩已经打了几张」再拍（见 driveTrick，用来量出牌点与托盘）。
    *
@@ -511,6 +527,15 @@ const SHOTS: readonly Shot[] = [
     pacing: 'skip',
     mode: 'viewport',
     size: MOBILE_MIN
+  },
+  {
+    file: '17-social-bubbles',
+    label:
+      '桌边消息：两张对手卡与「我」底栏各一颗气泡（短句 / 长句 / 暂离）—— 气泡挂在自己的座位上，去掉毛玻璃也挂得住',
+    ...sceneFor(1, []),
+    social: true,
+    mode: 'viewport',
+    size: MOBILE
   }
 ];
 
@@ -661,6 +686,24 @@ interface MeasuredSpot {
 }
 
 /**
+ * 一颗桌边消息气泡（ADR-0028）：几何 + 它**实际挂在哪个节点上**。
+ *
+ * `parentPosition` 与 `offsetParentIsParent` 是这条几何判据的核心：气泡是 `absolute`，
+ * 它的包含块必须是自己的座位卡（或「我」底栏）。只量矩形差不出这一点 —— 靠
+ * `backdrop-filter` 建立包含块时，网格位置照样对，去掉毛玻璃才会露馅。
+ */
+interface AnnouncementBox {
+  readonly kind: string;
+  readonly rect: Rect;
+  readonly parent: Rect | null;
+  readonly parentPosition: string;
+  readonly onBar: boolean;
+  readonly offsetParentIsParent: boolean;
+  /** 气泡中心点上的最上层元素是不是它自己（被内容槽的面板盖住时为 false） */
+  readonly hitIsSelf: boolean;
+}
+
+/**
  * 信息须里的一格（表头 `th` 或值格 `td`）：
  *
  * - `needed`：把这一格的**内容原样**（`innerHTML`，带着字号 / 边距 / 按钮）塞进一个
@@ -728,6 +771,8 @@ interface Measurement {
   readonly railHeads: readonly RailCellBox[];
   /** 「我」那条底栏（`SeatCard` 的 `bar` 形态）：限宽、居中、与信息须同宽都在它身上量 */
   readonly seatBar: Rect | null;
+  /** 这一屏上的桌边消息气泡（没有消息时为空数组） */
+  readonly announcements: readonly AnnouncementBox[];
   /**
    * 闹钟（`data-clock-face`）那枚圆里的读数：⑮ 用它量「三位数放不放得下」。
    *
@@ -807,6 +852,22 @@ const MEASURE = `(() => {
     railCells: [...document.querySelectorAll('[data-rail-cell]')].map(cellInfo),
     railHeads: [...document.querySelectorAll('[data-info-rail] th')].map(cellInfo),
     seatBar: one('[data-seat-bar]'),
+    announcements: [...document.querySelectorAll('[data-announcement]')].map((el) => {
+      const parent = el.parentElement;
+      return {
+        kind: el.getAttribute('data-announcement') ?? '',
+        rect: rect(el),
+        parent: parent === null ? null : rect(parent),
+        parentPosition: parent === null ? 'static' : getComputedStyle(parent).position,
+        onBar: parent !== null && parent.hasAttribute('data-seat-bar'),
+        offsetParentIsParent: el.offsetParent === parent,
+        hitIsSelf: (() => {
+          const box = el.getBoundingClientRect();
+          const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+          return hit !== null && el.contains(hit);
+        })()
+      };
+    }),
     clock: (() => {
       const face = document.querySelector('[data-clock-face="true"]');
       if (face === null) return null;
@@ -847,6 +908,62 @@ function overlapArea(a: Rect, b: Rect): number {
 
 function boxOf(r: Rect): string {
   return `x ${r.x.toFixed(1)}–${r.right.toFixed(1)}, y ${r.y.toFixed(1)}–${r.bottom.toFixed(1)}`;
+}
+
+/**
+ * 桌边消息气泡必须挂在**自己的**座位卡 / 底栏上（ADR-0028）：包含块是那张卡，几何是
+ * 卡左 +8 / 卡下 +4；「我」底栏是左 +28 / 栏上沿再往上 6。
+ *
+ * 为什么不能只断言「气泡存在」：座位卡以前没有定位类，真正提供包含块的是
+ * `backdrop-blur-sm`（`backdrop-filter` 会为绝对定位后代建包含块）。只量正常状态时
+ * 一切都对，把毛玻璃去掉（低端机的常见取舍）气泡才跳到 `.felt` 边上 —— 所以调用方
+ * 还要在**去掉 backdrop-filter 之后**再量一次。
+ */
+function assertAnchored(items: readonly AnnouncementBox[], when: string): string[] {
+  const problems: string[] = [];
+  for (const item of items) {
+    if (item.parent === null) {
+      problems.push(`${when}：有一颗气泡没有父节点（找不到它该挂的座位卡）`);
+      continue;
+    }
+    if (item.parentPosition === 'static') {
+      problems.push(
+        `${when}：气泡的座位卡是 static —— 包含块不是那张卡，去掉毛玻璃后气泡会跳到毡面边上`
+      );
+    }
+    if (!item.offsetParentIsParent) {
+      problems.push(`${when}：气泡的 offsetParent 不是它自己的座位卡（包含块跑到别处去了）`);
+    }
+    if (!item.hitIsSelf) {
+      problems.push(
+        `${when}：气泡中心点被别的层盖住了（看不见也点不到）—— 座位行要抬到内容槽之上`
+      );
+    }
+    if (item.onBar) {
+      const left = item.rect.x - item.parent.x;
+      const gap = item.parent.y - item.rect.bottom;
+      if (Math.abs(left - 28) > 1 || Math.abs(gap - 6) > 1) {
+        problems.push(
+          `${when}：「我」底栏的气泡没有贴在栏上（左差 ${left.toFixed(1)}px、栏上沿到气泡下沿 ` +
+            `${gap.toFixed(1)}px；应为 28 / 6）`
+        );
+      }
+    } else {
+      const left = item.rect.x - item.parent.x;
+      const right = item.parent.right - item.rect.right;
+      const gap = item.rect.y - item.parent.bottom;
+      if (Math.abs(left - 8) > 1 && Math.abs(right - 8) > 1) {
+        problems.push(
+          `${when}：座位卡的气泡没有靠在自己那张卡的两侧（左差 ${left.toFixed(1)}px、` +
+            `右差 ${right.toFixed(1)}px；应有一侧是 8）`
+        );
+      }
+      if (Math.abs(gap - 4) > 1) {
+        problems.push(`${when}：座位卡的气泡没有贴在卡下沿（差 ${gap.toFixed(1)}px；应为 4）`);
+      }
+    }
+  }
+  return problems;
 }
 
 /** 一个盒子是否被另一个包住（留 0.5px 的亚像素余量） */
@@ -1665,12 +1782,52 @@ async function shoot(
       ...(clip === undefined ? {} : { clip })
     })) as { data: string };
     writeFileSync(outPath, Buffer.from(capture.data, 'base64'));
-    console.log(`    ↳ ${layout.summary}`);
-    if (layout.problems.length > 0) {
-      console.log(`    ✗ ${layout.problems.length} 条版面判据不过：`);
-      for (const problem of layout.problems) console.log(`      - ${problem}`);
+
+    // 桌边消息：气泡的包含块必须是自己的座位卡。先量正常状态，再**去掉毛玻璃**量一次 ——
+    // 后者才是这条判据真正要守的坏法（以前是 backdrop-filter 在兜着包含块）。
+    const anchorProblems: string[] = [];
+    if (shot.social === true && measurement.announcements.length !== 3) {
+      anchorProblems.push(
+        `桌边消息场景应当有三颗气泡，实际 ${measurement.announcements.length} 颗` +
+          '（短句可能在量之前过期，或有一条没渲染出来）'
+      );
     }
-    return { path: outPath, summary: layout.summary, problems: layout.problems };
+    if (measurement.announcements.length > 0) {
+      anchorProblems.push(...assertAnchored(measurement.announcements, '毛玻璃在时'));
+      const relaxed = await evaluate<Measurement>(
+        cdp,
+        `(() => {
+           for (const el of document.querySelectorAll('[data-felt-row="seats"] > *, [data-seat-bar]')) {
+             el.style.backdropFilter = 'none';
+           }
+           return ${MEASURE};
+         })()`
+      );
+      if (relaxed === null) {
+        anchorProblems.push('去掉毛玻璃之后取不到气泡几何（页面重排失败）');
+      } else {
+        anchorProblems.push(...assertAnchored(relaxed.announcements, '去掉毛玻璃后'));
+        if (relaxed.announcements.length !== measurement.announcements.length) {
+          anchorProblems.push(
+            `去掉毛玻璃之后气泡从 ${measurement.announcements.length} 颗变成 ` +
+              `${relaxed.announcements.length} 颗`
+          );
+        }
+      }
+    }
+    const summary =
+      layout.summary +
+      (measurement.announcements.length > 0
+        ? `；气泡 ${measurement.announcements.length} 颗（去掉毛玻璃复测 ${anchorProblems.length === 0 ? '通过' : '有问题'}）`
+        : '');
+    const problems = [...layout.problems, ...anchorProblems];
+
+    console.log(`    ↳ ${summary}`);
+    if (problems.length > 0) {
+      console.log(`    ✗ ${problems.length} 条版面判据不过：`);
+      for (const problem of problems) console.log(`      - ${problem}`);
+    }
+    return { path: outPath, summary, problems };
   } finally {
     cdp.close();
     await fetch(`http://127.0.0.1:${port}/json/close/${target.id}`).catch(() => undefined);
@@ -1924,6 +2081,20 @@ async function runShot(
   } else if (shot.trick !== undefined) {
     await driveTrick(table.code, seats, table.declarerSeat, shot.trick === 'two-played' ? 2 : 3);
   }
+
+  // 三条消息给三个座位各一条：不管谁被拍成「我」，两张对手卡与底栏都各有一颗气泡。
+  // 短句 10 秒寿命，发完立刻进页面，量完仍在窗口里。
+  if (shot.social === true) {
+    const posts: readonly unknown[] = [
+      { kind: 'text', text: '等一下，我马上回来' },
+      { kind: 'text', text: '这句长一点，专门量气泡在窄屏上的宽度' },
+      { kind: 'away', minutes: 15 }
+    ];
+    for (const [index, person] of seats.entries()) {
+      await postSocial(table.code, person.credential, posts[index]!);
+    }
+  }
+
   const actor = table.order[shot.captureIndex]!;
   return await shoot(shot, port, { code: table.code, credential: actor.credential });
 }
