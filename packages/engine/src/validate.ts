@@ -2,12 +2,12 @@ import { containsCard, removeCards, type Card } from './cards.ts';
 import {
   bestProfile,
   cardClass,
+  cardLevel,
   classOfSet,
   compareProfiles,
   isRun,
   longestRun,
   segments,
-  topRunCards,
   type CardClass,
   type TrumpModel
 } from './order.ts';
@@ -130,51 +130,64 @@ export function checkPlay(
 // 认赢（ADR-0028）：这一墩他这么快能不能赢、末轮能报多大
 // ---------------------------------------------------------------------------
 
-/** 认赢能报的末轮张数区间（底牌倍数），闭区间 */
-export interface ClaimLastTrick {
-  readonly min: number;
-  readonly max: number;
-}
-
 /**
- * 轮到**你**出牌时，末轮张数 x 的合法区间；null 表示这手牌没有可报的值。
+ * 认赢报的**末轮张数**（底牌倍数 x）：能拿来收尾的最大张数；领不出为 null。
  *
  * x 是「收尾那一墩我领出几张」，所以它同时被三件事钳住：
  * - 手上真有一条 x 张的顺子（领出多张必须是顺子）；
  * - 这一墩我还得先打掉 `size` 张 —— 之后的墩才是我的「剩下」；
  * - 三家等长（`hand.length === size`）时这一墩**就是末墩**，x 只能等于这一墩的张数。
  *
- * 这是必要条件不是充分条件：那条顺子留不留得到末轮，只有牌手自己判断（对手的票也不核它）。
- * 屏幕与工具面都读这一处，不各算一份。
+ * 不让人挑：认领一旦成立，把最长那条顺子留到末轮总是摆得出来，而 x 越大底牌倍数越大 ——
+ * 取上界恒不劣，于是这个数只有一个正确答案，由引擎算。
  */
-export function claimLastTrickRange(
+export function claimLastTrickSize(
   hand: readonly Card[],
   plays: readonly TrickPlay[],
   t: TrumpModel
-): ClaimLastTrick | null {
+): number | null {
   const run = longestRun(hand, t);
   if (run < 1) return null; // 空手：一张也领不出
-  if (plays.length === 0) return { min: 1, max: run }; // 领出：这一墩的大小由我自己挑
+  if (plays.length === 0) return run; // 领出：这一墩的大小由我自己挑
 
   const size = plays[0]!.cards.length;
   if (hand.length < size) return null; // 出牌数超过手牌数：不是合法局面
-  if (hand.length === size) return { min: size, max: size };
+  if (hand.length === size) return size; // 三家等长：这一墩就是末墩
 
   const max = Math.min(hand.length - size, run);
-  return max < 1 ? null : { min: 1, max };
+  return max < 1 ? null : max;
 }
 
 /**
- * 他在这一墩「最好也只能这样出」的那一手 —— 给**排在他后面**的对手问一句
- * 「他最好的一手我压得住吗」。本门够就跟本门最强的 n 连，本门空着就找 n 连主（杀牌），
- * 其余情况他这一墩赢不了（null）。
+ * 认赢**成不成立**（ADR-0028）：他手上每一门都是「这门剩下的最大几张」，而且**所有剩下的主牌**
+ * 都在他手上。
+ *
+ * 为什么这两条就是判据：他迟早要把每一张牌都领出去 —— 任何一张「不是这门最大」的牌，总会被
+ * 对手一张更大的同门牌压掉；而对手只要还捏着一张主牌，他领副牌时就能杀一墩。反过来，两条都
+ * 成立时他从顶往下领，谁也压不过、也没人杀得了（当前这一墩另由 `canWinTrickNow` 把守）。
+ *
+ * 偏严是刻意的：它也会误拒一些真认赢（比如某一门正好是一条对手跟不出的顺子）——
+ * 误拒只丢一次快赢（牌局照常打完），误判会把不该给的墩判给他、算错分。
  */
-export function bestFollow(hand: readonly Card[], lead: readonly Card[], t: TrumpModel): Card[] | null {
-  const size = lead.length;
-  const cls = classOfSet(lead, t);
-  if (cls === null) return null;
-  const holding = hand.filter((card) => cardClass(card, t) === cls);
-  if (holding.length >= size) return topRunCards(holding, size, t);
-  if (holding.length > 0 || cls === 'T') return null;
-  return topRunCards(hand.filter((card) => cardClass(card, t) === 'T'), size, t);
+export function claimUnbeatable(
+  hand: readonly Card[],
+  opponents: readonly Card[],
+  t: TrumpModel
+): boolean {
+  // 主牌一张都不能在对手手上：他杀不了我领出的主牌，却杀得了我领的副牌
+  if (opponents.some((card) => cardClass(card, t) === 'T')) return false;
+  const floor = new Map<CardClass, number>();
+  for (const card of hand) {
+    const cls = cardClass(card, t);
+    const level = cardLevel(card, t);
+    const current = floor.get(cls);
+    if (current === undefined || level < current) floor.set(cls, level);
+  }
+  for (const card of opponents) {
+    const cls = cardClass(card, t);
+    const mine = floor.get(cls);
+    if (mine === undefined) continue; // 我这一门没有牌：他压不着我
+    if (cardLevel(card, t) > mine) return false;
+  }
+  return true;
 }

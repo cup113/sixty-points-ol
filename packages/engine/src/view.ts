@@ -21,19 +21,15 @@ import type { TrumpModel } from './order.ts';
 import { sortHand } from './order.ts';
 
 /**
- * 认赢的公共面（ADR-0028）：谁认的、宣称的末轮张数、**亮牌**、两票与结果。
+ * 认赢的公共面（ADR-0028）：谁认的、引擎算出的末轮张数、**亮牌**。
  *
  * `revealed` 在这里出现是本项目「公共视图不含任何手牌」的唯一例外 —— 它被认赢者
- * 自己亮出来了，观战者也看得到，且被拒也不收回（收不回）。`expiresAt` 刻意不在这里：
- * 时间戳不出服务端，负载只带剩余毫秒（`TableView.claimMsLeft`）。
+ * 自己亮出来了，观战者也看得到，而且一直公开到换副（收不回来）。
  */
 export interface ClaimView {
   readonly claimant: Seat;
   readonly lastTrick: number;
   readonly revealed: readonly Card[];
-  readonly answers: readonly (boolean | null)[];
-  readonly status: 'pending' | 'rejected' | 'settled';
-  readonly rejectedBy: Seat | null;
 }
 
 /**
@@ -176,10 +172,7 @@ function publicDealOf(state: GameState): PublicDealView | null {
         : {
             claimant: deal.claim.claimant,
             lastTrick: deal.claim.lastTrick,
-            revealed: deal.claim.revealed,
-            answers: [...deal.claim.answers],
-            status: deal.claim.status,
-            rejectedBy: deal.claim.rejectedBy
+            revealed: deal.claim.revealed
           }
   };
 }

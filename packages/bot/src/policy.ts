@@ -21,11 +21,7 @@
  * 搜索 / 学习牌谱仍然不做。
  */
 import {
-  ALL_CLASSES,
-  bestFollow,
   bestProfile,
-  bestRunTop,
-  canWinTrickNow,
   cardClass,
   cardLevel,
   cardPoints,
@@ -35,7 +31,6 @@ import {
   followMode,
   isJoker,
   leadInfo,
-  longestRun,
   MIN_BID,
   sortHand,
   STRAIN_RANK,
@@ -59,9 +54,7 @@ import { extractChains, classCards, Sight } from './sight.ts';
 export type BotMove =
   | { readonly type: 'bid'; readonly call: BidCall }
   | { readonly type: 'bury'; readonly cards: readonly Card[] }
-  | { readonly type: 'play'; readonly cards: readonly Card[] }
-  /** 对认赢表态（ADR-0028）：机器人从不发起认赢，但必须会投这一票 */
-  | { readonly type: 'claimAnswer'; readonly agree: boolean };
+  | { readonly type: 'play'; readonly cards: readonly Card[] };
 
 /**
  * 机器人参数（ADR-0017）：策略的**唯一**外部输入。
@@ -270,69 +263,6 @@ export function partnerSeatOf(seat: Seat, deal: { readonly contract: Contract | 
 }
 
 /**
- * 认赢的投票（ADR-0028）：「我还能不能从他手里拿下一墩？」
- *
- * 只用两样东西：**我自己的手牌** + **他亮出来的牌**（不偷看第三家、不搜索）。四条判据：
- * - **当前这一墩**：认领连这一墩一起收，所以「他压不过现在桌上最好的那手」直接否掉；
- *   我要是还排在他后面，就问「他最好也只能这样出，我压得住吗」（这一墩的张数是固定的，
- *   不是他能挑的，所以不能拿「他最长的一条」比）；
- * - **同门压顶**：我这一门能凑出**他那门最长一条**那么长的段，且顶张比他大；
- * - **缺门杀牌**：他某一门有牌、我一张都没有，而我的主牌凑得出他那条的长度 —— 他迟早
- *   得领那一门，我一杀就赢；
- * - **空手**：一张牌都没有，往后的墩一墩也拿不到。
- *
- * 判不出就投同意（认输）—— 继续打也拿不到便宜，那是两条都是输的路里更省时的。
- * 偏差方向是刻意的：**宁可误拒，不可误认** —— 误拒只丢一次快赢（牌局照常打完），
- * 误认会把不该给的墩判给他、算错分。
- */
-export function claimVote(view: PublicView, you: PlayerSeat): boolean {
-  const deal = view.deal;
-  if (deal === null || deal.trump === null) return true;
-  const claim = deal.claim;
-  if (claim === null || claim.status !== 'pending') return true;
-
-  const t = deal.trump;
-  const mine = you.hand;
-  const his = claim.revealed;
-  const plays = deal.trick?.plays ?? [];
-
-  // ① 他连当前这一墩都赢不了 → 这一票就是反对（引擎也会直接拒这种认领，这里兜旧状态）
-  if (!canWinTrickNow(his, plays, t)) return false;
-
-  // ② 我还在他后面：他最好也只能这样出，我压得住就赢这一墩
-  if (plays.length > 0 && !plays.some((play) => play.seat === you.seat)) {
-    const best = bestFollow(his, plays[0]!.cards, t);
-    if (best !== null && canWinTrickNow(mine, [...plays, { seat: claim.claimant, cards: best }], t)) {
-      return false;
-    }
-  }
-
-  // ③ 已经出完牌：往后的墩一墩也拿不到
-  if (mine.length === 0) return true;
-
-  // ④ 往后他领出的每一门：按他那门最长的一条比（领出张数由他挑，所以按最长的那条要求自己）
-  for (const cls of ALL_CLASSES) {
-    const hisClass = his.filter((card) => cardClass(card, t) === cls);
-    if (hisClass.length === 0) continue;
-    const myClass = mine.filter((card) => cardClass(card, t) === cls);
-    if (myClass.length === 0) continue;
-    const need = longestRun(hisClass, t);
-    if (bestRunTop(myClass, need, t) > bestRunTop(hisClass, need, t)) return false;
-  }
-
-  // ⑤ 缺门杀牌：他这门有牌、我一张没有，我的主牌能凑出他那条的长度
-  const myTrumps = mine.filter((card) => cardClass(card, t) === 'T');
-  for (const cls of SUITS) {
-    const hisClass = his.filter((card) => cardClass(card, t) === cls);
-    if (hisClass.length === 0) continue;
-    if (mine.some((card) => cardClass(card, t) === cls)) continue;
-    if (bestRunTop(myTrumps, longestRun(hisClass, t), t) >= 0) return false;
-  }
-
-  return true;
-}
-
-/**
  * 当前这一步该做什么：轮不到机器人（或没牌局）返回 null。
  * 驱动器在**每次状态变更后**调它；机器人从不发起 `deal` / `newGame` ——
  * 桌面级动作留给人类，这也是「一桌至少留一个人类座位」的原因。
@@ -345,12 +275,6 @@ export function moveFor(
   if (view === null || you === null || view.status === 'finished') return null;
   const deal = view.deal;
   if (deal === null) return null;
-  // 认赢待表决：只有还没投票的对手能动（认赢者自己等结果；牌局整体冻结）
-  const claim = deal.claim;
-  if (claim !== null && claim.status === 'pending') {
-    if (claim.claimant === you.seat || claim.answers[you.seat] !== null) return null;
-    return { type: 'claimAnswer', agree: claimVote(view, you) };
-  }
   if (deal.phase === 'auction' && deal.auctionTurn === you.seat) {
     return { type: 'bid', call: bidFor(view, you, params) };
   }

@@ -132,26 +132,6 @@ export function bestRunTop(cards: readonly Card[], n: number, t: TrumpModel): nu
   return best;
 }
 
-/** 把那 n 张牌取出来（顶张往下、每层一张）；凑不出为 null（用于「他最好也只能这样出」） */
-export function topRunCards(cards: readonly Card[], n: number, t: TrumpModel): Card[] | null {
-  const top = bestRunTop(cards, n, t);
-  if (top < 0) return null;
-  const byLevel = new Map<number, Card[]>();
-  for (const card of cards) {
-    const level = cardLevel(card, t);
-    const bucket = byLevel.get(level);
-    if (bucket) bucket.push(card);
-    else byLevel.set(level, [card]);
-  }
-  const out: Card[] = [];
-  for (let level = top; level > top - n; level--) {
-    const bucket = byLevel.get(level);
-    if (bucket === undefined || bucket.length === 0) return null;
-    out.push(bucket[0]!);
-  }
-  return out;
-}
-
 export function compareProfiles(a: readonly number[], b: readonly number[]): number {
   const n = Math.max(a.length, b.length);
   for (let i = 0; i < n; i++) {

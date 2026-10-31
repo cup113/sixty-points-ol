@@ -54,8 +54,6 @@ function withSeat(move: BotMove, seat: Seat): Action {
       return { type: 'bury', seat, cards: move.cards };
     case 'play':
       return { type: 'play', seat, cards: move.cards };
-    case 'claimAnswer':
-      return { type: 'claimAnswer', seat, agree: move.agree };
   }
 }
 

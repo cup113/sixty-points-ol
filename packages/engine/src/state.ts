@@ -12,7 +12,13 @@ import {
   type Strain
 } from './cards.ts';
 import { isPass, isHigherBid, validateCall, type Bid, type BidCall } from './auction.ts';
-import { leadInfo, claimLastTrickRange, validateFollow, validateLead } from './validate.ts';
+import {
+  claimLastTrickSize,
+  claimUnbeatable,
+  leadInfo,
+  validateFollow,
+  validateLead
+} from './validate.ts';
 import { canWinTrickNow, trickWinner, type TrickPlay } from './trick.ts';
 import { sortHand, type TrumpModel } from './order.ts';
 
@@ -73,22 +79,18 @@ export interface Trick {
 }
 
 /**
- * 一次**认赢**的现场（ADR-0028）：认赢者、他宣称的末轮张数、亮出来的牌、两票，
- * 以及一个服务端给的截止时刻。
+ * 一次**认赢**的现场（ADR-0028）：认赢者、引擎算出的末轮张数、亮出来的牌，以及收走了多少张。
  *
- * 时间不进引擎（`purity.test.ts`）：`expiresAt` 只是**存着**的数值，引擎从不读钟；
- * 30 秒由服务端排定时器、到点投一条 `claimTimeout`。`revealed` 是声明那一刻的手牌快照
- * （已按显示序排好），被拒之后也不收回 —— 它已经进了公共视图。
+ * 认领**当场结算**（不再有 30 秒窗口、也没有票）：引擎手里有另外两家剩下的牌，能直接判断
+ * 「剩下的每一墩是不是都归他」，所以这条动作的结果是确定的 —— 成立就结束这一副，
+ * 不成立就当场拒。`revealed` 是声明那一刻的手牌快照（已按显示序排好），一直公开到换副。
  */
 export interface ClaimState {
   readonly claimant: Seat;
+  /** 收尾那一墩领出几张（底牌倍数），由引擎从手牌算，不由玩家挑 */
   readonly lastTrick: number;
   readonly revealed: readonly Card[];
-  readonly answers: (boolean | null)[];
-  status: 'pending' | 'rejected' | 'settled';
-  rejectedBy: Seat | null;
-  readonly expiresAt: number;
-  /** 结算时收走的剩余张数（只在 settled 之后有意义） */
+  /** 结算时收走的剩余张数 */
   swept: number;
 }
 
@@ -167,9 +169,7 @@ export type Action =
   | { readonly type: 'bid'; readonly seat: Seat; readonly call: BidCall }
   | { readonly type: 'bury'; readonly seat: Seat; readonly cards: readonly Card[] }
   | { readonly type: 'play'; readonly seat: Seat; readonly cards: readonly Card[] }
-  | { readonly type: 'claim'; readonly seat: Seat; readonly lastTrick: number; readonly expiresAt: number }
-  | { readonly type: 'claimAnswer'; readonly seat: Seat; readonly agree: boolean }
-  | { readonly type: 'claimTimeout' }
+  | { readonly type: 'claim'; readonly seat: Seat }
   | { readonly type: 'newGame' };
 
 export type EngineEvent =
@@ -180,8 +180,6 @@ export type EngineEvent =
   | { readonly type: 'buried'; readonly seat: Seat; readonly cards: readonly Card[] }
   | { readonly type: 'played'; readonly seat: Seat; readonly cards: readonly Card[] }
   | { readonly type: 'claim'; readonly seat: Seat; readonly lastTrick: number; readonly cards: readonly Card[] }
-  | { readonly type: 'claimVote'; readonly seat: Seat; readonly agree: boolean }
-  | { readonly type: 'claimRejected'; readonly claimant: Seat; readonly by: Seat | null }
   | {
       readonly type: 'trickWon';
       readonly leaderSeat: Seat;
@@ -268,9 +266,6 @@ export function auctionTurn(deal: DealState): Seat {
 
 export function playTurn(deal: DealState): Seat | null {
   if (deal.phase !== 'play' || deal.trick === null) return null;
-  // 认赢待表决时**没有人轮到出牌**：牌局冻结，托盘与「轮到你了」因此自然消失，
-  // 界面顶上换成认赢面板（见 ADR-0028）。
-  if (deal.claim !== null && deal.claim.status === 'pending') return null;
   return ((deal.trick.leaderSeat + deal.trick.plays.length) % 3) as Seat;
 }
 
@@ -381,9 +376,6 @@ export function dispatch(prev: GameState, action: Action, rng: RNG): DispatchRes
       if (deal.phase !== 'play' || deal.trick === null || deal.trump === null) {
         return fail(err('not_play', '当前不是出牌阶段'));
       }
-      if (deal.claim !== null && deal.claim.status === 'pending') {
-        return fail(err('claim_pending', '有人认赢，等两名对手表态'));
-      }
       const trick = deal.trick;
       const turn = playTurn(deal)!;
       if (action.seat !== turn) return fail(err('not_your_turn', '还没轮到你出牌'));
@@ -432,87 +424,36 @@ export function dispatch(prev: GameState, action: Action, rng: RNG): DispatchRes
       break;
     }
 
+    // 认赢（ADR-0028）：引擎手里有另外两家剩下的牌，所以这条动作**当场给结果** ——
+    // 成立就立刻按「剩余全收」结算，不成立就当场拒。没有窗口、没有票、也不给人「试探」。
     case 'claim': {
       const deal = state.deal;
       if (deal === null) return fail(err('no_deal', '尚未发牌'));
       if (deal.phase !== 'play' || deal.trick === null || deal.trump === null) {
         return fail(err('not_play', '当前不是出牌阶段'));
       }
-      if (deal.claim !== null) return fail(err('already_claimed', '这一副已经认过赢了'));
       if (action.seat !== playTurn(deal)) return fail(err('not_your_turn', '还没轮到你出牌'));
 
       const hand = deal.hands[action.seat]!;
-      // 认赢连**当前这一墩**一起收（结算把它整墩判给认赢者），所以这一墩他还没赢下来的话，
-      // 认领在发起那一刻就已经不成立了 —— 这是必要条件里的最后一环，引擎直接拒，不交给两张票。
-      if (!canWinTrickNow(hand, deal.trick.plays, deal.trump)) {
+      const plays = deal.trick.plays;
+      // 一、这一墩他也得赢下来（结算把当前这一墩整墩收走）
+      if (!canWinTrickNow(hand, plays, deal.trump)) {
         return fail(
           err('claim_unwinnable', '这一墩你已经赢不了了：认赢连这一墩一起收，先出一手压得住的牌')
         );
       }
-      const range = claimLastTrickRange(hand, deal.trick.plays, deal.trump);
-      if (range === null) return fail(err('bad_last_trick', '手上没有能收尾的顺子'));
-      if (
-        !Number.isInteger(action.lastTrick) ||
-        action.lastTrick < range.min ||
-        action.lastTrick > range.max
-      ) {
-        return fail(
-          err(
-            'bad_last_trick',
-            range.min === range.max
-              ? `末轮张数只能是 ${range.max}（这一墩打完就结束了）`
-              : `末轮张数要落在 ${range.min}..${range.max}`
-          )
-        );
+      // 二、剩下的牌他真的一墩不失：每门都是剩下的最大几张，而且所有主牌都在他手上
+      const others = SEATS.filter((seat) => seat !== action.seat).flatMap((seat) => deal.hands[seat]!);
+      if (!claimUnbeatable(hand, others, deal.trump)) {
+        return fail(err('claim_refuted', '剩下的牌你还赢不完全：有人还压得住你，或者还有主牌能杀'));
       }
-      if (!Number.isFinite(action.expiresAt)) return fail(err('bad_expires', '认赢截止时刻不合法'));
+      const lastTrick = claimLastTrickSize(hand, plays, deal.trump);
+      if (lastTrick === null) return fail(err('claim_refuted', '手上没有能收尾的顺子'));
 
       const revealed = sortHand(hand, deal.trump);
-      deal.claim = {
-        claimant: action.seat,
-        lastTrick: action.lastTrick,
-        revealed,
-        answers: [null, null, null],
-        status: 'pending',
-        rejectedBy: null,
-        expiresAt: action.expiresAt,
-        swept: 0
-      };
-      events.push({ type: 'claim', seat: action.seat, lastTrick: action.lastTrick, cards: [...revealed] });
-      break;
-    }
-
-    case 'claimAnswer': {
-      const deal = state.deal;
-      if (deal === null) return fail(err('no_deal', '尚未发牌'));
-      const claim = deal.claim;
-      if (claim === null) return fail(err('no_claim', '没有进行中的认赢'));
-      if (claim.status !== 'pending') return fail(err('claim_over', '认赢已经结束'));
-      if (action.seat === claim.claimant) return fail(err('claimant_votes', '认赢者本人不投票'));
-      if (claim.answers[action.seat] !== null) return fail(err('already_voted', '你已经投过票了'));
-
-      claim.answers[action.seat] = action.agree;
-      events.push({ type: 'claimVote', seat: action.seat, agree: action.agree });
-
-      if (!action.agree) {
-        claim.status = 'rejected';
-        claim.rejectedBy = action.seat;
-        events.push({ type: 'claimRejected', claimant: claim.claimant, by: action.seat });
-      } else if (SEATS.every((s) => s === claim.claimant || claim.answers[s] === true)) {
-        settleClaim(state, deal, events);
-      }
-      break;
-    }
-
-    // 服务端到点投的「超时」票：与一票「不同意」同义（fail-closed），幂等 ——
-    // 定时器可能晚到，那时认赢早就有结果了。
-    case 'claimTimeout': {
-      const deal = state.deal;
-      const claim = deal?.claim ?? null;
-      if (claim === null || claim.status !== 'pending') break;
-      claim.status = 'rejected';
-      claim.rejectedBy = null;
-      events.push({ type: 'claimRejected', claimant: claim.claimant, by: null });
+      deal.claim = { claimant: action.seat, lastTrick, revealed, swept: 0 };
+      events.push({ type: 'claim', seat: action.seat, lastTrick, cards: [...revealed] });
+      settleClaim(state, deal, events);
       break;
     }
 
@@ -535,7 +476,7 @@ export function dispatch(prev: GameState, action: Action, rng: RNG): DispatchRes
 }
 
 /**
- * 认赢被两名对手都认输之后：把他赢下的「剩余全收」落到牌面上，再走正常结算。
+ * 认赢成立之后：把他赢下的「剩余全收」落到牌面上，再走正常结算。
  *
  * 收走的是**当前墩已出的牌 + 三家剩下的手牌** —— 赢下一墩就是拿走墩里全部的牌，
  * 所以这是「剩下的每一墩都归我」的字面结果（观战者也能按「100 − 已抓分」核对总额）。
@@ -551,7 +492,6 @@ function settleClaim(state: GameState, deal: DealState, events: EngineEvent[]): 
   deal.hands = [[], [], []];
   deal.trick = null;
   claim.swept = remaining.length;
-  claim.status = 'settled';
   scoreDeal(state, deal, events);
 }
 
@@ -565,8 +505,7 @@ function scoreDeal(state: GameState, deal: DealState, events: EngineEvent[]): vo
   );
 
   // 认赢结束的一副没有「最后一墩」：倍数与保底/抠底都取认赢那一下（ADR-0028）。
-  // 只看 `settled` —— 被拒的认赢留在记录里，那一副仍按真打完的末墩算。
-  const claim = deal.claim !== null && deal.claim.status === 'settled' ? deal.claim : null;
+  const claim = deal.claim;
   const last = deal.trickHistory[deal.trickHistory.length - 1] ?? null;
   const multiplier = claim === null ? last!.plays[0]!.cards.length : claim.lastTrick;
   const protectedBottom = claim === null ? last!.winnerSeat === declarer : claim.claimant === declarer;
