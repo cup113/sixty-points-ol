@@ -22,6 +22,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -329,6 +330,14 @@ interface Shot {
    */
   readonly social?: boolean;
   /**
+   * 把这一副推到「**认赢成立**」再拍（见 `driveClaim`）：庄家埋完底立刻认领，引擎当场结算。
+   *
+   * 要拍的是结算的**第一拍**（ADR-0028）：认赢者的整手牌摊在内容槽里 + 一句判决。
+   * 认领当场生效，所以这一拍只活 2 秒（`SCORED_HOLD_MS`）—— 脚本在页面加载后立刻量。
+   * 它守的是：牌匾落在内容槽里、不压手牌 / 托盘 / 「我」底栏、17 张一张不少、判词说得出口。
+   */
+  readonly claim?: 'settled';
+  /**
    * 把局面推到「一墩已经打了几张」再拍（见 driveTrick，用来量出牌点与托盘）。
    *
    * - `'three-clusters'`：三家都出过牌 ⇒ 引擎已收墩、`trick` 复位，出牌区改显示上一墩，
@@ -536,6 +545,31 @@ const SHOTS: readonly Shot[] = [
     social: true,
     mode: 'viewport',
     size: MOBILE
+  },
+  {
+    file: '18-claim-reveal-mobile',
+    label:
+      '认赢那一拍（手机 390px）：他的整手牌摊在内容槽里 + 一句「剩下的都归他」，不压手牌与托盘',
+    ...sceneFor(1, [{ points: 40, strain: 'C' }, 'pass', 'pass']),
+    claim: 'settled',
+    mode: 'viewport',
+    size: MOBILE
+  },
+  {
+    file: '19-claim-reveal-320',
+    label: '同一局面在最窄机型 320px：17 张排得下、判词不被挤出去、整块仍在内容槽里',
+    ...sceneFor(1, [{ points: 40, strain: 'C' }, 'pass', 'pass']),
+    claim: 'settled',
+    mode: 'viewport',
+    size: MOBILE_MIN
+  },
+  {
+    file: '20-claim-reveal-desktop',
+    label: '桌面宽度下的同一块：牌匾仍只落在内容槽，座位卡 / 信息须 / 「我」底栏原样可见',
+    ...sceneFor(1, [{ points: 40, strain: 'C' }, 'pass', 'pass']),
+    claim: 'settled',
+    mode: 'viewport',
+    size: DESKTOP
   }
 ];
 
@@ -780,6 +814,19 @@ interface Measurement {
    * 在圆里临时插一个 `888` 的探针（`position:absolute; left:-9999px`，不影响版面）。
    * `doubleSizePx` 是同一串数字在两倍字号下的宽度 —— 尺子是否真的按字号在量，靠它证。
    */
+  /**
+   * 认赢那一拍（ADR-0028）摊在内容槽里的那块牌匾：只有认赢的副才有值。
+   *
+   * `layer` 是它的定位壳（`absolute inset-0`），`slot` 是内容槽那一行 —— 只量牌匾
+   * 「没压住手牌」是不够的：它压不住手牌也可能是因为整块跑到整屏上去了。
+   */
+  readonly claim: {
+    readonly rect: Rect;
+    readonly layer: Rect | null;
+    readonly slot: Rect | null;
+    readonly cards: number;
+    readonly verdict: string;
+  } | null;
   readonly clock: {
     /** 当下的档位（`data-clock-tone`：plain | long | stale） */
     readonly tone: string;
@@ -868,6 +915,19 @@ const MEASURE = `(() => {
         })()
       };
     }),
+    claim: (() => {
+      const block = document.querySelector('[data-claim-reveal="true"]');
+      if (block === null) return null;
+      const layer = block.closest('[data-claim-reveal-layer="true"]');
+      const slot = document.querySelector('[data-felt-row="slot"]');
+      return {
+        rect: rect(block),
+        layer: layer === null ? null : rect(layer),
+        slot: slot === null ? null : rect(slot),
+        cards: block.querySelectorAll('.card').length,
+        verdict: (block.querySelector('p')?.textContent ?? '').trim()
+      };
+    })(),
     clock: (() => {
       const face = document.querySelector('[data-clock-face="true"]');
       if (face === null) return null;
@@ -1405,6 +1465,51 @@ function assertLayout(
     }
   }
 
+  // ⑳ 认赢那一拍（ADR-0028）：只活在认赢的副 —— 牌匾摊在内容槽里、不碰手牌/托盘/底栏，
+  //    17 张一张不少，判词说得出口。
+  let claimNote = '；认赢牌匾 —';
+  if (m.claim !== null) {
+    const claim = m.claim;
+    const shellDelta =
+      claim.layer === null || claim.slot === null
+        ? Number.POSITIVE_INFINITY
+        : Math.max(
+            Math.abs(claim.layer.x - claim.slot.x),
+            Math.abs(claim.layer.y - claim.slot.y),
+            Math.abs(claim.layer.width - claim.slot.width),
+            Math.abs(claim.layer.height - claim.slot.height)
+          );
+    if (shellDelta > 1.5) {
+      fail(
+        `认赢牌匾的定位壳没有正好铺满内容槽（位移 ${shellDelta.toFixed(1)}px）：` +
+          '壳一旦跑掉（例如改成整屏那层），牌匾就会盖住手牌与托盘'
+      );
+    }
+    if (claim.slot !== null && !contains(claim.slot, claim.rect)) {
+      fail(`认赢牌匾跑到内容槽外面（${boxOf(claim.rect)} / 槽 ${boxOf(claim.slot)}）`);
+    }
+    for (const [name, box] of [
+      ['操作条那一行', m.actionRow],
+      ['动作托盘', m.tray],
+      ['「我」底栏', m.seatBar]
+    ] as const) {
+      const area = box === null ? 0 : overlapArea(claim.rect, box);
+      if (area > 4) {
+        fail(`认赢牌匾压住了${name}（相交 ${area.toFixed(0)}px²）：输家要能同时看见自己的手牌`);
+      }
+    }
+    if (claim.cards !== 17) fail(`认赢牌匾里只有 ${claim.cards} 张牌（应当是他埋底后那 17 张）`);
+    if (!claim.verdict.includes('剩下的都归')) {
+      fail(`认赢牌匾的判词不说明结果：「${claim.verdict}」—— 它该说「剩下的都归他」`);
+    }
+    if (claim.rect.x < -0.5 || claim.rect.right > viewportWidth + 0.5) {
+      fail(`认赢牌匾越出视口（${boxOf(claim.rect)}，视口宽 ${viewportWidth}px）`);
+    }
+    claimNote =
+      `；认赢牌匾 ${claim.rect.width.toFixed(0)}×${claim.rect.height.toFixed(0)}px` +
+      `（${claim.cards} 张、判词「${claim.verdict}」）`;
+  }
+
   const rowHeight = m.history.rowHeight > 0 ? m.history.rowHeight : 24;
   const capacity = m.history.box === null ? 0 : Math.floor(m.history.box.height / rowHeight);
   /** 信息须里最紧的一格（需要宽度 − 可用宽度最大者）：负得越多越宽松 */
@@ -1435,7 +1540,8 @@ function assertLayout(
     (m.clock === null
       ? '；闹钟 —'
       : `；闹钟三位数 ${m.clock.threeDigitsPx.toFixed(1)}px / 圆 ${m.clock.circleWidth.toFixed(0)}px` +
-        ` @${m.clock.tierPx.long}px（${m.clock.tone}，实际字号 ${m.clock.liveFontPx}px）`);
+        ` @${m.clock.tierPx.long}px（${m.clock.tone}，实际字号 ${m.clock.liveFontPx}px）`) +
+    claimNote;
   return { summary, problems };
 }
 
@@ -1876,6 +1982,78 @@ async function driveTrick(
 }
 
 /**
+ * 把这一副改成「认领成立」的残局（只动这一张**一次性测试桌**的存档）。
+ *
+ * 为什么必须改：随机发出的 17 张几乎不可能满足「每门都是剩下的最大几张 + 主牌全在手」，
+ * 直接认领只会被引擎当场拒 —— 而这一屏要拍的正是**成立之后**那一拍。
+ *
+ * 改法：把他手上换成**所有剩下的主牌 + 几张最大的副牌**，另外两家拿剩下的低牌。
+ * 引擎照样自己判一遍（它读的是牌局，不是这里的意思），所以这张 PNG 证明的仍是真规则：
+ * 副牌取「全局最大的若干张」⇒ 他每一门的 floor 都不低于对手同门的任何一张。
+ */
+async function makeClaimHold(code: string, declarerSeat: number): Promise<void> {
+  const db = new DatabaseSync(join(workDir, 'acceptance.db'));
+  try {
+    const row = db
+      .prepare(
+        'SELECT g.table_id AS id, g.state AS state FROM games g JOIN tables t ON t.id = g.table_id WHERE t.code = ?'
+      )
+      .get(code) as { id: number; state: string } | undefined;
+    if (row === undefined) throw new Error(`认赢场景：找不到牌桌 ${code} 的牌局`);
+    const state = JSON.parse(row.state) as {
+      deal: { trump: TrumpModel; hands: Card[][] };
+    };
+    const deal = state.deal;
+    const all = deal.hands.flat();
+    const trumps = all.filter((card) => cardClass(card, deal.trump) === 'T');
+    const plains = all
+      .filter((card) => cardClass(card, deal.trump) !== 'T')
+      .sort((a, b) => cardLevel(b, deal.trump) - cardLevel(a, deal.trump));
+    const hand = [...trumps, ...plains.slice(0, Math.max(0, 17 - trumps.length))];
+    const mine = new Set(hand.map(cardKey));
+    const rest = all.filter((card) => !mine.has(cardKey(card)));
+    const others = [0, 1, 2].filter((seat) => seat !== declarerSeat);
+    deal.hands[declarerSeat] = hand;
+    others.forEach((seat, index) => {
+      deal.hands[seat] = index === 0 ? rest.slice(0, 17) : rest.slice(17);
+    });
+    db.prepare('UPDATE games SET state = ? WHERE table_id = ?').run(JSON.stringify(state), row.id);
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * 把这一副推到「**认赢成立**」（ADR-0028）：庄家埋底（他因此是这一墩的领出人）→ 认领。
+ *
+ * 认领之前先把另外两家手里的牌改成压不住他的那一种（见 `makeClaimHold`）——
+ * 于是这一帧稳定地是「成立并结算」，而结算的第一拍就是那张牌匾。
+ */
+async function driveClaim(
+  code: string,
+  seats: readonly Credential[],
+  declarerSeat: number
+): Promise<void> {
+  const declarer = seats[declarerSeat]!;
+  const opening = await viewOf(code, declarer.credential);
+  const hand = opening.you?.hand ?? [];
+  if (opening.view.deal === null || hand.length < 20) {
+    throw new Error(`认赢场景：庄家手牌只有 ${hand.length} 张（应当是拿完底牌的 20 张）`);
+  }
+  await act(code, declarer.credential, { type: 'bury', cards: hand.slice(0, 3) });
+  await makeClaimHold(code, declarerSeat);
+  await act(code, declarer.credential, { type: 'claim' });
+  const after = await viewOf(code, declarer.credential);
+  const claim = after.view.deal?.claim ?? null;
+  if (claim === null) {
+    throw new Error('认赢场景：认领没有成立（引擎拒了？先看服务端日志）');
+  }
+  if (claim.revealed.length !== 17) {
+    throw new Error(`认赢场景：亮牌 ${claim.revealed.length} 张（应当是埋底后的 17 张）`);
+  }
+}
+
+/**
  * 从手牌里找一条**合法**顺子（同门连续段），长度取找得到的最大值、上限 `want`。
  *
  * 层号口径用引擎的 `cardLevel`（跳过级牌、主牌门合并），但**判定一律回到引擎自己**
@@ -2080,6 +2258,11 @@ async function runShot(
     await driveToScored(table.code, seats, table.declarerSeat);
   } else if (shot.trick !== undefined) {
     await driveTrick(table.code, seats, table.declarerSeat, shot.trick === 'two-played' ? 2 : 3);
+  }
+
+  // 认赢：庄家埋完底立刻认领（引擎当场结算），拍的这一页紧接着就是结算的第一拍
+  if (shot.claim === 'settled') {
+    await driveClaim(table.code, seats, table.declarerSeat);
   }
 
   // 三条消息给三个座位各一条：不管谁被拍成「我」，两张对手卡与底栏都各有一颗气泡。

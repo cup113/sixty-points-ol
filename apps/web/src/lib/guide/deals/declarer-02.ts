@@ -540,6 +540,7 @@ export const DECLARER_02: GuideDealData = {
         },
         "levels": 4
       }
-    ]
+    ],
+    "claim": null
   }
 };

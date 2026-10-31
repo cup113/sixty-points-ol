@@ -235,6 +235,14 @@ export class TableClient {
     return this.send({ type: 'play', cards: this.selectedCards });
   }
 
+  /**
+   * 认赢（ADR-0028）：只说「我要认」—— 亮牌、末轮张数与成立与否都由引擎在服务端当场判，
+   * 成立这一副就结束，不成立会回一句人话（「剩下的牌你还赢不完全」）。
+   */
+  claim(): Promise<boolean> {
+    return this.send({ type: 'claim' });
+  }
+
   deal(): Promise<boolean> {
     return this.send({ type: 'deal' });
   }

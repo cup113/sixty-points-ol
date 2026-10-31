@@ -40,10 +40,11 @@ export interface SoundSnapshot {
 
 export function soundSnapshot(view: PublicView | null, you: PlayerHand | null): SoundSnapshot {
   const deal = view?.deal ?? null;
+  const mySeat = you?.seat ?? null;
   return {
     phase: deal?.phase ?? null,
     dealNo: deal?.dealNo ?? null,
-    mySeat: you?.seat ?? null,
+    mySeat,
     isDeclarer: you?.isDeclarer ?? false,
     auctionTurn: deal?.auctionTurn ?? null,
     playTurn: deal?.playTurn ?? null,

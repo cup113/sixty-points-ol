@@ -57,7 +57,9 @@
         于是竖排成两行（计数自带 `whitespace-nowrap` 所以它断不了：截图里「已选 0 张」安然无恙、
         两个按钮都竖着，正是这条的证据）。宽度取 max-content 后没有负空间可分配；
         按钮自己再带 `whitespace-nowrap` 作第二道防线。**不加** `max-w-*` —— 一旦被上限钳住
-        就退回「压缩 ⇒ 换行」。 -->
+        就退回「压缩 ⇒ 换行」。
+     ⑤ **认赢不在这里**：它是低频、一步、且要人先想清楚的动作，入口住在抽屉的「牌桌」页
+        （`TablePanel`）；托盘这一格回到土生土长的「清 空」。 -->
 {#if visible}
   <div
     class="relative flex w-max flex-nowrap items-center gap-2 rounded-2xl bg-black/55 px-2.5 py-1 ring-1 ring-white/10 backdrop-blur-sm"

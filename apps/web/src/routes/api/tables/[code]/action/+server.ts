@@ -1,7 +1,6 @@
 import { error, json } from '@sveltejs/kit';
-import type { Action } from '@sixty/engine';
 import { requireIdentity } from '$lib/server/auth';
-import { applyTableAction, isCallShape, isCardShape } from '$lib/server/tables';
+import { applyTableAction, isCallShape, isCardShape, type TableAction } from '$lib/server/tables';
 import type { RequestHandler } from './$types';
 
 interface Body {
@@ -9,11 +8,13 @@ interface Body {
     type?: unknown;
     call?: unknown;
     cards?: unknown;
+    lastTrick?: unknown;
+    agree?: unknown;
   };
 }
 
 /** 座位号不接受客户端输入：由服务端按身份推导 */
-function toAction(body: Body): Action {
+function toAction(body: Body): TableAction {
   const raw = body.action;
   if (!raw || typeof raw.type !== 'string') error(400, '缺少动作');
   switch (raw.type) {
@@ -34,6 +35,9 @@ function toAction(body: Body): Action {
         error(400, '出牌必须是非空的合法牌');
       }
       return { type: 'play', seat: 0, cards: raw.cards };
+    // 认赢：客户端只说「我要认」，末轮张数由引擎算（ADR-0028）
+    case 'claim':
+      return { type: 'claim', seat: 0 };
     default:
       error(400, '未知动作');
   }

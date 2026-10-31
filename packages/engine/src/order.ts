@@ -94,6 +94,44 @@ export function segments(cards: readonly Card[], t: TrumpModel): number[] {
   return out.sort((a, b) => b - a);
 }
 
+/** 同一门内按层号的极大连续段；`length` 是**层数**（同层多张只占段里的一个位置） */
+export interface LevelRun {
+  readonly top: number;
+  readonly length: number;
+}
+
+/**
+ * 同一门内所有极大连续段（只接受**同一门**的牌，与 `bestProfile` 同一条约定）。
+ *
+ * 与 `segments` 的区别：`segments` 是「每次抽最长链」的**贪心分解**（用于跟牌结构），
+ * 这里要的是**有哪几条段、各到哪**（用于「我凑不凑得出 n 张、顶张多大」）。
+ * 例：持 A + 两张副级 + 主级（层号 12,13,13,14）→ `[{top:14,length:3}]`，段长仍是 3。
+ */
+export function levelRuns(cards: readonly Card[], t: TrumpModel): LevelRun[] {
+  const levels = [...new Set(cards.map((card) => cardLevel(card, t)))].sort((a, b) => a - b);
+  const out: LevelRun[] = [];
+  let start = 0;
+  for (let i = 1; i <= levels.length; i++) {
+    if (i < levels.length && levels[i] === levels[i - 1]! + 1) continue;
+    out.push({ top: levels[i - 1]!, length: i - start });
+    start = i;
+  }
+  return out;
+}
+
+/**
+ * 同一门里「凑得出 n 张连续段」的最强顶张；凑不出为 -1。
+ * n = 1 时就是这一门的最大层号（认赢投票里「我的顶张比他大」那一支）。
+ */
+export function bestRunTop(cards: readonly Card[], n: number, t: TrumpModel): number {
+  if (n < 1) return -1;
+  let best = -1;
+  for (const run of levelRuns(cards, t)) {
+    if (run.length >= n && run.top > best) best = run.top;
+  }
+  return best;
+}
+
 export function compareProfiles(a: readonly number[], b: readonly number[]): number {
   const n = Math.max(a.length, b.length);
   for (let i = 0; i < n; i++) {
@@ -134,6 +172,33 @@ export function bestProfile(holding: readonly Card[], t: TrumpModel, n: number):
 export function isRun(cards: readonly Card[], t: TrumpModel): boolean {
   if (cards.length < 2) return false;
   return segments(cards, t).length === 1;
+}
+
+/**
+ * 手牌里最长的一条顺子（**空手为 0** —— 一张也领不出）。
+ *
+ * **认赢**（ADR-0028）用它当末轮张数的上限：领出多张必须是同门严格相邻的顺子
+ * （`validateLead`），所以「末轮按 x 张收尾」在牌面上的硬约束就是「手上真有一条 x 张的顺子」。
+ * 这是**必要条件**，不是充分条件 —— 那条顺子留不留得到末轮，只有牌手自己判断。
+ * 必须**先按门分组**再取段：`levelRuns` 只看层号，跨门的两张牌（如 ♣2 与 ♦3）层号相邻，
+ * 混在一起会被误判成顺子。
+ *
+ * 空手返回 0 而不是 1：调用方拿它当「我有几张主牌能杀」用（`claimVote` 的缺门分支），
+ * 1 会让「一张牌都没有」等价于「有一张主牌」。
+ */
+export function longestRun(cards: readonly Card[], t: TrumpModel): number {
+  let best = 0;
+  const byClass = new Map<CardClass, Card[]>();
+  for (const card of cards) {
+    const cls = cardClass(card, t);
+    const bucket = byClass.get(cls);
+    if (bucket) bucket.push(card);
+    else byClass.set(cls, [card]);
+  }
+  for (const holding of byClass.values()) {
+    for (const run of levelRuns(holding, t)) best = Math.max(best, run.length);
+  }
+  return best;
 }
 
 /** 顶张层号（用于比较同长度单段顺子） */

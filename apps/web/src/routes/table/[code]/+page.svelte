@@ -11,6 +11,7 @@
   import BidPanel from '$lib/components/BidPanel.svelte';
   import BotRemoveConfirm from '$lib/components/BotRemoveConfirm.svelte';
   import BuryPanel from '$lib/components/BuryPanel.svelte';
+  import ClaimReveal from '$lib/components/ClaimReveal.svelte';
   import DealSummary from '$lib/components/DealSummary.svelte';
   import HandFan from '$lib/components/HandFan.svelte';
   import InviteCode from '$lib/components/InviteCode.svelte';
@@ -209,6 +210,26 @@
   );
   /** 「下一副 / 开新对局」的锁：**跳过不解锁**（跳过只是自己看快一点，不缩短全桌节奏） */
   const nextDealReady = $derived(nextDealUnlocked(scoredElapsed));
+
+  /**
+   * 认赢那一副的**第一拍**（ADR-0028）：摊开认赢者的整手牌 + 一句判决。
+   *
+   * 它替代了「末墩」那一拍 —— 认赢的副没有末墩（剩下的牌被一口气收走），
+   * 而这一副到底怎么结束的，答案就在这手牌里：他每一门都是剩下的最大几张、主牌全在他手上。
+   * 措辞对认赢者本人与两个输家分开：输家要看的是「他凭什么」，不是「你赢了」。
+   */
+  const claimReveal = $derived.by(() => {
+    if (scoredStep !== 'trick') return null;
+    const claim = deal?.claim ?? null;
+    if (claim === null || summary === null) return null;
+    const mine = you?.seat === claim.claimant;
+    const who = mine ? '你' : (names[claim.claimant] ?? '他');
+    return {
+      verdict: mine ? '你亮牌 · 剩下的都归你' : `${who} 亮牌 · 剩下的都归他`,
+      cards: claim.revealed,
+      lastTrick: claim.lastTrick
+    };
+  });
 
   /**
    * 起算：认出「这一副的结算」并记下本地时刻。**这个 effect 刻意不返回清理函数。**
@@ -447,6 +468,11 @@
           <BidPanel {client} />
         {:else}
           <TrickArea {view} seat={anchor} mySeat={label} {names} />
+          <!-- 认赢的第一拍（ADR-0028）：认领当场结算，输家那一侧什么也没看见 ——
+               所以先摊开他那手牌、给一句判决，再走亮底牌与结算弹窗。 -->
+          {#if claimReveal !== null}
+            <ClaimReveal {...claimReveal} {trump} />
+          {/if}
           <!-- 第二拍亮底牌（ADR-0022）：与出牌区**同层**、整块让开点击，
                于是末墩还看得见、底牌摊在正中间，两样东西不会互相盖住
                （相交面积由 shot-auction.ts 的 ⑱ 实测）。 -->

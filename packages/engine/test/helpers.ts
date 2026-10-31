@@ -224,7 +224,8 @@ export function rigPlayDeal(
     trick: { leaderSeat: declarerSeat, plays: [] },
     trickHistory: [],
     captured: [[], [], []],
-    summary: null
+    summary: null,
+    claim: null
   };
   const game = createGame(opts.dealerSeat ?? 0);
   game.levels = opts.levels

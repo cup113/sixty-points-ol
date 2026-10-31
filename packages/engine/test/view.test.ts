@@ -66,6 +66,8 @@ function hiddenKeys(state: GameState, viewer: Seat | null): Set<string> {
 
   const known = new Set<string>();
   const hidden: Card[] = [];
+  // 认赢的**亮牌**是主动公开的（ADR-0028）：对谁都不算隐藏，被拒也一样
+  const revealed = new Set((deal.claim?.revealed ?? []).map(cardKey));
   for (const seat of SEATS) {
     if (viewer !== null && seat === viewer) {
       for (const card of deal.hands[seat]!) known.add(cardKey(card));
@@ -76,7 +78,7 @@ function hiddenKeys(state: GameState, viewer: Seat | null): Set<string> {
 
   if (viewer === null) {
     if (deal.phase !== 'scored') hidden.push(...deal.kitty);
-    return keysOf(hidden);
+    return keysOf(hidden.filter((card) => !revealed.has(cardKey(card))));
   }
 
   // 庄家自己选过的两批牌（拿上来 / 埋回去）对他都不是隐藏信息
@@ -87,7 +89,7 @@ function hiddenKeys(state: GameState, viewer: Seat | null): Set<string> {
   if (deal.phase !== 'scored') {
     for (const card of deal.kitty) if (!known.has(cardKey(card))) hidden.push(card);
   }
-  return keysOf(hidden);
+  return keysOf(hidden.filter((card) => !revealed.has(cardKey(card))));
 }
 
 function leaked(payload: unknown, hidden: Set<string>): string[] {
@@ -121,7 +123,8 @@ const PUBLIC_DEAL_FIELDS = [
   'captured',
   'handCounts',
   'declarerSeat',
-  'summary'
+  'summary',
+  'claim'
 ].sort();
 
 /**

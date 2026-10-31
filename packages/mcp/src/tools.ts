@@ -224,7 +224,8 @@ function legalOf(payload: StreamPayload): Pick<TurnSummary, 'legalBids' | 'legal
     return { legalBids: flatCalls(bidCandidates(view)) };
   }
   if (deal.phase === 'play' && deal.playTurn === you.seat && deal.trump !== null) {
-    const lead = deal.trick !== null && deal.trick.plays.length > 0 ? deal.trick.plays[0]!.cards : null;
+    const plays = deal.trick?.plays ?? [];
+    const lead = plays.length > 0 ? plays[0]!.cards : null;
     return { legalPlay: playHint(you.hand, deal.trump, lead) };
   }
   return {};
@@ -499,6 +500,13 @@ export const TOOLS: readonly ToolSpec[] = [
       '出牌：cards 是这次要出的 1 张或多张牌码（多张必须同门顺子/结构优先）；牌码直接取 get_state 里 you.hand 的原样元素。',
     input: { ...codeField, cards: z.array(CardCode).min(1), wait: WAIT_FIELD },
     run: (rt, args) => act(rt, args['code'], { type: 'play', cards: cardsOf(args['cards'] as string[], 'cards') }, args['wait'])
+  },
+  {
+    name: 'declare_win',
+    description:
+      '认赢（轮到你出牌时）：亮出你全部手牌，宣称剩下的每一墩都归你。引擎手里有另外两家的牌，所以**当场给结果**：成立就立刻按「剩余全收」结算，不成立直接拒（会告诉你为什么）—— 你的牌一旦亮出就公开到换副。',
+    input: { ...codeField, wait: WAIT_FIELD },
+    run: (rt, args) => act(rt, args['code'], { type: 'claim' }, args['wait'])
   },
   {
     name: 'deal',

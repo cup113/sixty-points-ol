@@ -5,6 +5,7 @@ import {
   type Action,
   type BidCall,
   type Card,
+  type DealSummary,
   type GameState,
   type Seat
 } from '@sixty/engine';
@@ -49,6 +50,16 @@ interface SeatRow {
 
 const cryptoRng = (): number => randomInt(0, 2 ** 32) / 2 ** 32;
 const SEAT_COUNT = 3;
+
+/**
+ * 牌桌动作：引擎动作 + 一种**不带座位**的认赢。
+ *
+ * 座位一律由服务端按身份推导（ADR-0002）；认赢的末轮张数也由引擎算（ADR-0028），
+ * 所以客户端能说的只有「我要认」这一件事。
+ */
+export type TableAction =
+  | Exclude<Action, { type: 'claim' }>
+  | { readonly type: 'claim'; readonly seat: Seat };
 
 function makeCode(): string {
   for (let attempt = 0; attempt < 50; attempt++) {
@@ -402,6 +413,9 @@ function announcementOf(row: SeatRowWithAnnouncement, nowMs: number): SeatAnnoun
   return { id, kind, body, remainingMs };
 }
 
+/**
+ * 桌面信息：三家座位 + 各自的桌边消息（同一条查询带出来，每帧都要重算）。
+ */
 export function tableView(table: TableInfo): TableView {
   const rows = db
     .prepare(
@@ -446,7 +460,18 @@ export function getGameState(tableId: number): GameState | null {
   const row = db.prepare('SELECT state FROM games WHERE table_id = ?').get(tableId) as
     | { state: string }
     | undefined;
-  return row ? (JSON.parse(row.state) as GameState) : null;
+  if (row === undefined) return null;
+  const state = JSON.parse(row.state) as GameState;
+  // 老库补字段（ADR-0028）：认赢上线的牌局里没有 `claim` / `summary.claim`，
+  // 缺了它 `deal.claim` 会在第一帧就抛 —— 升级不该把正在打的桌打停。
+  if (state.deal !== null && state.deal.claim === undefined) state.deal.claim = null;
+  for (const summary of state.history) {
+    if (summary.claim === undefined) (summary as { claim: DealSummary['claim'] }).claim = null;
+  }
+  if (state.deal?.summary != null && state.deal.summary.claim === undefined) {
+    (state.deal.summary as { claim: DealSummary['claim'] }).claim = null;
+  }
+  return state;
 }
 
 function saveGame(tableId: number, state: GameState): void {
@@ -480,8 +505,9 @@ function appendEvents(tableId: number, events: readonly { type: string }[]): voi
  */
 export function viewFor(table: TableInfo, userId: number): StreamPayload {
   const seat = seatOf(table, userId);
+  const state = getGameState(table.id);
   return {
-    ...projectionFor(getGameState(table.id), seat === null ? null : (seat as Seat)),
+    ...projectionFor(state, seat === null ? null : (seat as Seat)),
     table: tableView(table)
   };
 }
@@ -569,7 +595,7 @@ export function postAnnouncement(code: string, userId: number, post: SocialPost)
 }
 
 /** 服务器权威地执行一个动作：座位号一律由服务端根据身份推导（见 ADR-0002） */
-export function applyTableAction(code: string, userId: number, action: Action): ActionResult {
+export function applyTableAction(code: string, userId: number, action: TableAction): ActionResult {
   const table = getTableByCode(code);
   if (table === null) return { ok: false, message: '牌桌不存在' };
   const seat = seatOf(table, userId);
@@ -591,7 +617,7 @@ export function applyTableAction(code: string, userId: number, action: Action): 
   }
 
   const serverAction: Action =
-    action.type === 'bid' || action.type === 'bury' || action.type === 'play'
+    action.type === 'bid' || action.type === 'bury' || action.type === 'play' || action.type === 'claim'
       ? { ...action, seat: seat as Seat }
       : action;
 
@@ -647,3 +673,4 @@ export function isCallShape(value: unknown): value is BidCall {
     (call.strain === 'C' || call.strain === 'D' || call.strain === 'H' || call.strain === 'S' || call.strain === 'NT')
   );
 }
+

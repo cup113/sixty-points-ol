@@ -2,13 +2,16 @@ import { containsCard, removeCards, type Card } from './cards.ts';
 import {
   bestProfile,
   cardClass,
+  cardLevel,
   classOfSet,
   compareProfiles,
   isRun,
+  longestRun,
   segments,
   type CardClass,
   type TrumpModel
 } from './order.ts';
+import type { TrickPlay } from './trick.ts';
 
 export interface LeadInfo {
   readonly cardClass: CardClass;
@@ -121,4 +124,92 @@ export function checkPlay(
   const info = leadInfo(lead, t);
   if (info === null) return '牌局状态异常';
   return validateFollow(hand, cards, info, t);
+}
+
+// ---------------------------------------------------------------------------
+// 认赢（ADR-0028）：这一墩他这么快能不能赢、末轮能报多大
+// ---------------------------------------------------------------------------
+
+/**
+ * 认赢报的**末轮张数**（底牌倍数 x）：能拿来收尾的最大张数；领不出为 null。
+ *
+ * x 是「收尾那一墩我领出几张」，所以它同时被三件事钳住：
+ * - 手上真有一条 x 张的顺子（领出多张必须是顺子）；
+ * - 这一墩我还得先打掉 `size` 张 —— 之后的墩才是我的「剩下」；
+ * - 三家等长（`hand.length === size`）时这一墩**就是末墩**，x 只能等于这一墩的张数。
+ *
+ * 不让人挑：认领一旦成立，把最长那条顺子留到末轮总是摆得出来，而 x 越大底牌倍数越大 ——
+ * 取上界恒不劣，于是这个数只有一个正确答案，由引擎算。
+ */
+export function claimLastTrickSize(
+  hand: readonly Card[],
+  plays: readonly TrickPlay[],
+  t: TrumpModel
+): number | null {
+  const run = longestRun(hand, t);
+  if (run < 1) return null; // 空手：一张也领不出
+  if (plays.length === 0) return run; // 领出：这一墩的大小由我自己挑
+
+  const size = plays[0]!.cards.length;
+  if (hand.length < size) return null; // 出牌数超过手牌数：不是合法局面
+  if (hand.length === size) return size; // 三家等长：这一墩就是末墩
+
+  const max = Math.min(hand.length - size, run);
+  return max < 1 ? null : max;
+}
+
+/**
+ * 认赢**成不成立**（ADR-0028）：**他领出的每一墩都赢**，两条判据。
+ *
+ * 一、**主牌抽得干**：把他和对手的主牌各自从大到小排好，第 i 大的他要比第 i 大的对手大
+ * （所以他也必须不比对手少）。于是他一张张领主牌，对手必须跟，每轮抽掉一张、并且每轮都是他赢；
+ * 抽完之后对手一张主牌也没有了。
+ *
+ * 二、**副牌都是这一门剩下的最大几张**：每一门他最低的那张，也要比对手这门里最高的那张大。
+ * 否则那张迟早要被他领出去（他会赢下每一墩，所以每一张牌最后都是他领），而对手一张更大的同门牌
+ * 就把它压掉了。
+ *
+ * 为什么抽干主牌要放在副牌之前：对手只要还剩一张主牌，他领副牌时就能杀 —— 主牌不抽干，副牌
+ * 再大也不安全。反过来两条都成立时，他从主牌往下领，谁也压不过、也没人杀得了（当前这一墩
+ * 另由 `canWinTrickNow` 把守）。
+ *
+ * 偏严是刻意的：它也会误拒一些真认赢（比如某一门正好是一条对手跟不出的顺子）——
+ * 误拒只丢一次快赢（牌局照常打完），误判会把不该给的墩判给他、算错分。
+ */
+export function claimUnbeatable(
+  hand: readonly Card[],
+  opponents: readonly Card[],
+  t: TrumpModel
+): boolean {
+  const trumpsOf = (cards: readonly Card[]): number[] =>
+    cards
+      .filter((card) => cardClass(card, t) === 'T')
+      .map((card) => cardLevel(card, t))
+      .sort((a, b) => b - a);
+
+  // 一、主牌逐张压过：第 i 大的都要比对手第 i 大的大（顺带也要求他不比对手少）
+  const mine = trumpsOf(hand);
+  const theirs = trumpsOf(opponents);
+  if (theirs.length > mine.length) return false;
+  for (let i = 0; i < theirs.length; i += 1) {
+    if (mine[i]! <= theirs[i]!) return false;
+  }
+
+  // 二、副牌：我这一门最低的那张也要比对手这门最高的那张大
+  const floor = new Map<CardClass, number>();
+  for (const card of hand) {
+    const cls = cardClass(card, t);
+    if (cls === 'T') continue; // 主牌由上面那条管
+    const level = cardLevel(card, t);
+    const current = floor.get(cls);
+    if (current === undefined || level < current) floor.set(cls, level);
+  }
+  for (const card of opponents) {
+    const cls = cardClass(card, t);
+    if (cls === 'T') continue; // 同上
+    const mineLevel = floor.get(cls);
+    if (mineLevel === undefined) continue; // 我这一门没有牌：他压不着我
+    if (cardLevel(card, t) > mineLevel) return false;
+  }
+  return true;
 }

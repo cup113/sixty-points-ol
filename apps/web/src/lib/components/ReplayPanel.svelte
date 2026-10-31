@@ -23,12 +23,15 @@
     dealNo,
     replays,
     onOpen,
-    who
+    who,
+    note = '这副没有机器重演记录'
   }: {
     dealNo: number;
     replays: Readonly<Record<number, ReplayResult>>;
     onOpen: (dealNo: number) => void;
     who: (seat: number) => string;
+    /** 没有记录时的那句话：认赢结束的副说不出「剩下的牌逐张归谁」，要说清这条 */
+    note?: string;
   } = $props();
 
   let open = $state(false);
@@ -59,7 +62,7 @@
   <div class="mt-1.5 ml-1 border-l border-white/20 pl-2.5">
     {#if replay === null}
       {#if requested}
-        <p class="text-[11px] text-white/40">这副没有机器重演记录</p>
+        <p class="text-[11px] text-white/40">{note}</p>
       {:else}
         <p class="text-[11px] text-white/40">加载中…</p>
       {/if}

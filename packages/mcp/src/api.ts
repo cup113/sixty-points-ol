@@ -13,7 +13,9 @@ export type SeatlessAction =
   | { readonly type: 'newGame' }
   | { readonly type: 'bid'; readonly call: BidCall }
   | { readonly type: 'bury'; readonly cards: readonly Card[] }
-  | { readonly type: 'play'; readonly cards: readonly Card[] };
+  | { readonly type: 'play'; readonly cards: readonly Card[] }
+  /** 认赢（ADR-0028）：只说「我要认」—— 末轮张数与成不成立都由引擎当场判 */
+  | { readonly type: 'claim' };
 
 export interface TablePayload extends StreamPayload {}
 

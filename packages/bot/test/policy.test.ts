@@ -65,7 +65,8 @@ function makeAuction(
     trick: null,
     trickHistory: [],
     captured: [[], [], []],
-    summary: null
+    summary: null,
+    claim: null
   };
   return personalView(game, seat);
 }
@@ -106,7 +107,8 @@ function makePlay(rig: PlayRig): PersonalView {
     trick: rig.trick ?? { leaderSeat: declarer, plays: [] },
     trickHistory: rig.history ? [...rig.history] : [],
     captured: [[], [], []],
-    summary: null
+    summary: null,
+    claim: null
   };
   return personalView(game, seat);
 }

@@ -225,6 +225,7 @@ function view(deal: Partial<NonNullable<PublicView['deal']>> | null): PublicView
             handCounts: [17, 17, 17],
             declarerSeat: null,
             summary: null,
+            claim: null,
             ...deal
           }
   };

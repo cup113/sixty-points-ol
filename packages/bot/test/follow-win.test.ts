@@ -68,7 +68,8 @@ function makeView(hand: readonly Card[], trump: TrumpModel, trick: Trick): Perso
     trick,
     trickHistory: [],
     captured: [[], [], []],
-    summary: null
+    summary: null,
+    claim: null
   };
   return personalView(game, 0);
 }

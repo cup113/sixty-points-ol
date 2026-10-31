@@ -72,7 +72,8 @@ const PUBLIC_DEAL_FIELDS = [
   'captured',
   'handCounts',
   'declarerSeat',
-  'summary'
+  'summary',
+  'claim'
 ].sort();
 
 function assert(condition: boolean, message: string): void {

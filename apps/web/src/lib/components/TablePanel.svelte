@@ -1,7 +1,9 @@
 <script lang="ts">
   import { invalidateAll } from '$app/navigation';
+  import { canWinTrickNow, cardKey } from '@sixty/engine';
   import { BOT_LIMIT } from '$lib/shared';
   import type { TableClient } from '$lib/client/table.svelte';
+  import CardView from './Card.svelte';
   import SeatActions from './SeatActions.svelte';
   import SeatCard from './SeatCard.svelte';
 
@@ -38,6 +40,11 @@
   let name = $state('');
   let credential = $state('');
   let done = $state<string | null>(null);
+  /**
+   * 认赢的**亮牌**（ADR-0028）：它一直公开到这一副结束，所以这里留一个**查阅**入口 ——
+   * 抽屉是查阅面，塞得下一整手牌；毡面上那几行放不下 17 张，硬塞就会压住出牌区。
+   */
+  let revealSeat = $state<number | null>(null);
 
   const view = $derived(client.view);
   const deal = $derived(view?.deal ?? null);
@@ -54,6 +61,26 @@
    */
   const botCount = $derived(seats.filter((seat) => seat.bot).length);
   const canBot = $derived(seated && botCount < BOT_LIMIT);
+
+  /**
+   * 认赢的入口（ADR-0028）：**低频、一步、要先想清楚**的行动，所以住在这一页，
+   * 不借托盘那格「清空」的位置（那里是高频的选牌动作）。
+   *
+   * 只按**我从自己手上看得见**的那条必要条件给入口：轮到我出牌、这一墩我压得住
+   * （认赢连当前这一墩一起收）。成不成立只有服务端知道 —— 它看得见另外两家剩下的牌，
+   * 所以不成立时它回一句人话（「剩下的牌你还赢不完全」），这里不替它猜。
+   *
+   * 不可发起时**整块静默消失**，不写「为什么没有」——那句话只会变成一条猜谜提示。
+   */
+  const canClaim = $derived(
+    deal !== null &&
+      deal.phase === 'play' &&
+      deal.trump !== null &&
+      deal.playTurn === mySeat &&
+      deal.claim === null &&
+      client.you !== null &&
+      canWinTrickNow(client.you.hand, deal.trick?.plays ?? [], deal.trump)
+  );
 
   const input =
     'min-w-0 flex-1 rounded-lg bg-black/50 px-2.5 py-1.5 text-xs outline-none ring-1 ring-white/15 transition focus:ring-gold';
@@ -91,42 +118,84 @@
 
 <div class="mt-3 space-y-1.5">
   {#each seats as seat (seat.seat)}
-    <div class="flex items-center gap-2">
-      <!-- 这一页的座位卡是**只读**的：位置在抽屉里、没有毡面的锚点语义，
-           所以一律走 `card` 形态（底栏那条 `bar` 是毡面「我」专用的） -->
-      <SeatCard
-        name={seat.name}
-        level={view?.levels[seat.seat] ?? null}
-        online={seat.online}
-        bot={seat.bot}
-        isMe={mySeat === seat.seat}
-        isDeclarer={deal?.declarerSeat === seat.seat}
-      />
-      <!-- 机器人动作就挂在这一行上：空座给「+ 机器人」、机器人座给「请离」。
-           两者都不是「牌局动作」，所以放在抽屉里不违反「动作面不进抽屉」（那一条指的是
-           叫品/埋底/出牌/结算 —— 改一次要点两步就太钝的那些）。 -->
-      {#if seat.userId === null && canBot}
-        <button
-          type="button"
-          class={ghost}
-          disabled={client.busy}
-          onclick={() => void client.addBot(seat.seat)}
-        >
-          + 机器人
-        </button>
-      {:else if seat.bot && seated}
-        <button
-          type="button"
-          class={ghost}
-          disabled={client.busy}
-          onclick={() => onRemoveBot?.(seat.seat)}
-        >
-          请离
-        </button>
+    <div class="space-y-1">
+      <div class="flex items-center gap-2">
+        <!-- 这一页的座位卡是**只读**的：位置在抽屉里、没有毡面的锚点语义，
+             所以一律走 `card` 形态（底栏那条 `bar` 是毡面「我」专用的） -->
+        <SeatCard
+          name={seat.name}
+          level={view?.levels[seat.seat] ?? null}
+          online={seat.online}
+          bot={seat.bot}
+          isMe={mySeat === seat.seat}
+          isDeclarer={deal?.declarerSeat === seat.seat}
+        />
+        <!-- 机器人动作就挂在这一行上：空座给「+ 机器人」、机器人座给「请离」。
+             两者都不是「牌局动作」，所以放在抽屉里不违反「动作面不进抽屉」（那一条指的是
+             叫品/埋底/出牌/结算 —— 改一次要点两步就太钝的那些）。 -->
+        {#if seat.userId === null && canBot}
+          <button
+            type="button"
+            class={ghost}
+            disabled={client.busy}
+            onclick={() => void client.addBot(seat.seat)}
+          >
+            + 机器人
+          </button>
+        {:else if seat.bot && seated}
+          <button
+            type="button"
+            class={ghost}
+            disabled={client.busy}
+            onclick={() => onRemoveBot?.(seat.seat)}
+          >
+            请离
+          </button>
+        {/if}
+      </div>
+
+      <!-- 亮牌：认赢者的整手牌**一直公开到这一副结束**（被拒也一样），所以这里一直挂着入口 ——
+           它只在有人认过赢的副出现，平时这一页与从前一模一样。 -->
+      {#if deal?.claim !== null && deal?.claim !== undefined && deal.claim.claimant === seat.seat && deal.claim.revealed.length > 0}
+        <div class="pl-1">
+          <button
+            type="button"
+            data-claim-reveal={seat.seat}
+            class="text-[11px] text-gold/80 hover:underline"
+            aria-expanded={revealSeat === seat.seat}
+            onclick={() => (revealSeat = revealSeat === seat.seat ? null : seat.seat)}
+          >
+            亮牌 · {deal.claim.revealed.length} 张 {revealSeat === seat.seat ? '收起' : '展开'}
+          </button>
+          {#if revealSeat === seat.seat}
+            <div class="mt-1 flex flex-wrap gap-1 rounded-lg bg-black/40 p-2">
+              {#each deal.claim.revealed as card (cardKey(card))}
+                <CardView {card} trump={deal.trump} size="sm" />
+              {/each}
+            </div>
+          {/if}
+        </div>
       {/if}
     </div>
   {/each}
 </div>
+
+<!-- 认赢（ADR-0028）：只有「轮到你、还没认过、这一墩你压得住」时才出现这一块；
+     其余时候整块静默 —— 不给必定失败的按钮，也不解释为什么没有。 -->
+{#if canClaim}
+  <div class="mt-3 flex items-center gap-3 border-t border-white/10 pt-3">
+    <button
+      type="button"
+      data-claim-open="true"
+      class="whitespace-nowrap rounded-lg border border-gold/50 bg-gold/15 px-3 py-1.5 text-xs font-bold text-gold transition enabled:hover:bg-gold/25 disabled:opacity-40"
+      disabled={client.busy}
+      onclick={() => void client.claim()}
+    >
+      剩下的都归我
+    </button>
+    <p class="text-[11px] leading-snug text-white/45">亮出全部手牌<br />这一副当场结算</p>
+  </div>
+{/if}
 
 <div class="mt-3">
   <SeatActions {client} onLeave={onLeave} />
