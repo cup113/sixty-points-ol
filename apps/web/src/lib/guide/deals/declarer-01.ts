@@ -572,6 +572,7 @@ export const DECLARER_01: GuideDealData = {
         },
         "levels": 2
       }
-    ]
+    ],
+    "claim": null
   }
 };

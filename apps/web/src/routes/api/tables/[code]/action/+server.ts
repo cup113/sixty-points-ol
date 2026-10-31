@@ -1,7 +1,6 @@
 import { error, json } from '@sveltejs/kit';
-import type { Action } from '@sixty/engine';
 import { requireIdentity } from '$lib/server/auth';
-import { applyTableAction, isCallShape, isCardShape } from '$lib/server/tables';
+import { applyTableAction, isCallShape, isCardShape, type TableAction } from '$lib/server/tables';
 import type { RequestHandler } from './$types';
 
 interface Body {
@@ -9,11 +8,13 @@ interface Body {
     type?: unknown;
     call?: unknown;
     cards?: unknown;
+    lastTrick?: unknown;
+    agree?: unknown;
   };
 }
 
 /** 座位号不接受客户端输入：由服务端按身份推导 */
-function toAction(body: Body): Action {
+function toAction(body: Body): TableAction {
   const raw = body.action;
   if (!raw || typeof raw.type !== 'string') error(400, '缺少动作');
   switch (raw.type) {
@@ -34,6 +35,15 @@ function toAction(body: Body): Action {
         error(400, '出牌必须是非空的合法牌');
       }
       return { type: 'play', seat: 0, cards: raw.cards };
+    // 认赢：截止时刻由服务端盖（`applyTableAction`），这里只收「末轮张数」
+    case 'claim':
+      if (typeof raw.lastTrick !== 'number' || !Number.isInteger(raw.lastTrick)) {
+        error(400, '末轮张数必须是整数');
+      }
+      return { type: 'claim', seat: 0, lastTrick: raw.lastTrick };
+    case 'claimAnswer':
+      if (typeof raw.agree !== 'boolean') error(400, '表态必须是同意或不同意');
+      return { type: 'claimAnswer', seat: 0, agree: raw.agree };
     default:
       error(400, '未知动作');
   }

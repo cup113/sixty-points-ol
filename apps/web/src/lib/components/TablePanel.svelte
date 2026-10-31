@@ -1,7 +1,9 @@
 <script lang="ts">
   import { invalidateAll } from '$app/navigation';
+  import { cardKey } from '@sixty/engine';
   import { BOT_LIMIT } from '$lib/shared';
   import type { TableClient } from '$lib/client/table.svelte';
+  import CardView from './Card.svelte';
   import SeatActions from './SeatActions.svelte';
   import SeatCard from './SeatCard.svelte';
 
@@ -38,6 +40,11 @@
   let name = $state('');
   let credential = $state('');
   let done = $state<string | null>(null);
+  /**
+   * 认赢的**亮牌**（ADR-0028）：它一直公开到这一副结束，所以这里留一个**查阅**入口 ——
+   * 抽屉是查阅面，塞得下一整手牌；毡面上那几行放不下 17 张，硬塞就会压住出牌区。
+   */
+  let revealSeat = $state<number | null>(null);
 
   const view = $derived(client.view);
   const deal = $derived(view?.deal ?? null);
@@ -91,38 +98,63 @@
 
 <div class="mt-3 space-y-1.5">
   {#each seats as seat (seat.seat)}
-    <div class="flex items-center gap-2">
-      <!-- 这一页的座位卡是**只读**的：位置在抽屉里、没有毡面的锚点语义，
-           所以一律走 `card` 形态（底栏那条 `bar` 是毡面「我」专用的） -->
-      <SeatCard
-        name={seat.name}
-        level={view?.levels[seat.seat] ?? null}
-        online={seat.online}
-        bot={seat.bot}
-        isMe={mySeat === seat.seat}
-        isDeclarer={deal?.declarerSeat === seat.seat}
-      />
-      <!-- 机器人动作就挂在这一行上：空座给「+ 机器人」、机器人座给「请离」。
-           两者都不是「牌局动作」，所以放在抽屉里不违反「动作面不进抽屉」（那一条指的是
-           叫品/埋底/出牌/结算 —— 改一次要点两步就太钝的那些）。 -->
-      {#if seat.userId === null && canBot}
-        <button
-          type="button"
-          class={ghost}
-          disabled={client.busy}
-          onclick={() => void client.addBot(seat.seat)}
-        >
-          + 机器人
-        </button>
-      {:else if seat.bot && seated}
-        <button
-          type="button"
-          class={ghost}
-          disabled={client.busy}
-          onclick={() => onRemoveBot?.(seat.seat)}
-        >
-          请离
-        </button>
+    <div class="space-y-1">
+      <div class="flex items-center gap-2">
+        <!-- 这一页的座位卡是**只读**的：位置在抽屉里、没有毡面的锚点语义，
+             所以一律走 `card` 形态（底栏那条 `bar` 是毡面「我」专用的） -->
+        <SeatCard
+          name={seat.name}
+          level={view?.levels[seat.seat] ?? null}
+          online={seat.online}
+          bot={seat.bot}
+          isMe={mySeat === seat.seat}
+          isDeclarer={deal?.declarerSeat === seat.seat}
+        />
+        <!-- 机器人动作就挂在这一行上：空座给「+ 机器人」、机器人座给「请离」。
+             两者都不是「牌局动作」，所以放在抽屉里不违反「动作面不进抽屉」（那一条指的是
+             叫品/埋底/出牌/结算 —— 改一次要点两步就太钝的那些）。 -->
+        {#if seat.userId === null && canBot}
+          <button
+            type="button"
+            class={ghost}
+            disabled={client.busy}
+            onclick={() => void client.addBot(seat.seat)}
+          >
+            + 机器人
+          </button>
+        {:else if seat.bot && seated}
+          <button
+            type="button"
+            class={ghost}
+            disabled={client.busy}
+            onclick={() => onRemoveBot?.(seat.seat)}
+          >
+            请离
+          </button>
+        {/if}
+      </div>
+
+      <!-- 亮牌：认赢者的整手牌**一直公开到这一副结束**（被拒也一样），所以这里一直挂着入口 ——
+           它只在有人认过赢的副出现，平时这一页与从前一模一样。 -->
+      {#if deal?.claim !== null && deal?.claim !== undefined && deal.claim.claimant === seat.seat && deal.claim.revealed.length > 0}
+        <div class="pl-1">
+          <button
+            type="button"
+            data-claim-reveal={seat.seat}
+            class="text-[11px] text-gold/80 hover:underline"
+            aria-expanded={revealSeat === seat.seat}
+            onclick={() => (revealSeat = revealSeat === seat.seat ? null : seat.seat)}
+          >
+            亮牌 · {deal.claim.revealed.length} 张 {revealSeat === seat.seat ? '收起' : '展开'}
+          </button>
+          {#if revealSeat === seat.seat}
+            <div class="mt-1 flex flex-wrap gap-1 rounded-lg bg-black/40 p-2">
+              {#each deal.claim.revealed as card (cardKey(card))}
+                <CardView {card} trump={deal.trump} size="sm" />
+              {/each}
+            </div>
+          {/if}
+        </div>
       {/if}
     </div>
   {/each}

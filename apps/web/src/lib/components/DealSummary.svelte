@@ -70,6 +70,15 @@
         >
       </div>
 
+      <!-- 认赢结束的一副（ADR-0028）：算式与升级表照旧，多一句「怎么结束的」——
+           它是这一副唯一的不同之处，不说的话 40 分与一场真打完的 40 分长得一模一样。 -->
+      {#if summary.claim}
+        <p class="mt-2 text-[11px] text-gold/80" data-summary-claim="true">
+          认赢 · {who(summary.claim.seat)} 剩余全收（{summary.claim.cards} 张）· 末轮
+          {summary.claim.lastTrick} 张
+        </p>
+      {/if}
+
       <!-- 算式、结论、升级表三块都住在**共用组件**里 —— 战报的每副卡用的是同一份
            （`ScoreEquation` / `VerdictBadge` / `LevelTable`），两处的读法因此不可能各走各的。 -->
       <div class="mt-5">
@@ -84,7 +93,13 @@
 
       <!-- 机器重演（ADR-0016）：结算那一刻服务端已算好落库，这里点开只是取存档。
            展开体复用上面那三件套，弹窗与战报的读法一致。 -->
-      <ReplayPanel dealNo={summary.dealNo} {replays} onOpen={(no) => onOpenReplay?.(no)} {who} />
+      <ReplayPanel
+        dealNo={summary.dealNo}
+        {replays}
+        onOpen={(no) => onOpenReplay?.(no)}
+        {who}
+        note={summary.claim ? '认赢结束的副没有重演（剩下的牌没有逐张归属）' : undefined}
+      />
 
       {#if finished && view.result}
         <div class="mt-3 rounded-lg border border-gold/50 bg-black/30 p-3">

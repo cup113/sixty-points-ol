@@ -233,6 +233,8 @@ function toAction(move: BotMove): Action {
       return { type: 'bury', seat: 0, cards: move.cards };
     case 'play':
       return { type: 'play', seat: 0, cards: move.cards };
+    case 'claimAnswer':
+      return { type: 'claimAnswer', seat: 0, agree: move.agree };
   }
 }
 

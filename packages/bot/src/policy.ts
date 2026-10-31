@@ -31,11 +31,13 @@ import {
   followMode,
   isJoker,
   leadInfo,
+  longestRun,
   MIN_BID,
   sortHand,
   STRAIN_RANK,
   STRAINS,
   SUITS,
+  topLevel,
   trickWinner,
   validateCall,
   type Bid,
@@ -54,7 +56,9 @@ import { extractChains, classCards, Sight } from './sight.ts';
 export type BotMove =
   | { readonly type: 'bid'; readonly call: BidCall }
   | { readonly type: 'bury'; readonly cards: readonly Card[] }
-  | { readonly type: 'play'; readonly cards: readonly Card[] };
+  | { readonly type: 'play'; readonly cards: readonly Card[] }
+  /** 对认赢表态（ADR-0028）：机器人从不发起认赢，但必须会投这一票 */
+  | { readonly type: 'claimAnswer'; readonly agree: boolean };
 
 /**
  * 机器人参数（ADR-0017）：策略的**唯一**外部输入。
@@ -262,6 +266,60 @@ export function partnerSeatOf(seat: Seat, deal: { readonly contract: Contract | 
   return rest.length === 1 ? rest[0]! : null;
 }
 
+/** 顶张所在的连续链长度：跟牌要凑出 n 张同门单段顺子才可能赢，光有一张大牌不够 */
+function topChainLength(holding: readonly Card[], t: TrumpModel): number {
+  const levels = [...new Set(holding.map((card) => cardLevel(card, t)))].sort((a, b) => a - b);
+  let len = 1;
+  for (let i = levels.length - 1; i > 0; i--) {
+    if (levels[i - 1] !== levels[i]! - 1) break;
+    len += 1;
+  }
+  return len;
+}
+
+/**
+ * 认赢的投票（ADR-0028）：「我还能不能从他手里拿下一墩？」
+ *
+ * 只用两样东西：**我自己的手牌** + **他亮出来的牌**（不偷看第三家、不搜索）。两处判据
+ * 都按「不论他领多大」来要求，因为领出张数由他挑：
+ * - **同门压顶**：我这一门的顶张比他大，且我的顶张所在顺子**不短于**他这一门最长的一条
+ *   （他领 n 张时我必须凑出 n 张同门单段顺子才可能赢；结构性跟牌赢不了）；
+ * - **缺门杀牌**：他某一门有牌、我一张都没有，而我的主牌顺子不短于他那一门最长的一条 ——
+ *   他迟早得领那一门，我一杀就赢。
+ *
+ * 两票合起来因此是一次真核对：两个对手都说「拿不下一墩」，他就真的一墩不失。
+ * 判不出就投同意（认输）—— 继续打也拿不到便宜，那是两条都是输的路里更省时的。
+ */
+export function claimVote(view: PublicView, you: PlayerSeat): boolean {
+  const deal = view.deal;
+  if (deal === null || deal.trump === null) return true;
+  const claim = deal.claim;
+  if (claim === null || claim.status !== 'pending') return true;
+
+  const t = deal.trump;
+  const mine = you.hand;
+  const his = claim.revealed;
+
+  for (const cls of ['T', ...SUITS] as const) {
+    const myClass = mine.filter((card) => cardClass(card, t) === cls);
+    const hisClass = his.filter((card) => cardClass(card, t) === cls);
+    if (myClass.length === 0 || hisClass.length === 0) continue;
+    if (topLevel(myClass, t) > topLevel(hisClass, t) && topChainLength(myClass, t) >= longestRun(hisClass, t)) {
+      return false;
+    }
+  }
+
+  const myTrumps = mine.filter((card) => cardClass(card, t) === 'T');
+  for (const cls of SUITS) {
+    const hisClass = his.filter((card) => cardClass(card, t) === cls);
+    const myClass = mine.filter((card) => cardClass(card, t) === cls);
+    if (hisClass.length === 0 || myClass.length > 0) continue;
+    if (longestRun(myTrumps, t) >= longestRun(hisClass, t)) return false;
+  }
+
+  return true;
+}
+
 /**
  * 当前这一步该做什么：轮不到机器人（或没牌局）返回 null。
  * 驱动器在**每次状态变更后**调它；机器人从不发起 `deal` / `newGame` ——
@@ -275,6 +333,12 @@ export function moveFor(
   if (view === null || you === null || view.status === 'finished') return null;
   const deal = view.deal;
   if (deal === null) return null;
+  // 认赢待表决：只有还没投票的对手能动（认赢者自己等结果；牌局整体冻结）
+  const claim = deal.claim;
+  if (claim !== null && claim.status === 'pending') {
+    if (claim.claimant === you.seat || claim.answers[you.seat] !== null) return null;
+    return { type: 'claimAnswer', agree: claimVote(view, you) };
+  }
   if (deal.phase === 'auction' && deal.auctionTurn === you.seat) {
     return { type: 'bid', call: bidFor(view, you, params) };
   }

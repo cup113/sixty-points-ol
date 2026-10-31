@@ -48,6 +48,11 @@ export interface TableView {
    * 它是浏览器侧的「距上一步」计时用的，工具面不消费（`project.ts` 的白名单不取它）。
    */
   readonly actionAgeMs: number | null;
+  /**
+   * 认赢待表决的剩余毫秒（没有进行中的认赢为 `null`）。
+   * 与 `actionAgeMs` 同一条口径：传时长不传时刻；工具面不消费它（`turn` 自己给「该不该表态」）。
+   */
+  readonly claimMsLeft: number | null;
 }
 
 /**
@@ -92,7 +97,8 @@ export const TABLE_FIELDS: readonly (keyof TableView)[] = [
   'seatedCount',
   'ready',
   'spectatorCount',
-  'actionAgeMs'
+  'actionAgeMs',
+  'claimMsLeft'
 ];
 export const VIEW_FIELDS: readonly (keyof PublicView)[] = [
   'version',

@@ -235,6 +235,19 @@ export class TableClient {
     return this.send({ type: 'play', cards: this.selectedCards });
   }
 
+  /**
+   * 认赢（ADR-0028）：`lastTrick` 是宣称的末轮张数（1..手上最长顺子）。
+   * 亮牌与截止时刻都由服务端补，这里只发这个数。
+   */
+  claim(lastTrick: number): Promise<boolean> {
+    return this.send({ type: 'claim', lastTrick });
+  }
+
+  /** 对认赢表态：true = 认输（这一副立刻按「剩余全收」结算），false = 不认（继续打） */
+  answerClaim(agree: boolean): Promise<boolean> {
+    return this.send({ type: 'claimAnswer', agree });
+  }
+
   deal(): Promise<boolean> {
     return this.send({ type: 'deal' });
   }

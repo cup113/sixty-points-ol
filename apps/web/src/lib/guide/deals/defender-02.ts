@@ -592,6 +592,7 @@ export const DEFENDER_02: GuideDealData = {
         },
         "levels": 1
       }
-    ]
+    ],
+    "claim": null
   }
 };

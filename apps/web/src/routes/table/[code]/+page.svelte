@@ -11,6 +11,7 @@
   import BidPanel from '$lib/components/BidPanel.svelte';
   import BotRemoveConfirm from '$lib/components/BotRemoveConfirm.svelte';
   import BuryPanel from '$lib/components/BuryPanel.svelte';
+  import ClaimPanel from '$lib/components/ClaimPanel.svelte';
   import DealSummary from '$lib/components/DealSummary.svelte';
   import HandFan from '$lib/components/HandFan.svelte';
   import InviteCode from '$lib/components/InviteCode.svelte';
@@ -447,6 +448,9 @@
           <BidPanel {client} />
         {:else}
           <TrickArea {view} seat={anchor} mySeat={label} {names} />
+          <!-- 认赢待表决（ADR-0028）：盖住内容槽的那一块。牌局这时是冻结的，
+               所以它压住的「当前墩」本来也不会变；30 秒封顶。 -->
+          <ClaimPanel {client} />
           <!-- 第二拍亮底牌（ADR-0022）：与出牌区**同层**、整块让开点击，
                于是末墩还看得见、底牌摊在正中间，两样东西不会互相盖住
                （相交面积由 shot-auction.ts 的 ⑱ 实测）。 -->

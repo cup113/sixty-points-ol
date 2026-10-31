@@ -85,7 +85,8 @@ function viewWithAuction(auction: readonly BidEntry[]): PersonalView {
       captured: [],
       handCounts: [17, 17, 17],
       declarerSeat: null,
-      summary: null
+      summary: null,
+      claim: null
     },
     // 两批底牌都属于玩家私有，挂在 you 上（`deal` 是观战者也拿得到的公共投影）
     you: { seat: 0, hand: [], isDeclarer: false, originalKitty: null, buriedKitty: null }
@@ -565,6 +566,7 @@ function summaryOf(overrides: Partial<DealSummary> = {}): DealSummary {
     made: false,
     shortfall: 5,
     levelChanges: [],
+    claim: null,
     ...overrides
   };
 }

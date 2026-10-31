@@ -4,6 +4,7 @@ import {
   BID_STEP,
   checkPlay,
   HELP_KEYS,
+  longestRun,
   MIN_BID,
   phaseHelp,
   playHint,
@@ -112,6 +113,8 @@ export interface TurnSummary {
   readonly legalBids?: readonly string[] | undefined;
   /** 轮到你在出牌：跟牌/领出的**约束**（不复述手牌，模型自己手上有 you.hand） */
   readonly legalPlay?: PlayHint | undefined;
+  /** 轮到你出牌：认赢能报的最大末轮张数（1..手上最长顺子），直接喂给 declare_win.last_trick */
+  readonly claimMax?: number | undefined;
 }
 
 /**
@@ -146,6 +149,21 @@ export function turnOf(role: Role, view: StreamPayload['view'], you: PlayerSeat 
   }
 
   const deal = view.deal;
+  // 认赢待表决：引擎这时没有「轮到谁出牌」（playTurn 为 null），能动的只有那两名对手。
+  // 亮牌在 deal.claim.revealed 里（它一直公开到换副，被拒也一样）。
+  const claim = deal.claim;
+  if (claim !== null && claim.status === 'pending') {
+    if (claim.claimant === you.seat) {
+      return { canAct: false, hint: '你在认赢：等两名对手在 30 秒内表态（都认输就立刻结算）。' };
+    }
+    if (claim.answers[you.seat] === null) {
+      return {
+        canAct: true,
+        hint: '有人认赢：看 deal.claim.revealed（他的亮牌），用 answer_win 表态 —— 同意＝认输，这一副立刻按「剩余全收」结算。'
+      };
+    }
+    return { canAct: false, hint: '你已经表过态：等另一名对手（或 30 秒窗口到点）。' };
+  }
   switch (deal.phase) {
     case 'auction': {
       const mine = deal.auctionTurn === you.seat;
@@ -214,7 +232,7 @@ function flatCalls(rows: readonly BidOption[]): string[] {
  * 每回合多探 3 次就把一副牌的总投喂量抬到 2.8 倍、多探 17 次抬到 16 倍。约束只有几行，
  * 而探测是整个回合 —— 所以合法性由状态直接给，`check_play` 只留作一次验多组的兜底。
  */
-function legalOf(payload: StreamPayload): Pick<TurnSummary, 'legalBids' | 'legalPlay'> {
+function legalOf(payload: StreamPayload): Pick<TurnSummary, 'legalBids' | 'legalPlay' | 'claimMax'> {
   const { role, view, you } = payload;
   if (role !== 'player' || view === null || you === null || view.status === 'finished') return {};
   const deal = view.deal;
@@ -225,7 +243,7 @@ function legalOf(payload: StreamPayload): Pick<TurnSummary, 'legalBids' | 'legal
   }
   if (deal.phase === 'play' && deal.playTurn === you.seat && deal.trump !== null) {
     const lead = deal.trick !== null && deal.trick.plays.length > 0 ? deal.trick.plays[0]!.cards : null;
-    return { legalPlay: playHint(you.hand, deal.trump, lead) };
+    return { legalPlay: playHint(you.hand, deal.trump, lead), claimMax: longestRun(you.hand, deal.trump) };
   }
   return {};
 }
@@ -499,6 +517,20 @@ export const TOOLS: readonly ToolSpec[] = [
       '出牌：cards 是这次要出的 1 张或多张牌码（多张必须同门顺子/结构优先）；牌码直接取 get_state 里 you.hand 的原样元素。',
     input: { ...codeField, cards: z.array(CardCode).min(1), wait: WAIT_FIELD },
     run: (rt, args) => act(rt, args['code'], { type: 'play', cards: cardsOf(args['cards'] as string[], 'cards') }, args['wait'])
+  },
+  {
+    name: 'declare_win',
+    description:
+      '认赢（轮到你出牌时）：亮出你全部手牌，宣称剩下的每一墩都归你，last_trick 报末轮张数（1..turn.claimMax，决定底牌倍数）。两名对手都在 30 秒内认输，本副立刻按「剩余全收」结算；有人不认就继续打 —— 而你的牌**仍然公开到换副**。',
+    input: { ...codeField, last_trick: z.number().int().min(1), wait: WAIT_FIELD },
+    run: (rt, args) => act(rt, args['code'], { type: 'claim', lastTrick: args['last_trick'] as number }, args['wait'])
+  },
+  {
+    name: 'answer_win',
+    description:
+      '对认赢表态：agree=true 是认输（本副立刻按「剩余全收」结算），false 是不认（继续打，他的亮牌一直公开到换副）。',
+    input: { ...codeField, agree: z.boolean(), wait: WAIT_FIELD },
+    run: (rt, args) => act(rt, args['code'], { type: 'claimAnswer', agree: args['agree'] as boolean }, args['wait'])
   },
   {
     name: 'deal',

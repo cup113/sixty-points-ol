@@ -101,6 +101,22 @@ export type CompactSummary = Omit<DealSummary, 'kitty' | 'originalKitty'> & {
   readonly originalKitty: readonly string[];
 };
 
+/**
+ * 认赢的公共面（ADR-0028），与 `ClaimView` 同义，只是牌换成紧凑码。
+ *
+ * 它**每一帧都跟着 `deal` 走**，不像叫牌历史那样成交即丢：亮出去的牌是被拒之后
+ * 仍然公开的信息，模型要靠它把这一副打完；省掉它等于让工具面比浏览器少看一手牌。
+ */
+export interface CompactClaim {
+  readonly claimant: Seat;
+  readonly lastTrick: number;
+  readonly revealed: readonly string[];
+  /** 按座位：`null` = 还没投（认赢者自己恒为 `null`）；工具面靠 `turn` 说「该不该你表态」 */
+  readonly answers: readonly (boolean | null)[];
+  readonly status: 'pending' | 'rejected' | 'settled';
+  readonly rejectedBy: Seat | null;
+}
+
 export interface CompactDeal {
   readonly phase: DealPhase;
   readonly dealNo: number;
@@ -109,6 +125,14 @@ export interface CompactDeal {
   readonly auctionTurn: Seat;
   readonly playTurn: Seat | null;
   readonly declarerSeat: Seat | null;
+  /**
+   * 只在有人认过赢的副出现（ADR-0028）：认赢者、他宣称的末轮张数、**亮牌**与两票。
+   *
+   * 与叫牌历史同一类**阶段门控**：绝大多数副里它一格都不占（`claim` 连键都不出现），
+   * 只有真的发生了才跟着 `deal` 走 —— 而一旦发生，它就**必须每帧都在**：
+   * 被拒之后亮牌仍然公开到换副，模型要靠它把这一副打完。
+   */
+  readonly claim?: CompactClaim | undefined;
   /**
    * 仅叫牌阶段：已发生的叫牌。
    *
@@ -193,6 +217,8 @@ export const COMPACT_DEAL_FIELDS: readonly (keyof CompactDeal)[] = [
   'handCounts',
   'summary'
 ];
+/** 认赢发生时才多出来的那一个（阶段门控，同 `auction` 那组） */
+export const COMPACT_DEAL_CLAIM_FIELD = 'claim' as const;
 /** 叫牌阶段多出来的三个（成交后由 `contract` / `declarerSeat` 带走） */
 export const COMPACT_DEAL_AUCTION_FIELDS: readonly (keyof CompactDeal)[] = [
   'dealerSeat',
@@ -215,7 +241,8 @@ export const COMPACT_SUMMARY_FIELDS: readonly (keyof CompactSummary)[] = [
   'finalScore',
   'made',
   'shortfall',
-  'levelChanges'
+  'levelChanges',
+  'claim'
 ];
 export const COMPACT_TRICK_FIELDS: readonly (keyof CompactCompletedTrick)[] = ['winner', 'points', 'plays'];
 
@@ -239,6 +266,17 @@ export function projectTrick(trick: NonNullable<PublicDealView['trick']>): Compa
   return { leaderSeat: trick.leaderSeat, plays: trick.plays.map(encodePlay) };
 }
 
+function projectClaim(claim: NonNullable<PublicDealView['claim']>): CompactClaim {
+  return {
+    claimant: claim.claimant,
+    lastTrick: claim.lastTrick,
+    revealed: claim.revealed.map(encodeCard),
+    answers: [...claim.answers],
+    status: claim.status,
+    rejectedBy: claim.rejectedBy
+  };
+}
+
 export function projectDeal(deal: PublicDealView): CompactDeal {
   const base: CompactDeal = {
     phase: deal.phase,
@@ -254,15 +292,17 @@ export function projectDeal(deal: PublicDealView): CompactDeal {
     handCounts: [...deal.handCounts],
     summary: deal.summary === null ? null : projectSummary(deal.summary)
   };
+  // 认赢发生过才给这一段（其余情况连键都不出现，不为一个罕见状态每帧付税）
+  const withClaim: CompactDeal = deal.claim === null ? base : { ...base, claim: projectClaim(deal.claim) };
   // 叫牌阶段才给「正在叫的那点事」：轮转起点、已发生的叫牌、当前最高叫品
   return deal.phase === 'auction'
     ? {
-        ...base,
+        ...withClaim,
         dealerSeat: deal.dealerSeat,
         auction: deal.auction.map((entry) => ({ seat: entry.seat, call: encodeCall(entry.call) })),
         highestBid: deal.highestBid === null ? null : encodeCall(deal.highestBid)
       }
-    : base;
+    : withClaim;
 }
 
 function projectYou(you: PlayerSeat): CompactYou {

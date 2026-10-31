@@ -13,7 +13,11 @@ export type SeatlessAction =
   | { readonly type: 'newGame' }
   | { readonly type: 'bid'; readonly call: BidCall }
   | { readonly type: 'bury'; readonly cards: readonly Card[] }
-  | { readonly type: 'play'; readonly cards: readonly Card[] };
+  | { readonly type: 'play'; readonly cards: readonly Card[] }
+  /** 认赢（ADR-0028）：只报末轮张数，截止时刻由服务端盖 */
+  | { readonly type: 'claim'; readonly lastTrick: number }
+  /** 对认赢表态：true = 认输（这一副立刻按「剩余全收」结算） */
+  | { readonly type: 'claimAnswer'; readonly agree: boolean };
 
 export interface TablePayload extends StreamPayload {}
 

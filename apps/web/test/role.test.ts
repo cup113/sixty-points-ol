@@ -75,7 +75,8 @@ const PUBLIC_DEAL_FIELDS = [
   'captured',
   'handCounts',
   'declarerSeat',
-  'summary'
+  'summary',
+  'claim'
 ].sort();
 
 test('到达规则：在座→玩家；有观战记录→观战；有空座→自动入座；满座→观战', () => {

@@ -104,6 +104,11 @@
           <p class="text-white/80">
             第 {deal.dealNo} 副 · {contractText(deal)} · 庄家 {who(deal.contract.declarerSeat)}
           </p>
+          {#if deal.claim}
+            <p class="mt-1 text-[11px] text-gold/80">
+              认赢 · {who(deal.claim.seat)} 剩余全收 · 末轮 {deal.claim.lastTrick} 张
+            </p>
+          {/if}
           <div class="mt-3">
             <ScoreEquation summary={deal} compact />
           </div>
@@ -113,7 +118,13 @@
               <LevelTable rows={changedLevelRows(deal)} {who} />
             </div>
           {/if}
-          <ReplayPanel dealNo={deal.dealNo} {replays} onOpen={(no) => onOpenReplay?.(no)} {who} />
+          <ReplayPanel
+            dealNo={deal.dealNo}
+            {replays}
+            onOpen={(no) => onOpenReplay?.(no)}
+            {who}
+            note={deal.claim ? '认赢结束的副没有重演（剩下的牌没有逐张归属）' : undefined}
+          />
         </div>
       {/each}
     </div>

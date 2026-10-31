@@ -39,7 +39,9 @@ export function fakeTableView(code = 'ABC123', online = true, spectatorCount = 0
     ready: true,
     spectatorCount,
     // 「距上一步」的年龄：工具面不消费它，测试固定一个值即可（形状与真实响应一致）
-    actionAgeMs: 0
+    actionAgeMs: 0,
+    // 没有进行中的认赢：工具面不消费它（`turn` 自己说该不该表态）
+    claimMsLeft: null
   };
 }
 
@@ -248,9 +250,11 @@ export class FakeApi implements GameApi {
       state = createGame(0);
     }
     const serverAction: Action =
-      action.type === 'bid' || action.type === 'bury' || action.type === 'play'
-        ? { ...action, seat: this.seat }
-        : action;
+      action.type === 'claim'
+        ? { ...action, seat: this.seat, expiresAt: Date.now() + 30_000 }
+        : action.type === 'bid' || action.type === 'bury' || action.type === 'play' || action.type === 'claimAnswer'
+          ? { ...action, seat: this.seat }
+          : action;
     this.state = must(dispatch(state, serverAction, rng));
   }
 

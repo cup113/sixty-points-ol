@@ -193,6 +193,9 @@ function withSeat(move: BotMove, seat: Seat): Action {
       return { type: 'bury', seat, cards: move.cards };
     case 'play':
       return { type: 'play', seat, cards: move.cards };
+    case 'claimAnswer':
+      // 竞技场只驱动叫牌/埋底/出牌，永远不会有认赢在进行；留着是为了让类型穷尽
+      return { type: 'claimAnswer', seat, agree: move.agree };
   }
 }
 

@@ -136,6 +136,30 @@ export function isRun(cards: readonly Card[], t: TrumpModel): boolean {
   return segments(cards, t).length === 1;
 }
 
+/**
+ * 手牌里最长的一条顺子（单张时恒为 1）。
+ *
+ * **认赢**（ADR-0028）用它当末轮张数的上限：领出多张必须是同门严格相邻的顺子
+ * （`validateLead`），所以「末轮按 x 张收尾」在牌面上的硬约束就是「手上真有一条 x 张的顺子」。
+ * 这是**必要条件**，不是充分条件 —— 那条顺子留不留得到末轮，只有牌手自己判断。
+ * 必须**先按门分组**再取段：`segments` 只看层号，跨门的两张牌（如 ♣2 与 ♦3）层号相邻，
+ * 混在一起会被误判成顺子。
+ */
+export function longestRun(cards: readonly Card[], t: TrumpModel): number {
+  let best = 1;
+  const byClass = new Map<CardClass, Card[]>();
+  for (const card of cards) {
+    const cls = cardClass(card, t);
+    const bucket = byClass.get(cls);
+    if (bucket) bucket.push(card);
+    else byClass.set(cls, [card]);
+  }
+  for (const holding of byClass.values()) {
+    for (const len of segments(holding, t)) best = Math.max(best, len);
+  }
+  return best;
+}
+
 /** 顶张层号（用于比较同长度单段顺子） */
 export function topLevel(cards: readonly Card[], t: TrumpModel): number {
   return cards.reduce((max, c) => Math.max(max, cardLevel(c, t)), -1);

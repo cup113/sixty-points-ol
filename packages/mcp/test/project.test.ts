@@ -13,10 +13,19 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-import { isJoker, personalView, publicView, type Card, type GameState, type PlayerSeat } from '@sixty/engine';
+import {
+  dispatch,
+  isJoker,
+  personalView,
+  publicView,
+  type Card,
+  type GameState,
+  type PlayerSeat
+} from '@sixty/engine';
 import { decodeCard, encodeCard } from '../src/codec.ts';
 import {
   COMPACT_DEAL_AUCTION_FIELDS,
+  COMPACT_DEAL_CLAIM_FIELD,
   COMPACT_DEAL_FIELDS,
   COMPACT_SUMMARY_FIELDS,
   COMPACT_TRICK_FIELDS,
@@ -37,6 +46,12 @@ const expected = (fields: readonly string[]): string => [...fields].sort().join(
 const AUCTION_STATE = dealtState();
 const PLAY_STATE = playingState();
 const SCORED_STATE = scoredState();
+/** 出牌阶段刚发起认赢（座位 0 领出，正轮到他） */
+const CLAIM_STATE = (() => {
+  const result = dispatch(PLAY_STATE, { type: 'claim', seat: 0, lastTrick: 1, expiresAt: 1 }, () => 0.5);
+  assert.ok(result.ok, result.ok ? '' : result.message);
+  return result.state;
+})();
 
 function compactOfState(state: GameState, youSeat: PlayerSeat['seat'] | null = 0): CompactPayload {
   return project(
@@ -90,6 +105,27 @@ test('投影后的字段清单与声明逐字一致（多一个少一个都算�
   assert.equal(keysOf(scored.view!.deal!), expected(COMPACT_DEAL_FIELDS), 'CompactDeal（结算帧）');
   assert.equal(keysOf(scored.view!.deal!.summary!), expected(COMPACT_SUMMARY_FIELDS), 'CompactSummary');
   assert.equal(keysOf(scored.you!), expected(COMPACT_YOU_FIELDS), 'CompactYou');
+});
+
+test('认赢帧：亮牌与两票只在发生过的副出现，观战者拿到同一份', () => {
+  // 没认过赢的副连键都不多占一格（阶段门控，同叫牌那三个字段）
+  assert.equal(COMPACT_DEAL_CLAIM_FIELD in compactOfState(PLAY_STATE).view!.deal!, false);
+
+  const compact = compactOfState(CLAIM_STATE);
+  assert.equal(
+    keysOf(compact.view!.deal!),
+    expected([...COMPACT_DEAL_FIELDS, COMPACT_DEAL_CLAIM_FIELD]),
+    'CompactDeal（认赢帧）'
+  );
+  const claim = compact.view!.deal!.claim!;
+  assert.equal(claim.claimant, 0);
+  assert.equal(claim.status, 'pending');
+  assert.deepEqual(claim.answers, [null, null, null]);
+  // 亮牌就是认赢者那一刻的手牌（显示序同一份），观战者也看得到
+  assert.deepEqual(claim.revealed, personalView(CLAIM_STATE, 0).you.hand.map(encodeCard));
+  const watched = compactOfState(CLAIM_STATE, null);
+  assert.equal(watched.role, 'spectator');
+  assert.deepEqual(watched.view!.deal!.claim!.revealed, claim.revealed);
 });
 
 test('末墩规则：trickHistory 恰好留一项，且就是服务器那份的最后一项', () => {
