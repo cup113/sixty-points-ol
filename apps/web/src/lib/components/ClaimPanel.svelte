@@ -77,8 +77,10 @@
       <b class="tabular-nums text-ivory">{remaining}</b> 张全收
     </p>
 
-    <!-- 亮牌：紧凑码不是给人看的，所以这里按牌面画（`size="sm"`，17 张也就三行） -->
-    <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+    <!-- 亮牌：紧凑码不是给人看的，所以这里按牌面画（`size="sm"`，17 张也就三行）。
+         `data-claim-revealed` 是量它用的钩子：17 张在 320px 上必须能滚，而不是被挤成一条缝
+         （判据在 shot-auction.ts 的 ⑳）。 -->
+    <div data-claim-revealed="true" class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
       <div class="flex flex-wrap gap-1">
         {#each claim.revealed as card (cardKey(card))}
           <CardView {card} {trump} size="sm" />

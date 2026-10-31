@@ -329,6 +329,16 @@ interface Shot {
    */
   readonly social?: boolean;
   /**
+   * 把这一副推到「**认赢待表决**」再拍（见 `driveClaim`）：庄家埋完底立刻认领，而这一桌
+   * 三个座位都是凭据真人（`setupTable` 从不放机器人）—— **没有人会来投票**，所以面板会
+   * 一直挂着，量到的不是一闪而过的那一帧。
+   *
+   * 它守的是 ADR-0028 唯一没被任何守卫量过的那块：面板铺满内容槽、不压手牌 / 托盘 /
+   * 「我」底栏、两枚表决按钮真的点得到、17 张亮牌在 320px 上能滚而不是被裁死。
+   * 必须拍**对手**那一页（`captureIndex` ≠ 0），否则面板上只有「等两名对手表态」。
+   */
+  readonly claim?: 'pending';
+  /**
    * 把局面推到「一墩已经打了几张」再拍（见 driveTrick，用来量出牌点与托盘）。
    *
    * - `'three-clusters'`：三家都出过牌 ⇒ 引擎已收墩、`trick` 复位，出牌区改显示上一墩，
@@ -536,6 +546,33 @@ const SHOTS: readonly Shot[] = [
     social: true,
     mode: 'viewport',
     size: MOBILE
+  },
+  {
+    file: '18-claim-panel-mobile',
+    label:
+      '认赢待表决（手机 390px）：面板正好铺满内容槽、不压手牌与托盘，两枚表决按钮点得到，17 张亮牌可滚',
+    ...sceneFor(1, [{ points: 40, strain: 'C' }, 'pass', 'pass']),
+    claim: 'pending',
+    mode: 'viewport',
+    size: MOBILE
+  },
+  {
+    file: '19-claim-panel-320',
+    label:
+      '同一局面在最窄机型 320px：亮牌不被挤成一条缝、两枚按钮仍在面板内且不出视口',
+    ...sceneFor(1, [{ points: 40, strain: 'C' }, 'pass', 'pass']),
+    claim: 'pending',
+    mode: 'viewport',
+    size: MOBILE_MIN
+  },
+  {
+    file: '20-claim-panel-desktop',
+    label:
+      '桌面宽度下的同一块：面板仍只覆盖内容槽，座位卡 / 信息须 / 「我」底栏原样可见',
+    ...sceneFor(1, [{ points: 40, strain: 'C' }, 'pass', 'pass']),
+    claim: 'pending',
+    mode: 'viewport',
+    size: DESKTOP
   }
 ];
 
@@ -780,6 +817,22 @@ interface Measurement {
    * 在圆里临时插一个 `888` 的探针（`position:absolute; left:-9999px`，不影响版面）。
    * `doubleSizePx` 是同一串数字在两倍字号下的宽度 —— 尺子是否真的按字号在量，靠它证。
    */
+  /**
+   * 认赢面板（ADR-0028）挂在内容槽里那一块：只有认赢场景才有值。
+   *
+   * `parent` 是它的**包含块**（内容槽那一行）：面板是 `absolute inset-0`，所以两块必须
+   * 严丝合缝 —— 只量它「没压住手牌」是不够的，它压不住手牌也可能是因为整块跑到整屏上去了。
+   * `buttons[].clickable` 是中心点上的最上层元素是不是按钮自己（`backdrop-blur` 或
+   * 兄弟层盖住按钮时它为 false：看得见、点不到）。
+   */
+  readonly claim: {
+    readonly rect: Rect;
+    readonly parent: Rect | null;
+    readonly parentTag: string;
+    readonly buttons: readonly { readonly kind: string; readonly rect: Rect; readonly clickable: boolean }[];
+    readonly cards: number;
+    readonly revealed: { readonly client: number; readonly scroll: number } | null;
+  } | null;
   readonly clock: {
     /** 当下的档位（`data-clock-tone`：plain | long | stale） */
     readonly tone: string;
@@ -868,6 +921,31 @@ const MEASURE = `(() => {
         })()
       };
     }),
+    claim: (() => {
+      const el = document.querySelector('[data-claim-panel="true"]');
+      if (el === null) return null;
+      const parent = el.parentElement;
+      const revealed = el.querySelector('[data-claim-revealed="true"]');
+      return {
+        rect: rect(el),
+        parent: parent === null ? null : rect(parent),
+        parentTag: parent === null ? '' : parent.tagName.toLowerCase(),
+        buttons: [...el.querySelectorAll('[data-claim-answer]')].map((button) => {
+          const box = button.getBoundingClientRect();
+          const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+          return {
+            kind: button.getAttribute('data-claim-answer') ?? '',
+            rect: rect(button),
+            clickable: hit !== null && button.contains(hit)
+          };
+        }),
+        cards: el.querySelectorAll('.card').length,
+        revealed:
+          revealed === null
+            ? null
+            : { client: revealed.clientHeight, scroll: revealed.scrollHeight }
+      };
+    })(),
     clock: (() => {
       const face = document.querySelector('[data-clock-face="true"]');
       if (face === null) return null;
@@ -1405,6 +1483,70 @@ function assertLayout(
     }
   }
 
+  // ⑳ 认赢面板（ADR-0028）：只活在认赢场景里 —— 它铺满内容槽、不碰手牌/托盘/底栏，
+  //    两枚表决按钮真的点得到，17 张亮牌不被挤成一条缝。
+  let claimNote = '；认赢面板 —';
+  if (m.claim !== null) {
+    const claim = m.claim;
+    const parentDelta =
+      claim.parent === null
+        ? Number.POSITIVE_INFINITY
+        : Math.max(
+            Math.abs(claim.parent.x - claim.rect.x),
+            Math.abs(claim.parent.y - claim.rect.y),
+            Math.abs(claim.parent.width - claim.rect.width),
+            Math.abs(claim.parent.height - claim.rect.height)
+          );
+    if (parentDelta > 1.5) {
+      fail(
+        `认赢面板没有正好铺满内容槽（位移 ${parentDelta.toFixed(1)}px，父节点 <${claim.parentTag}>）：` +
+          '`absolute inset-0` 的包含块一旦跑掉（例如改成整屏那层），它就会盖住手牌与托盘'
+      );
+    }
+    for (const [name, box] of [
+      ['操作条那一行', m.actionRow],
+      ['动作托盘', m.tray],
+      ['「我」底栏', m.seatBar]
+    ] as const) {
+      const area = box === null ? 0 : overlapArea(claim.rect, box);
+      if (area > 4) {
+        fail(
+          `认赢面板压住了${name}（相交 ${area.toFixed(0)}px²）：认领期间牌局冻结，` +
+            '但手牌与托盘必须一直看得见、点得到'
+        );
+      }
+    }
+    if (claim.buttons.length !== 2) {
+      fail(`认赢面板给了 ${claim.buttons.length} 枚表决按钮（应为「认输 / 不认」两枚）`);
+    }
+    for (const button of claim.buttons) {
+      const label = button.kind === 'agree' ? '认输' : '不认';
+      if (!button.clickable) {
+        fail(`认赢的「${label}」按钮点不到（中心点命中的不是它自己）：看得见、点不动`);
+      }
+      if (!contains(claim.rect, button.rect)) {
+        fail(`认赢的「${label}」按钮跑到面板外面（${boxOf(button.rect)} / 面板 ${boxOf(claim.rect)}）`);
+      }
+    }
+    if (claim.cards === 0) fail('认赢面板里一张亮牌都没有');
+    if (
+      claim.revealed !== null &&
+      claim.revealed.client < 40 &&
+      claim.revealed.scroll > claim.revealed.client + 1
+    ) {
+      fail(
+        `亮牌区只剩 ${claim.revealed.client.toFixed(0)}px 高（内容 ${claim.revealed.scroll.toFixed(0)}px）：` +
+          '亮牌被挤成一条缝，对手看不清他报的那手牌'
+      );
+    }
+    if (claim.rect.x < -0.5 || claim.rect.right > viewportWidth + 0.5) {
+      fail(`认赢面板越出视口（${boxOf(claim.rect)}，视口宽 ${viewportWidth}px）`);
+    }
+    claimNote =
+      `；认赢面板 ${claim.rect.width.toFixed(0)}×${claim.rect.height.toFixed(0)}px` +
+      `（亮牌 ${claim.cards} 张、按钮 ${claim.buttons.length} 枚）`;
+  }
+
   const rowHeight = m.history.rowHeight > 0 ? m.history.rowHeight : 24;
   const capacity = m.history.box === null ? 0 : Math.floor(m.history.box.height / rowHeight);
   /** 信息须里最紧的一格（需要宽度 − 可用宽度最大者）：负得越多越宽松 */
@@ -1435,7 +1577,8 @@ function assertLayout(
     (m.clock === null
       ? '；闹钟 —'
       : `；闹钟三位数 ${m.clock.threeDigitsPx.toFixed(1)}px / 圆 ${m.clock.circleWidth.toFixed(0)}px` +
-        ` @${m.clock.tierPx.long}px（${m.clock.tone}，实际字号 ${m.clock.liveFontPx}px）`);
+        ` @${m.clock.tierPx.long}px（${m.clock.tone}，实际字号 ${m.clock.liveFontPx}px）`) +
+    claimNote;
   return { summary, problems };
 }
 
@@ -1876,6 +2019,37 @@ async function driveTrick(
 }
 
 /**
+ * 把这一副推到「认赢待表决」（ADR-0028）：庄家埋底（他因此是这一墩的领出人）→ 立刻认领。
+ *
+ * 为什么这里能拍到稳定的一帧：`setupTable` 的三个座位**都是凭据真人**，这张桌上没有机器人，
+ * 于是没有人会来投票 —— 面板一直挂到 30 秒窗口结束。这跟真人桌上「两个机器人一秒内表态、
+ * 面板一闪而过」正好相反；几何判据要的正是前者。
+ */
+async function driveClaim(
+  code: string,
+  seats: readonly Credential[],
+  declarerSeat: number
+): Promise<void> {
+  const declarer = seats[declarerSeat]!;
+  const opening = await viewOf(code, declarer.credential);
+  const hand = opening.you?.hand ?? [];
+  if (opening.view.deal === null || hand.length < 20) {
+    throw new Error(`认赢场景：庄家手牌只有 ${hand.length} 张（应当是拿完底牌的 20 张）`);
+  }
+  await act(code, declarer.credential, { type: 'bury', cards: hand.slice(0, 3) });
+  // 末轮张数报 1：领出时区间是 1..手上最长顺子，1 恒在区间内（这一屏量的是面板，不是 x）
+  await act(code, declarer.credential, { type: 'claim', lastTrick: 1 });
+  const after = await viewOf(code, declarer.credential);
+  const claim = after.view.deal?.claim ?? null;
+  if (claim === null || claim.status !== 'pending') {
+    throw new Error('认赢场景：认领没有停在待表决（被引擎拒了？先看服务端日志）');
+  }
+  if (claim.revealed.length !== 17) {
+    throw new Error(`认赢场景：亮牌 ${claim.revealed.length} 张（应当是埋底后的 17 张）`);
+  }
+}
+
+/**
  * 从手牌里找一条**合法**顺子（同门连续段），长度取找得到的最大值、上限 `want`。
  *
  * 层号口径用引擎的 `cardLevel`（跳过级牌、主牌门合并），但**判定一律回到引擎自己**
@@ -2080,6 +2254,16 @@ async function runShot(
     await driveToScored(table.code, seats, table.declarerSeat);
   } else if (shot.trick !== undefined) {
     await driveTrick(table.code, seats, table.declarerSeat, shot.trick === 'two-played' ? 2 : 3);
+  }
+
+  // 认赢：庄家埋完底立刻认领，然后拍**对手**那一页（他自己那页只有「等两名对手表态」）
+  if (shot.claim === 'pending') {
+    if (shot.captureIndex === 0) {
+      throw new Error(
+        `${shot.file}：认赢场景必须拍对手那一页（captureIndex ≠ 0）—— 认赢者自己那页没有表决按钮`
+      );
+    }
+    await driveClaim(table.code, seats, table.declarerSeat);
   }
 
   // 三条消息给三个座位各一条：不管谁被拍成「我」，两张对手卡与底栏都各有一颗气泡。
