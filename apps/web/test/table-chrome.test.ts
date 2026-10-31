@@ -299,25 +299,27 @@ test('查阅面进抽屉，动作面留桌面', () => {
 });
 
 
-test('认赢入口只在「这一墩还赢得了、且这副还没认过」时出现', () => {
+test('认赢入口住在「牌桌」页，且只在「这一墩还赢得了、且这副还没认过」时出现', () => {
   // 两条都是实测过的死路：被拒 / 超时之后入口还在（点下去必然 400，错误还落在页面顶上），
   // 以及跟牌时压不过这一墩还给出入口（引擎会以 claim_unwinnable 拒掉）。
-  const tray = code(actionTray);
-  const at = tray.indexOf('data-claim-open');
-  assert.ok(at > 0, 'ActionTray 里找不到认赢入口（data-claim-open）');
-  const open = tray.lastIndexOf('{#if', at);
+  // 位置本身也是判据：它是低频的一步动作，不借托盘那格「清 空」（那里是高频的选牌动作）。
+  assert.equal(
+    code(actionTray).includes('data-claim-open'),
+    false,
+    '认赢入口又回到了动作托盘：低频的一步动作不该占「清 空」那一格'
+  );
+  const panel = code(tablePanel);
+  const at = panel.indexOf('data-claim-open');
+  assert.ok(at > 0, '「牌桌」页里找不到认赢入口（data-claim-open）');
+  const open = panel.lastIndexOf('{#if', at);
   assert.ok(open >= 0, '认赢入口不在任何 {#if} 里：轮不到你、或已经认过之后它也会亮着');
-  const cond = tray.slice(open, tray.indexOf('}', open));
-  assert.match(
-    cond,
-    /deal\?\.claim === null/,
-    '入口没把「这副已经认过」纳入条件：被拒 / 超时之后它会变成一个必然失败的按钮'
-  );
-  assert.match(
-    cond,
-    /claimRange !== null/,
-    '入口没把「这一墩赢不了」纳入条件：跟牌时压不过这一墩也给了入口'
-  );
+  assert.match(panel.slice(open, panel.indexOf('}', open)), /canClaim/, '入口没被 canClaim 把住');
+  // canClaim 本身：这一墩赢不了 / 这一副认过了 / 没轮到你，都不算
+  const derived = /const canClaim = \$derived\(([\s\S]*?)\n  \);/.exec(panel)?.[1] ?? '';
+  assert.ok(derived !== '', '「牌桌」页里找不到 canClaim 的推导');
+  for (const need of ['claimRange !== null', 'deal.claim === null', 'deal.playTurn === mySeat']) {
+    assert.ok(derived.includes(need), `canClaim 少了「${need}」：入口会在不该出现的时候出现`);
+  }
 });
 
 test('横跨一层的覆盖层必须让开点击（否则它盖住的东西看得见、点不到）', () => {

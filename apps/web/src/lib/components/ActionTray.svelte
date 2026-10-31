@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { canWinTrickNow, claimLastTrickRange } from '@sixty/engine';
   import type { TableClient } from '$lib/client/table.svelte';
 
   let { client }: { client: TableClient } = $props();
@@ -25,51 +24,6 @@
   );
 
   /**
-   * 认赢的草稿（ADR-0028）：**轮到你出牌**时才有的入口。
-   *
-   * 入口占的是「清空」那一格 —— 没选牌时清空本来就是死键（`disabled`），换成一枚活的「认赢」
-   * 不占新宽度，也不会在窄屏上把这一行挤到换行。选着牌时仍回到清空（认赢前先取消选择即可）。
-   * 草稿是托盘自己的本地状态：它不出负载、影响不到别人，确认那一刻才变成一次动作。
-   */
-  let claimOpen = $state(false);
-  let lastTrick = $state(1);
-  /**
-   * 能报的末轮张数区间（ADR-0028）：**这一墩也赢得下来**才有入口 ——
-   * 跟牌时还要扣掉这一墩必须打出的牌；三家等长时末轮就是这一墩，区间收成一个点。
-   * 认过赢的副没有再来的机会（一副至多一次，被拒也一样）。
-   */
-  const claimRange = $derived(
-    deal !== null && deal.phase === 'play' && deal.trump !== null && me !== null
-      ? canWinTrickNow(me.hand, deal.trick?.plays ?? [], deal.trump)
-        ? claimLastTrickRange(me.hand, deal.trick?.plays ?? [], deal.trump)
-        : null
-      : null
-  );
-  const claimMin = $derived(claimRange?.min ?? 1);
-  const claimMax = $derived(claimRange?.max ?? 1);
-  const lastTrickLabel = $derived(claimMin === claimMax ? `${claimMax}` : `${claimMin}–${claimMax}`);
-  const remaining = $derived(
-    deal === null
-      ? 0
-      : deal.handCounts.reduce((sum, n) => sum + n, 0) +
-          (deal.trick?.plays.flatMap((play) => play.cards).length ?? 0)
-  );
-
-  $effect(() => {
-    // 入口没了（轮次走了 / 认过 / 这一墩赢不了）就收起草稿，免得留下一个必然被拒的按钮
-    if (!visible || claimRange === null) claimOpen = false;
-  });
-  $effect(() => {
-    if (lastTrick < claimMin) lastTrick = claimMin;
-    if (lastTrick > claimMax) lastTrick = claimMax;
-  });
-
-  function confirmClaim(): void {
-    claimOpen = false;
-    void client.claim(lastTrick);
-  }
-
-  /**
    * 三个 class 常量都带 `whitespace-nowrap`：窄屏上「出 牌」「清 空」「确认埋底」被压缩时，
    * CJK 可以在任意字间断行，动词会竖排成两行（截图里的那次返工）。
    */
@@ -87,8 +41,6 @@
 
   /** 计数在左、动作在中、清空在右 —— 两个阶段同一形状，宽度可算（窄屏一行放得下） */
   const count = 'whitespace-nowrap text-xs text-white/70';
-  const stepper =
-    'grid h-7 w-7 place-items-center rounded-full border border-white/20 text-sm text-white/70 hover:bg-white/10 disabled:opacity-25';
 </script>
 
 <!-- 动作托盘 = 「轮到你了」的那一套控件，**在操作条那一行里**（问号右边那一格，ADR-0020 修订）。
@@ -105,7 +57,9 @@
         于是竖排成两行（计数自带 `whitespace-nowrap` 所以它断不了：截图里「已选 0 张」安然无恙、
         两个按钮都竖着，正是这条的证据）。宽度取 max-content 后没有负空间可分配；
         按钮自己再带 `whitespace-nowrap` 作第二道防线。**不加** `max-w-*` —— 一旦被上限钳住
-        就退回「压缩 ⇒ 换行」。 -->
+        就退回「压缩 ⇒ 换行」。
+     ⑤ **认赢不在这里**：它是低频、一步、且要人先想清楚的动作，入口住在抽屉的「牌桌」页
+        （`TablePanel`）；托盘这一格回到土生土长的「清 空」。 -->
 {#if visible}
   <div
     class="relative flex w-max flex-nowrap items-center gap-2 rounded-2xl bg-black/55 px-2.5 py-1 ring-1 ring-white/10 backdrop-blur-sm"
@@ -132,26 +86,9 @@
         出 牌
       </button>
     {/if}
-    {#if deal?.phase === 'play' && selectedCount === 0 && deal?.claim === null && claimRange !== null}
-      <!-- 认赢：亮出全部手牌、宣称剩下的每一墩都归自己。这一格原本是「清空」（0 张时是死键）。
-           入口只在**这一墩还赢得了**时出现（跟牌时他得先压得住这墩），一式一次，认过就不再给。 -->
-      <button
-        type="button"
-        class={ghost}
-        data-claim-open="true"
-        disabled={client.busy}
-        onclick={() => {
-          lastTrick = claimMin;
-          claimOpen = true;
-        }}
-      >
-        认赢
-      </button>
-    {:else}
-      <button type="button" class={ghost} disabled={selectedCount === 0} onclick={() => client.clearSelection()}>
-        清空
-      </button>
-    {/if}
+    <button type="button" class={ghost} disabled={selectedCount === 0} onclick={() => client.clearSelection()}>
+      清空
+    </button>
 
     <!-- 不合法的选牌原因：**绝对定位浮在托盘之上**，不进这一行的流 ——
          `playError` 是实时推导的（选到不合法的一组就立刻出现），若让它占一行，这一行的高度就会
@@ -164,42 +101,6 @@
       >
         {client.playError}
       </span>
-    {/if}
-
-    <!-- 认赢的草稿：同样是浮层（`bottom-full`），不进这一行的流。末轮张数就是**底牌倍数**，
-         所以它旁边直接写「剩 N 张全收」，把这一下会发生什么说在同一个地方。 -->
-    {#if claimOpen}
-      <div
-        class="absolute bottom-full left-1/2 z-30 mb-1 w-max max-w-[min(92vw,18rem)] -translate-x-1/2 rounded-xl bg-black/85 p-2.5 ring-1 ring-gold/30"
-        data-claim-draft="true"
-      >
-        <p class="text-center text-[11px] text-white/60">末轮张数（底牌按这个倍数算）</p>
-        <div class="mt-1.5 flex items-center justify-center gap-3">
-          <button type="button" class={stepper} aria-label="减少末轮张数" disabled={lastTrick <= claimMin} onclick={() => (lastTrick -= 1)}>
-            −
-          </button>
-          <b class="w-6 text-center text-lg tabular-nums text-gold" data-claim-last-trick={lastTrick}>{lastTrick}</b>
-          <button
-            type="button"
-            class={stepper}
-            aria-label="增加末轮张数"
-            disabled={lastTrick >= claimMax}
-            onclick={() => (lastTrick += 1)}
-          >
-            +
-          </button>
-        </div>
-        <p class="mt-1 text-center text-[11px] text-white/45">
-          剩 <b class="tabular-nums">{remaining}</b> 张全收 · 末轮 <b class="tabular-nums">{lastTrickLabel}</b> 张
-        </p>
-        <div class="mt-2 flex justify-center gap-2">
-          <button type="button" class={gold} data-claim-confirm="true" disabled={client.busy} onclick={confirmClaim}>
-            认赢
-          </button>
-          <button type="button" class={ghost} onclick={() => (claimOpen = false)}>取消</button>
-        </div>
-        <p class="mt-1 text-center text-[10px] text-white/35">被拒也一直亮到换副</p>
-      </div>
     {/if}
   </div>
 {/if}

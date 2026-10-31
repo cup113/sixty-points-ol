@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invalidateAll } from '$app/navigation';
-  import { cardKey } from '@sixty/engine';
+  import { canWinTrickNow, cardKey, claimLastTrickRange } from '@sixty/engine';
   import { BOT_LIMIT } from '$lib/shared';
   import type { TableClient } from '$lib/client/table.svelte';
   import CardView from './Card.svelte';
@@ -61,6 +61,31 @@
    */
   const botCount = $derived(seats.filter((seat) => seat.bot).length);
   const canBot = $derived(seated && botCount < BOT_LIMIT);
+
+  /**
+   * 认赢的入口（ADR-0028）：**低频、一步、要先想清楚**的行动，所以住在这一页，
+   * 不借托盘那格「清空」的位置（那里是高频的选牌动作）。
+   *
+   * 三条同时成立才出现：轮到你出牌、这一副还没认过、**这一墩你赢得了**
+   * （跟牌时要压得住——认赢连当前这一墩一起收）。末轮张数取区间上界：
+   * x 越大底牌倍数越大，而认领一旦成立，把最长那条顺子留到末轮总是摆得出来。
+   *
+   * 不可发起时**整块静默消失**，不写「为什么没有」——那句话只会变成一条猜谜提示。
+   */
+  const claimRange = $derived(
+    deal !== null && deal.phase === 'play' && deal.trump !== null && client.you !== null
+      ? canWinTrickNow(client.you.hand, deal.trick?.plays ?? [], deal.trump)
+        ? claimLastTrickRange(client.you.hand, deal.trick?.plays ?? [], deal.trump)
+        : null
+      : null
+  );
+  const canClaim = $derived(
+    claimRange !== null &&
+      deal !== null &&
+      deal.phase === 'play' &&
+      deal.playTurn === mySeat &&
+      deal.claim === null
+  );
 
   const input =
     'min-w-0 flex-1 rounded-lg bg-black/50 px-2.5 py-1.5 text-xs outline-none ring-1 ring-white/15 transition focus:ring-gold';
@@ -159,6 +184,23 @@
     </div>
   {/each}
 </div>
+
+<!-- 认赢（ADR-0028）：只有「轮到你、还没认过、这一墩你压得住」时才出现这一块；
+     其余时候整块静默 —— 不给必定失败的按钮，也不解释为什么没有。 -->
+{#if canClaim}
+  <div class="mt-3 flex items-center gap-3 border-t border-white/10 pt-3">
+    <button
+      type="button"
+      data-claim-open="true"
+      class="whitespace-nowrap rounded-lg border border-gold/50 bg-gold/15 px-3 py-1.5 text-xs font-bold text-gold transition enabled:hover:bg-gold/25 disabled:opacity-40"
+      disabled={client.busy}
+      onclick={() => void client.claim(claimRange?.max ?? 1)}
+    >
+      剩下的都归我
+    </button>
+    <p class="text-[11px] leading-snug text-white/45">亮出全部手牌<br />两名对手都认输就立刻结算</p>
+  </div>
+{/if}
 
 <div class="mt-3">
   <SeatActions {client} onLeave={onLeave} />
