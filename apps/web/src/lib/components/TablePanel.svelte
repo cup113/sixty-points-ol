@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invalidateAll } from '$app/navigation';
-  import { canWinTrickNow, cardKey, claimLastTrickRange } from '@sixty/engine';
+  import { canWinTrickNow, cardKey } from '@sixty/engine';
   import { BOT_LIMIT } from '$lib/shared';
   import type { TableClient } from '$lib/client/table.svelte';
   import CardView from './Card.svelte';
@@ -66,25 +66,20 @@
    * 认赢的入口（ADR-0028）：**低频、一步、要先想清楚**的行动，所以住在这一页，
    * 不借托盘那格「清空」的位置（那里是高频的选牌动作）。
    *
-   * 三条同时成立才出现：轮到你出牌、这一副还没认过、**这一墩你赢得了**
-   * （跟牌时要压得住——认赢连当前这一墩一起收）。末轮张数取区间上界：
-   * x 越大底牌倍数越大，而认领一旦成立，把最长那条顺子留到末轮总是摆得出来。
+   * 只按**我从自己手上看得见**的那条必要条件给入口：轮到我出牌、这一墩我压得住
+   * （认赢连当前这一墩一起收）。成不成立只有服务端知道 —— 它看得见另外两家剩下的牌，
+   * 所以不成立时它回一句人话（「剩下的牌你还赢不完全」），这里不替它猜。
    *
    * 不可发起时**整块静默消失**，不写「为什么没有」——那句话只会变成一条猜谜提示。
    */
-  const claimRange = $derived(
-    deal !== null && deal.phase === 'play' && deal.trump !== null && client.you !== null
-      ? canWinTrickNow(client.you.hand, deal.trick?.plays ?? [], deal.trump)
-        ? claimLastTrickRange(client.you.hand, deal.trick?.plays ?? [], deal.trump)
-        : null
-      : null
-  );
   const canClaim = $derived(
-    claimRange !== null &&
-      deal !== null &&
+    deal !== null &&
       deal.phase === 'play' &&
+      deal.trump !== null &&
       deal.playTurn === mySeat &&
-      deal.claim === null
+      deal.claim === null &&
+      client.you !== null &&
+      canWinTrickNow(client.you.hand, deal.trick?.plays ?? [], deal.trump)
   );
 
   const input =
@@ -194,11 +189,11 @@
       data-claim-open="true"
       class="whitespace-nowrap rounded-lg border border-gold/50 bg-gold/15 px-3 py-1.5 text-xs font-bold text-gold transition enabled:hover:bg-gold/25 disabled:opacity-40"
       disabled={client.busy}
-      onclick={() => void client.claim(claimRange?.max ?? 1)}
+      onclick={() => void client.claim()}
     >
       剩下的都归我
     </button>
-    <p class="text-[11px] leading-snug text-white/45">亮出全部手牌<br />两名对手都认输就立刻结算</p>
+    <p class="text-[11px] leading-snug text-white/45">亮出全部手牌<br />这一副当场结算</p>
   </div>
 {/if}
 

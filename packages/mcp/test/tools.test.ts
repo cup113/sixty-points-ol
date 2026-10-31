@@ -118,11 +118,10 @@ function keysDeep(value: unknown, acc: string[] = []): string[] {
 
 // ---------------------------------------------------------------- 工具表与投影
 
-test('工具表：18 个工具且名字不重复', () => {
+test('工具表：17 个工具且名字不重复', () => {
   const names = TOOLS.map((tool) => tool.name);
   assert.equal(new Set(names).size, names.length, '工具名有重复');
   assert.deepEqual([...names].sort(), [
-    'answer_win',
     'bid',
     'bury',
     'check_play',

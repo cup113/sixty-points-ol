@@ -192,7 +192,6 @@ function snap(over: Partial<SoundSnapshot> = {}): SoundSnapshot {
     trickPlays: 0,
     tricksDone: 0,
     settledDealNo: null,
-    claimVote: null,
     ...over
   };
 }
@@ -271,9 +270,6 @@ test('isMyTurn：叫牌看 auctionTurn、埋底看「我是不是庄家」、出
   assert.equal(isMyTurn(snap({ phase: 'play', playTurn: 2, mySeat: 0 })), false);
   assert.equal(isMyTurn(snap({ phase: 'auction', auctionTurn: 0, mySeat: null })), false);
   assert.equal(isMyTurn(snap({ phase: 'bury', isDeclarer: true, mySeat: null })), false);
-  // 认赢待我表态：牌局冻结（playTurn 为 null），但等的就是我这一票
-  assert.equal(isMyTurn(snap({ phase: 'play', playTurn: null, claimVote: 1, mySeat: 0 })), true);
-  assert.equal(isMyTurn(snap({ phase: 'play', playTurn: null, claimVote: null, mySeat: 0 })), false);
 });
 
 test('「该你了」：由不是变是才响；同一帧重放不重复响', () => {
@@ -282,14 +278,6 @@ test('「该你了」：由不是变是才响；同一帧重放不重复响', ()
   assert.deepEqual(soundEvents(theirs, mine), ['turn']);
   assert.deepEqual(soundEvents(mine, mine), [], '同一帧算两次：不该连响两声');
   assert.deepEqual(soundEvents(mine, theirs), []);
-});
-
-test('认赢待我表态：窗口打开那一帧响「该你了」，投完票就不再响', () => {
-  const before = snap({ phase: 'play', playTurn: 1 });
-  const asked = snap({ phase: 'play', playTurn: null, claimVote: 1 });
-  assert.deepEqual(soundEvents(before, asked), ['turn'], '轮到我表态却没响');
-  const voted = snap({ phase: 'play', playTurn: null, claimVote: null });
-  assert.deepEqual(soundEvents(asked, voted), [], '投完票又响了一声');
 });
 
 test('「该你了」：首帧若正轮到我，也响一声（刷新后正轮到你，那一下正是提醒）', () => {

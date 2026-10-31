@@ -35,15 +35,9 @@ function toAction(body: Body): TableAction {
         error(400, '出牌必须是非空的合法牌');
       }
       return { type: 'play', seat: 0, cards: raw.cards };
-    // 认赢：截止时刻由服务端盖（`applyTableAction`），这里只收「末轮张数」
+    // 认赢：客户端只说「我要认」，末轮张数由引擎算（ADR-0028）
     case 'claim':
-      if (typeof raw.lastTrick !== 'number' || !Number.isInteger(raw.lastTrick)) {
-        error(400, '末轮张数必须是整数');
-      }
-      return { type: 'claim', seat: 0, lastTrick: raw.lastTrick };
-    case 'claimAnswer':
-      if (typeof raw.agree !== 'boolean') error(400, '表态必须是同意或不同意');
-      return { type: 'claimAnswer', seat: 0, agree: raw.agree };
+      return { type: 'claim', seat: 0 };
     default:
       error(400, '未知动作');
   }

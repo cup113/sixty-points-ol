@@ -36,18 +36,10 @@ export interface SoundSnapshot {
   readonly tricksDone: number;
   /** 已结算的那一副的副号；未结算为 `null` */
   readonly settledDealNo: number | null;
-  /**
-   * 待我表态的认赢（认赢者的座位）；没有则为 `null`。
-   *
-   * 认赢期间引擎的 `playTurn` 是 null（牌局冻结），所以「该我了」不能只看出牌轮次 ——
-   * 30 秒的窗口里轮到的是**两名对手的表态**，那一声提醒正是这里最需要的。
-   */
-  readonly claimVote: number | null;
 }
 
 export function soundSnapshot(view: PublicView | null, you: PlayerHand | null): SoundSnapshot {
   const deal = view?.deal ?? null;
-  const claim = deal?.claim ?? null;
   const mySeat = you?.seat ?? null;
   return {
     phase: deal?.phase ?? null,
@@ -58,11 +50,7 @@ export function soundSnapshot(view: PublicView | null, you: PlayerHand | null): 
     playTurn: deal?.playTurn ?? null,
     trickPlays: deal?.trick?.plays.length ?? 0,
     tricksDone: deal?.trickHistory.length ?? 0,
-    settledDealNo: deal?.summary?.dealNo ?? null,
-    claimVote:
-      claim !== null && claim.status === 'pending' && mySeat !== null && claim.claimant !== mySeat && claim.answers[mySeat] === null
-        ? claim.claimant
-        : null
+    settledDealNo: deal?.summary?.dealNo ?? null
   };
 }
 
@@ -74,8 +62,6 @@ export function soundSnapshot(view: PublicView | null, you: PlayerHand | null): 
  */
 export function isMyTurn(snapshot: SoundSnapshot): boolean {
   if (snapshot.mySeat === null) return false;
-  // 认赢待我表态：与「轮到我出牌」同一条意思（牌局冻着，等的是我这一票）
-  if (snapshot.claimVote !== null) return true;
   if (snapshot.phase === 'auction') return snapshot.auctionTurn === snapshot.mySeat;
   if (snapshot.phase === 'bury') return snapshot.isDeclarer;
   if (snapshot.phase === 'play') return snapshot.playTurn === snapshot.mySeat;

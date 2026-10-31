@@ -33,15 +33,12 @@ import {
  */
 function toEngineAction(action: SeatlessAction): TableAction {
   // 座位号：服务端按身份覆盖（ADR-0002），这里填 0 只是满足引擎的类型。
-  // 认赢的截止时刻**不在这里** —— 它只由 `applyTableAction` 按服务端的钟盖（ADR-0028）。
+  // 认赢的末轮张数也不在这里 —— 它由引擎自己算（ADR-0028）。
   switch (action.type) {
     case 'bid':
     case 'bury':
     case 'play':
-      return { ...action, seat: 0 };
     case 'claim':
-      return { type: 'claim', seat: 0, lastTrick: action.lastTrick };
-    case 'claimAnswer':
       return { ...action, seat: 0 };
     default:
       return action;

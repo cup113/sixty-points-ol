@@ -104,17 +104,14 @@ export type CompactSummary = Omit<DealSummary, 'kitty' | 'originalKitty'> & {
 /**
  * 认赢的公共面（ADR-0028），与 `ClaimView` 同义，只是牌换成紧凑码。
  *
- * 它**每一帧都跟着 `deal` 走**，不像叫牌历史那样成交即丢：亮出去的牌是被拒之后
- * 仍然公开的信息，模型要靠它把这一副打完；省掉它等于让工具面比浏览器少看一手牌。
+ * 它**每一帧都跟着 `deal` 走**：认赢是当场结算的，但亮出去的牌一直公开到换副 ——
+ * 模型要靠它复盘「这一副是怎么结束的」。
  */
 export interface CompactClaim {
   readonly claimant: Seat;
+  /** 引擎算出的末轮张数（底牌倍数），不由玩家挑 */
   readonly lastTrick: number;
   readonly revealed: readonly string[];
-  /** 按座位：`null` = 还没投（认赢者自己恒为 `null`）；工具面靠 `turn` 说「该不该你表态」 */
-  readonly answers: readonly (boolean | null)[];
-  readonly status: 'pending' | 'rejected' | 'settled';
-  readonly rejectedBy: Seat | null;
 }
 
 export interface CompactDeal {
@@ -126,11 +123,10 @@ export interface CompactDeal {
   readonly playTurn: Seat | null;
   readonly declarerSeat: Seat | null;
   /**
-   * 只在有人认过赢的副出现（ADR-0028）：认赢者、他宣称的末轮张数、**亮牌**与两票。
+   * 只在有人认过赢的副出现（ADR-0028）：认赢者、引擎算出的末轮张数、**亮牌**。
    *
-   * 与叫牌历史同一类**阶段门控**：绝大多数副里它一格都不占（`claim` 连键都不出现），
-   * 只有真的发生了才跟着 `deal` 走 —— 而一旦发生，它就**必须每帧都在**：
-   * 被拒之后亮牌仍然公开到换副，模型要靠它把这一副打完。
+   * 与叫牌历史同一类**阶段门控**：绝大多数副里它一格都不占（`claim` 连键都不出现）；
+   * 一旦出现，它就**必须每帧都在** —— 亮牌一直公开到换副，模型靠它复盘这一副怎么结束的。
    */
   readonly claim?: CompactClaim | undefined;
   /**
@@ -270,10 +266,7 @@ function projectClaim(claim: NonNullable<PublicDealView['claim']>): CompactClaim
   return {
     claimant: claim.claimant,
     lastTrick: claim.lastTrick,
-    revealed: claim.revealed.map(encodeCard),
-    answers: [...claim.answers],
-    status: claim.status,
-    rejectedBy: claim.rejectedBy
+    revealed: claim.revealed.map(encodeCard)
   };
 }
 

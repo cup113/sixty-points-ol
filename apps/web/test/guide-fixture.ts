@@ -73,9 +73,6 @@ function withSeat(move: BotMove, seat: Seat): Extract<Action, { type: 'bid' | 'b
       return { type: 'bury', seat, cards: move.cards };
     case 'play':
       return { type: 'play', seat, cards: move.cards };
-    case 'claimAnswer':
-      // 引导局的四副烘焙牌都从叫牌打到结算，永远不会出现认赢（策略只在有人认赢时才投这一票）
-      throw new Error('引导局里不会出现认赢');
   }
 }
 

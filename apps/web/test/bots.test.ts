@@ -65,7 +65,6 @@ function human(): { id: number; name: string } {
 function toAction(move: BotMove): Action {
   if (move.type === 'bid') return { type: 'bid', seat: 0, call: move.call };
   if (move.type === 'bury') return { type: 'bury', seat: 0, cards: move.cards };
-  if (move.type === 'claimAnswer') return { type: 'claimAnswer', seat: 0, agree: move.agree };
   return { type: 'play', seat: 0, cards: move.cards };
 }
 

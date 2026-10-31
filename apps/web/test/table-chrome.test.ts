@@ -317,7 +317,7 @@ test('认赢入口住在「牌桌」页，且只在「这一墩还赢得了、�
   // canClaim 本身：这一墩赢不了 / 这一副认过了 / 没轮到你，都不算
   const derived = /const canClaim = \$derived\(([\s\S]*?)\n  \);/.exec(panel)?.[1] ?? '';
   assert.ok(derived !== '', '「牌桌」页里找不到 canClaim 的推导');
-  for (const need of ['claimRange !== null', 'deal.claim === null', 'deal.playTurn === mySeat']) {
+  for (const need of ['canWinTrickNow(', 'deal.claim === null', 'deal.playTurn === mySeat']) {
     assert.ok(derived.includes(need), `canClaim 少了「${need}」：入口会在不该出现的时候出现`);
   }
 });
@@ -338,10 +338,7 @@ test('横跨一层的覆盖层必须让开点击（否则它盖住的东西看�
       '只在各家的出牌点上画牌（盒子各占 38% 的宽度预算，不是整面覆盖），且它住在内容槽里',
     'ActionTray.svelte':
       '它铺满的是**动作带**（毡面之外那条常驻空带），带里没有别的控件；毡面一侧由带子自己的边界隔开，' +
-      '所以它不需要让开点击 —— 它是这一层里**唯一**的可点内容',
-    'ClaimPanel.svelte':
-      '认赢窗口是内容槽里的模态（牌局冻结）：这一层里只有它的「认输 / 不认」与亮牌滚动区，' +
-      '让开点击会连同滚轮一起让掉 —— 与 BidPanel 同一条理由，它是这一层唯一的可点内容'
+      '所以它不需要让开点击 —— 它是这一层里**唯一**的可点内容'
   };
 
   /** 取根元素的 class（剥注释后第一个 section/div 的 class 属性） */

@@ -1,9 +1,12 @@
 /**
- * 认赢的服务端半场（ADR-0028）：真 SQLite、真引擎、真定时器。
+ * 认赢的服务端半场（ADR-0028）：真 SQLite、真引擎。
  *
- * 引擎自己的规则（票、结算、视图）在 `packages/engine/test/claim.test.ts`；
- * 这一份只测**服务端**独有的那几件：截止时刻由服务端盖、座位由身份推导、
- * 表决窗口的定时器、以及「重启补扫时到点就判失败」。
+ * 认领**当场判、当场结算**（引擎手里有另外两家的牌），所以服务端这一层只剩三件事要守：
+ * 座位由身份推导（客户端说 0 不算数）、引擎的拒绝原话原样转给玩家、以及老库里的
+ * `claim` 字段缺失时别在首帧抛。
+ *
+ * 「认领成立 → 剩余全收」的牌面规则在 `packages/engine/test/claim.test.ts`；
+ * 随机发出的真牌几乎不可能成立，所以这里测的是**被拒**的那条路。
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -14,11 +17,9 @@ import { auctionTurn, playTurn, type Seat } from '@sixty/engine';
 await import('./server-db.ts');
 
 const { db } = await import('../src/lib/server/db.ts');
-const { applyTableAction, createTable, enterTable, getGameState, getTableByCode, initClaims, viewFor, forgetClaimTimers } =
+const { applyTableAction, createTable, enterTable, getGameState, getTableByCode, viewFor } =
   await import('../src/lib/server/tables.ts');
 const { createIdentity } = await import('../src/lib/server/auth.ts');
-
-test.afterEach(() => forgetClaimTimers());
 
 let userSeq = 0;
 
@@ -81,89 +82,24 @@ function toPlay(fixture: Fixture): { declarer: Seat; userId: number } {
   return { declarer, userId: fixture.ids[declarer]! };
 }
 
-test('认赢：截止时刻由服务端盖，座位由身份推导，两名对手都认输才结算', () => {
+test('认赢：座位由身份推导；随机发出来的牌几乎不可能成立，引擎当场拒并把原话说出来', () => {
   const fixture = threeSeats();
-  const { declarer, userId } = toPlay(fixture);
-  const before = Date.now();
+  const { declarer } = toPlay(fixture);
+  const before = JSON.stringify(stateOf(fixture));
 
-  // 客户端只发「末轮张数」；座位填 0 也会被服务端按身份覆盖 —— 所以这里故意从庄家发
-  const claimed = applyTableAction(fixture.code, userId, { type: 'claim', seat: 0, lastTrick: 1 });
-  assert.ok(claimed.ok, claimed.ok ? '' : claimed.message);
-
-  const claim = stateOf(fixture).deal!.claim!;
-  assert.equal(claim.claimant, declarer);
-  assert.equal(claim.status, 'pending');
-  // 30 秒窗口由服务端的钟给（引擎只存不读）
-  assert.ok(claim.expiresAt >= before + 29_000, '截止时刻没有被服务端盖成 30 秒窗口');
-
-  // 负载里传的是剩余毫秒，不是时间戳
-  const table = getTableByCode(fixture.code)!;
-  const mine = viewFor(table, userId);
-  assert.ok(mine.table.claimMsLeft !== null && mine.table.claimMsLeft <= 30_000, 'claimMsLeft 不在 30 秒以内');
-  assert.ok(mine.view!.deal!.claim!.revealed.length > 0, '公共视图里没有亮牌');
-
-  // 不是轮到你出牌的人发认赢：被拒（座位确实是按身份推导的，不是客户端填的 0）
+  // 不是轮到你出牌的人发认赢：座位是按身份推的（客户端说 0 不算数）
   const defender = ([0, 1, 2] as Seat[]).find((seat) => seat !== declarer)!;
-  const wrongTurn = applyTableAction(fixture.code, fixture.ids[defender]!, { type: 'claim', seat: 0, lastTrick: 1 });
+  const wrongTurn = applyTableAction(fixture.code, fixture.ids[defender]!, { type: 'claim', seat: 0 });
   assert.equal(wrongTurn.ok, false);
+  assert.match(wrongTurn.ok ? '' : wrongTurn.message, /还没轮到你出牌/);
 
-  // 一票「认输」还不够
-  const one = applyTableAction(fixture.code, fixture.ids[defender]!, { type: 'claimAnswer', seat: 0, agree: true });
-  assert.ok(one.ok, one.ok ? '' : one.message);
-  assert.equal(stateOf(fixture).deal!.claim!.status, 'pending');
-
-  // 两票都到齐 → 立即按「剩余全收」结算
-  const other = ([0, 1, 2] as Seat[]).find((seat) => seat !== declarer && seat !== defender)!;
-  const two = applyTableAction(fixture.code, fixture.ids[other]!, { type: 'claimAnswer', seat: 0, agree: true });
-  assert.ok(two.ok, two.ok ? '' : two.message);
-  const scored = stateOf(fixture).deal!;
-  assert.equal(scored.phase, 'scored');
-  assert.equal(scored.summary!.claim!.seat, declarer);
-  assert.equal(viewFor(table, userId).table.claimMsLeft, null);
-});
-
-test('超时：重启补扫时到点的认赢判失败（fail-closed），牌局从原处继续', async () => {
-  const fixture = threeSeats();
-  const { userId } = toPlay(fixture);
-  const claimed = applyTableAction(fixture.code, userId, { type: 'claim', seat: 0, lastTrick: 1 });
-  assert.ok(claimed.ok, claimed.ok ? '' : claimed.message);
-
-  // 模拟「重启时这个窗口早就过期了」：把存下来的截止时刻改到过去，再走启动补扫
-  const state = stateOf(fixture);
-  (state.deal!.claim as { expiresAt: number }).expiresAt = Date.now() - 1;
-  db.prepare('UPDATE games SET state = ? WHERE table_id = ?').run(JSON.stringify(state), fixture.tableId);
-  initClaims();
-
-  for (let i = 0; i < 100; i++) {
-    const claim = stateOf(fixture).deal!.claim!;
-    if (claim.status !== 'pending') {
-      assert.equal(claim.status, 'rejected');
-      assert.equal(claim.rejectedBy, null, '超时不指向某个人');
-      assert.notEqual(playTurn(stateOf(fixture).deal!), null, '被拒之后应回到原来的出牌人');
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  assert.fail('认赢窗口到点了还挂在 pending 上');
-});
-
-test('窗口之外到达的票不生效：哪怕定时器没赶上（进程睡过点 / 定时器丢了）', () => {
-  const fixture = threeSeats();
-  const { declarer, userId } = toPlay(fixture);
-  const claimed = applyTableAction(fixture.code, userId, { type: 'claim', seat: 0, lastTrick: 1 });
-  assert.ok(claimed.ok, claimed.ok ? '' : claimed.message);
-
-  // 只把存下来的截止时刻拨到过去：**不**调 initClaims、也不等定时器 ——
-  // 模拟「定时器没跑过」，这一票仍必须被拿下（窗口不是靠定时器才算数的）
-  const state = stateOf(fixture);
-  (state.deal!.claim as { expiresAt: number }).expiresAt = Date.now() - 1;
-  db.prepare('UPDATE games SET state = ? WHERE table_id = ?').run(JSON.stringify(state), fixture.tableId);
-
-  const defender = ([0, 1, 2] as Seat[]).find((seat) => seat !== declarer)!;
-  const late = applyTableAction(fixture.code, fixture.ids[defender]!, { type: 'claimAnswer', seat: 0, agree: true });
-  assert.equal(late.ok, false, '迟到的票被当成有效票了');
-  assert.equal(stateOf(fixture).deal!.claim!.status, 'rejected', '迟到的票没有把窗口判掉');
-  assert.notEqual(playTurn(stateOf(fixture).deal!), null, '被拒之后应回到原来的出牌人');
+  // 轮到庄家（首攻）：真牌 17 张，谁都压得住他某一门 —— 当场拒，且一个字都不改状态
+  const refused = applyTableAction(fixture.code, fixture.ids[declarer]!, { type: 'claim', seat: 0 });
+  assert.equal(refused.ok, false);
+  assert.match(refused.ok ? '' : refused.message, /剩下的牌你还赢不完全/);
+  assert.equal(JSON.stringify(stateOf(fixture)), before, '被拒的认领不该改动牌局');
+  assert.equal(stateOf(fixture).deal!.claim, null);
+  assert.notEqual(playTurn(stateOf(fixture).deal!), null, '被拒之后仍轮到同一个人出牌');
 });
 
 test('老库补字段：认赢上线前落库的牌局读到 claim 为 null，不会在第一帧炸掉', () => {
@@ -176,6 +112,6 @@ test('老库补字段：认赢上线前落库的牌局读到 claim 为 null，�
 
   const loaded = stateOf(fixture);
   assert.equal(loaded.deal!.claim, null);
-  // 能正常出下一步（而不是在 `deal.claim.status` 上抛 TypeError）
-  assert.equal(viewFor(getTableByCode(fixture.code)!, fixture.ids[0]!).table.claimMsLeft, null);
+  // 能正常出下一步（而不是在 `deal.claim.xxx` 上抛 TypeError）
+  assert.equal(viewFor(getTableByCode(fixture.code)!, fixture.ids[0]!).view!.deal!.claim, null);
 });

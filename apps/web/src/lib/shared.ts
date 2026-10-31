@@ -56,14 +56,6 @@ export interface TableView {
    * 入座与离座不写这个值（它们不是牌局动作），所以计时不会被换人重置。
    */
   readonly actionAgeMs: number | null;
-  /**
-   * **认赢** 待表决的剩余毫秒（ADR-0028）：没有进行中的认赢时为 `null`。
-   *
-   * 与 `actionAgeMs` 同一条规矩 —— 传**时长**而不是截止时刻：浏览器拿自己的钟倒数，
-   * 每收到一帧用这个权威值重新锚定，所以两端时钟差多少都不影响那颗倒计时。
-   * 发起、投票、超时、结算都走动作表，`games.updated_at` 随之更新，与它互不干扰。
-   */
-  readonly claimMsLeft: number | null;
 }
 
 /**

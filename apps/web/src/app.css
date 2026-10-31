@@ -419,6 +419,7 @@ button:disabled {
 @media (prefers-reduced-motion: reduce) {
   .coach-glow,
   .drop-in,
+  .claim-card,
   .shake,
   .pts-pop {
     animation: none;
@@ -504,6 +505,54 @@ button:disabled {
 @media (max-width: 640px) {
   .kitty-reveal .card {
     --cw: 40px;
+  }
+}
+
+/*
+ * 认赢那一拍（ADR-0028）：一手牌摊在内容槽正中。
+ *
+ * 牌宽 38px（比底牌那一档的 46px 更小）：17 张要在这个宽度里排成三行，还要让
+ * 「末轮 N 张 · 底牌按 N 倍算」那行不被挤出去 —— 320px 的槽内宽约 272px，一行 6 张。
+ * 每张牌再各自错开 28ms 落下（`claim-card` 的 animation-delay 由组件给），
+ * 读下来是「一手牌摊开」而不是「一堆牌砰地出现」。
+ */
+.claim-reveal {
+  max-width: min(94%, 520px);
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgb(0 0 0 / 0.55);
+  box-shadow: inset 0 0 0 1px rgb(216 180 90 / 0.25);
+}
+
+.claim-cards {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+}
+
+.claim-card {
+  animation: claim-deal 0.22s ease both;
+}
+
+@keyframes claim-deal {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.claim-reveal .card {
+  --cw: 38px;
+}
+
+@media (max-width: 640px) {
+  .claim-reveal .card {
+    --cw: 34px;
   }
 }
 

@@ -236,17 +236,11 @@ export class TableClient {
   }
 
   /**
-   * 认赢（ADR-0028）：`lastTrick` 是宣称的末轮张数（`ActionTray` 的 `claimRange` 区间内；
-   * 跟牌时这个区间已经扣掉这一墩必须打出的牌）。
-   * 亮牌与截止时刻都由服务端补，这里只发这个数。
+   * 认赢（ADR-0028）：只说「我要认」—— 亮牌、末轮张数与成立与否都由引擎在服务端当场判，
+   * 成立这一副就结束，不成立会回一句人话（「剩下的牌你还赢不完全」）。
    */
-  claim(lastTrick: number): Promise<boolean> {
-    return this.send({ type: 'claim', lastTrick });
-  }
-
-  /** 对认赢表态：true = 认输（这一副立刻按「剩余全收」结算），false = 不认（继续打） */
-  answerClaim(agree: boolean): Promise<boolean> {
-    return this.send({ type: 'claimAnswer', agree });
+  claim(): Promise<boolean> {
+    return this.send({ type: 'claim' });
   }
 
   deal(): Promise<boolean> {

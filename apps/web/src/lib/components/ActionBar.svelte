@@ -56,10 +56,6 @@
    */
   const status = $derived.by(() => {
     if (view === null || deal === null) return null;
-    // 认赢待表决：牌局冻结、`playTurn` 为 null，这一行是空的 —— 用一句话说明为什么没人能动
-    if (deal.claim !== null && deal.claim.status === 'pending') {
-      return `${whoLabel(names, mySeat, deal.claim.claimant)} 认赢 · 等两名对手表态`;
-    }
     if (deal.phase === 'auction') {
       return deal.auctionTurn === mySeat ? null : `${whoLabel(names, mySeat, deal.auctionTurn)} 叫牌中`;
     }
