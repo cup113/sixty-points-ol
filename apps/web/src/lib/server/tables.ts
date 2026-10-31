@@ -627,6 +627,10 @@ export function applyTableAction(code: string, userId: number, action: TableActi
     state = createGame(randomInt(0, SEAT_COUNT) as Seat);
   }
 
+  // 认赢窗口到点即作废：定时器只是**按时推它一把**，而窗口外到达的任何动作都不该让那张票生效
+  // （进程睡过点、定时器抛错丢了，都由这一句补上）。见 `claimTimeoutIfDue`。
+  state = claimTimeoutIfDue(table, state);
+
   const serverAction: Action =
     action.type === 'claim'
       ? { ...action, seat: seat as Seat, expiresAt: Date.now() + CLAIM_WINDOW_MS }
@@ -657,11 +661,12 @@ export function applyTableAction(code: string, userId: number, action: TableActi
     );
   });
   broadcast(table.id);
+  // 认赢的窗口先排：这一步若开了/结了认赢，定时器要跟着重排。**排在机器人之前** ——
+  // 机器人那一步万一抛错，窗口的定时器不能再跟着丢（丢了还有 `claimTimeoutIfDue` 兜底）。
+  scheduleClaimTimeout(table.id, result.state);
   // 状态变了，轮到机器人的话让它想（见 bots.ts / ADR-0015）。
   // 放在 broadcast 之后：机器人动作会再次广播，链式推进到人类回合为止。
   scheduleBots(table.id);
-  // 认赢的窗口同理：这一步若开了/结了认赢，定时器要跟着重排（见下方）
-  scheduleClaimTimeout(table.id, result.state);
   return { ok: true };
 }
 
@@ -728,25 +733,53 @@ export function scheduleClaimTimeout(tableId: number, state: GameState | null): 
   );
 }
 
+/**
+ * 到点就作废，**不依赖定时器还活着**：定时器只是按点推它一把。
+ *
+ * 两条路都走这里：定时器到点（`expireClaim`）、以及窗口之后到达的任何动作
+ * （`applyTableAction` 开头）。后者是关键 —— 进程睡过点、机器人那一步抛错把定时器漏了，
+ * 一张迟到的「同意」票也不能再把它算数（同一副的认赢只此一次，`claimTimeout` 幂等）。
+ *
+ * 返回新状态；没到点或没有待表决的认赢时原样返回（调用方据此判断要不要再排机器人）。
+ */
+function claimTimeoutIfDue(table: TableInfo, state: GameState): GameState {
+  const claim = state.deal?.claim ?? null;
+  if (claim === null || claim.status !== 'pending' || Date.now() <= claim.expiresAt) return state;
+  const result = dispatch(state, { type: 'claimTimeout' }, cryptoRng);
+  if (!result.ok) return state;
+  transaction(() => {
+    saveGame(table.id, result.state);
+    appendEvents(table.id, result.events);
+  });
+  broadcast(table.id);
+  scheduleClaimTimeout(table.id, result.state);
+  return result.state;
+}
+
 /** 到点：认赢没有集齐两张「认输」票，按失败结算；这一步不需要任何人的身份 */
 function expireClaim(tableId: number): void {
   claimTimers.delete(tableId);
   const table = getTableById(tableId);
   if (table === null) return;
   const state = getGameState(table.id);
-  if (state?.deal?.claim?.status !== 'pending') return;
-  const result = dispatch(state, { type: 'claimTimeout' }, cryptoRng);
-  if (!result.ok) return;
-  transaction(() => {
-    saveGame(table.id, result.state);
-    appendEvents(table.id, result.events);
-  });
-  broadcast(table.id);
+  if (state === null) return;
+  if (claimTimeoutIfDue(table, state) === state) return;
   scheduleBots(table.id);
 }
 
-/** 服务启动时补扫：重启前挂着的认赢窗口自动续上（已经超时的立刻判失败） */
+/**
+ * 服务启动时补扫：重启前挂着的认赢窗口自动续上（已经超时的立刻判失败）。
+ *
+ * 逐行兜住：一行读不出来的牌局只该跳过它自己 —— 启动钩子里一个异常会把整张桌、
+ * 整个进程的请求都带下来，而那与「这一桌的认赢窗口」无关。
+ */
 export function initClaims(): void {
   const rows = db.prepare('SELECT table_id FROM games').all() as unknown as { table_id: number }[];
-  for (const row of rows) scheduleClaimTimeout(row.table_id, getGameState(row.table_id));
+  for (const row of rows) {
+    try {
+      scheduleClaimTimeout(row.table_id, getGameState(row.table_id));
+    } catch (error) {
+      console.error(`认赢补扫：桌 ${row.table_id} 的牌局读不出来，跳过（${String(error)}）`);
+    }
+  }
 }

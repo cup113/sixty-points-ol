@@ -38,22 +38,22 @@ import { advanceUntilMyTurn, FakeApi, scoredState } from './fake-api.ts';
 const FRAME = 160;
 
 /**
- * schema 上限：18 个工具实测 6,269（16 个工具时是 5,418；ADR-0028 的认赢多了
- * `declare_win` / `answer_win` 两个工具，两段描述都是每个请求都要重发的），留的余量（131）
+ * schema 上限：18 个工具实测 6,278（16 个工具时是 5,418；ADR-0028 的认赢多了
+ * `declare_win` / `answer_win` 两个工具，两段描述都是每个请求都要重发的），留的余量（122）
  * 仍**小于**一个最便宜的工具（零参数约 211）—— 也就是「再加一个工具」照样必须先算这笔账
  * （工具数是**永久税**：它乘在每一次调用上，见 ADR-0011/0014）。
  */
 const SCHEMA_LIMIT = 6_400;
-/** 一副牌的实收上界（实测 18,687）；「多一次调用」由 CALLS_LIMIT 把守，这里管的是每帧的大小 */
+/** 一副牌的实收上界（实测 18,816）；「多一次调用」由 CALLS_LIMIT 把守，这里管的是每帧的大小 */
 const DELIVERED_LIMIT = 19_500;
-/** 累计读入的上界（实测 308,764）：它随回合数二次增长，一个多余的字段也会被放大 */
+/** 累计读入的上界（实测 310,499）：它随回合数二次增长，一个多余的字段也会被放大 */
 const CUMULATIVE_LIMIT = 320_000;
 /** 结算单帧（实测 1,368）：整副牌里最大的一份 */
 const END_STATE_LIMIT = 1_500;
 const CALLS_LIMIT = 22;
-/** 第二副的最大单帧（实测 1,359）：跨副**不再**累积，所以它只该比第一副多几个字符 */
+/** 第二副的最大单帧（实测 1,372）：跨副**不再**累积，所以它只该比第一副多几个字符 */
 const GROWTH_LIMIT = 1_500;
-/** 整局里最大的一份负载（实测 1,393）：它曾随副数线性上涨（4,402），现在必须基本不动 */
+/** 整局里最大的一份负载（实测 1,406）：它曾随副数线性上涨（4,402），现在必须基本不动 */
 const GAME_MESSAGE_LIMIT = 1_500;
 /** 一整局的实收（实测 139,207） */
 const GAME_DELIVERED_LIMIT = 150_000;
@@ -215,14 +215,14 @@ test('一副牌只需「每回合一次调用」（动作自带等待，不靠�
 test('一副牌的实收负载在预算内', () => {
   assert.ok(
     BUDGET.delivered <= DELIVERED_LIMIT,
-    `一副牌投喂了 ${BUDGET.delivered} 字符，超过预算 ${DELIVERED_LIMIT}（行动投影实测 18,687）`
+    `一副牌投喂了 ${BUDGET.delivered} 字符，超过预算 ${DELIVERED_LIMIT}（行动投影实测 18,816）`
   );
 });
 
 test('模型累计读入在预算内（这才是真正的账：每个请求都重发全文）', () => {
   assert.ok(
     BUDGET.cumulative <= CUMULATIVE_LIMIT,
-    `累计读入 ${BUDGET.cumulative} 字符，超过预算 ${CUMULATIVE_LIMIT}（行动投影实测 308,764）`
+    `累计读入 ${BUDGET.cumulative} 字符，超过预算 ${CUMULATIVE_LIMIT}（行动投影实测 310,499）`
   );
 });
 

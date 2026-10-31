@@ -236,7 +236,8 @@ export class TableClient {
   }
 
   /**
-   * 认赢（ADR-0028）：`lastTrick` 是宣称的末轮张数（1..手上最长顺子）。
+   * 认赢（ADR-0028）：`lastTrick` 是宣称的末轮张数（`ActionTray` 的 `claimRange` 区间内；
+   * 跟牌时这个区间已经扣掉这一墩必须打出的牌）。
    * 亮牌与截止时刻都由服务端补，这里只发这个数。
    */
   claim(lastTrick: number): Promise<boolean> {

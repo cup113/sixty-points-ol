@@ -147,6 +147,25 @@ test('超时：重启补扫时到点的认赢判失败（fail-closed），牌局
   assert.fail('认赢窗口到点了还挂在 pending 上');
 });
 
+test('窗口之外到达的票不生效：哪怕定时器没赶上（进程睡过点 / 定时器丢了）', () => {
+  const fixture = threeSeats();
+  const { declarer, userId } = toPlay(fixture);
+  const claimed = applyTableAction(fixture.code, userId, { type: 'claim', seat: 0, lastTrick: 1 });
+  assert.ok(claimed.ok, claimed.ok ? '' : claimed.message);
+
+  // 只把存下来的截止时刻拨到过去：**不**调 initClaims、也不等定时器 ——
+  // 模拟「定时器没跑过」，这一票仍必须被拿下（窗口不是靠定时器才算数的）
+  const state = stateOf(fixture);
+  (state.deal!.claim as { expiresAt: number }).expiresAt = Date.now() - 1;
+  db.prepare('UPDATE games SET state = ? WHERE table_id = ?').run(JSON.stringify(state), fixture.tableId);
+
+  const defender = ([0, 1, 2] as Seat[]).find((seat) => seat !== declarer)!;
+  const late = applyTableAction(fixture.code, fixture.ids[defender]!, { type: 'claimAnswer', seat: 0, agree: true });
+  assert.equal(late.ok, false, '迟到的票被当成有效票了');
+  assert.equal(stateOf(fixture).deal!.claim!.status, 'rejected', '迟到的票没有把窗口判掉');
+  assert.notEqual(playTurn(stateOf(fixture).deal!), null, '被拒之后应回到原来的出牌人');
+});
+
 test('老库补字段：认赢上线前落库的牌局读到 claim 为 null，不会在第一帧炸掉', () => {
   const fixture = threeSeats();
   const state = stateOf(fixture);

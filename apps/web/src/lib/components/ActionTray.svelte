@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { longestRun } from '@sixty/engine';
+  import { canWinTrickNow, claimLastTrickRange } from '@sixty/engine';
   import type { TableClient } from '$lib/client/table.svelte';
 
   let { client }: { client: TableClient } = $props();
@@ -33,11 +33,21 @@
    */
   let claimOpen = $state(false);
   let lastTrick = $state(1);
-  const claimMax = $derived(
+  /**
+   * 能报的末轮张数区间（ADR-0028）：**这一墩也赢得下来**才有入口 ——
+   * 跟牌时还要扣掉这一墩必须打出的牌；三家等长时末轮就是这一墩，区间收成一个点。
+   * 认过赢的副没有再来的机会（一副至多一次，被拒也一样）。
+   */
+  const claimRange = $derived(
     deal !== null && deal.phase === 'play' && deal.trump !== null && me !== null
-      ? longestRun(me.hand, deal.trump)
-      : 1
+      ? canWinTrickNow(me.hand, deal.trick?.plays ?? [], deal.trump)
+        ? claimLastTrickRange(me.hand, deal.trick?.plays ?? [], deal.trump)
+        : null
+      : null
   );
+  const claimMin = $derived(claimRange?.min ?? 1);
+  const claimMax = $derived(claimRange?.max ?? 1);
+  const lastTrickLabel = $derived(claimMin === claimMax ? `${claimMax}` : `${claimMin}–${claimMax}`);
   const remaining = $derived(
     deal === null
       ? 0
@@ -46,9 +56,11 @@
   );
 
   $effect(() => {
-    if (!visible) claimOpen = false;
+    // 入口没了（轮次走了 / 认过 / 这一墩赢不了）就收起草稿，免得留下一个必然被拒的按钮
+    if (!visible || claimRange === null) claimOpen = false;
   });
   $effect(() => {
+    if (lastTrick < claimMin) lastTrick = claimMin;
     if (lastTrick > claimMax) lastTrick = claimMax;
   });
 
@@ -120,15 +132,16 @@
         出 牌
       </button>
     {/if}
-    {#if deal?.phase === 'play' && selectedCount === 0}
-      <!-- 认赢：亮出全部手牌、宣称剩下的每一墩都归自己。这一格原本是「清空」（0 张时是死键） -->
+    {#if deal?.phase === 'play' && selectedCount === 0 && deal?.claim === null && claimRange !== null}
+      <!-- 认赢：亮出全部手牌、宣称剩下的每一墩都归自己。这一格原本是「清空」（0 张时是死键）。
+           入口只在**这一墩还赢得了**时出现（跟牌时他得先压得住这墩），一式一次，认过就不再给。 -->
       <button
         type="button"
         class={ghost}
         data-claim-open="true"
         disabled={client.busy}
         onclick={() => {
-          lastTrick = 1;
+          lastTrick = claimMin;
           claimOpen = true;
         }}
       >
@@ -162,7 +175,7 @@
       >
         <p class="text-center text-[11px] text-white/60">末轮张数（底牌按这个倍数算）</p>
         <div class="mt-1.5 flex items-center justify-center gap-3">
-          <button type="button" class={stepper} aria-label="减少末轮张数" disabled={lastTrick <= 1} onclick={() => (lastTrick -= 1)}>
+          <button type="button" class={stepper} aria-label="减少末轮张数" disabled={lastTrick <= claimMin} onclick={() => (lastTrick -= 1)}>
             −
           </button>
           <b class="w-6 text-center text-lg tabular-nums text-gold" data-claim-last-trick={lastTrick}>{lastTrick}</b>
@@ -177,7 +190,7 @@
           </button>
         </div>
         <p class="mt-1 text-center text-[11px] text-white/45">
-          剩 <b class="tabular-nums">{remaining}</b> 张全收 · 最多 {claimMax} 张
+          剩 <b class="tabular-nums">{remaining}</b> 张全收 · 末轮 <b class="tabular-nums">{lastTrickLabel}</b> 张
         </p>
         <div class="mt-2 flex justify-center gap-2">
           <button type="button" class={gold} data-claim-confirm="true" disabled={client.busy} onclick={confirmClaim}>

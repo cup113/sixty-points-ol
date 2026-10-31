@@ -28,6 +28,10 @@ export function replayInputOf(state: GameState): ReplayInput | null {
   const deal = state.deal;
   const summary = deal?.summary ?? null;
   if (deal === null || summary === null) return null;
+  // 认赢结束的副没有重演：剩下的牌被整墩收走，**没有逐张归属**，墩史拼不回三家的 17 张。
+  // 显式排除，而不是撞在下文「打出的牌不足 17 张」那条副作用上 —— 将来谁改了收牌方式也不会
+  // 把一副认赢的牌重演成另一副牌。
+  if (summary.claim != null) return null;
 
   const declarer = summary.contract.declarerSeat;
   const hands: Card[][] = [];

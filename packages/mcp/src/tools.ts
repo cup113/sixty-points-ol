@@ -2,9 +2,10 @@ import { z } from 'zod';
 import {
   bidCandidates,
   BID_STEP,
+  canWinTrickNow,
   checkPlay,
+  claimLastTrickRange,
   HELP_KEYS,
-  longestRun,
   MIN_BID,
   phaseHelp,
   playHint,
@@ -113,8 +114,8 @@ export interface TurnSummary {
   readonly legalBids?: readonly string[] | undefined;
   /** 轮到你在出牌：跟牌/领出的**约束**（不复述手牌，模型自己手上有 you.hand） */
   readonly legalPlay?: PlayHint | undefined;
-  /** 轮到你出牌：认赢能报的最大末轮张数（1..手上最长顺子），直接喂给 declare_win.last_trick */
-  readonly claimMax?: number | undefined;
+  /** 轮到你出牌：认赢能报的末轮张数区间（闭区间），直接喂给 declare_win.last_trick */
+  readonly claimLastTrick?: { readonly min: number; readonly max: number } | undefined;
 }
 
 /**
@@ -232,7 +233,7 @@ function flatCalls(rows: readonly BidOption[]): string[] {
  * 每回合多探 3 次就把一副牌的总投喂量抬到 2.8 倍、多探 17 次抬到 16 倍。约束只有几行，
  * 而探测是整个回合 —— 所以合法性由状态直接给，`check_play` 只留作一次验多组的兜底。
  */
-function legalOf(payload: StreamPayload): Pick<TurnSummary, 'legalBids' | 'legalPlay' | 'claimMax'> {
+function legalOf(payload: StreamPayload): Pick<TurnSummary, 'legalBids' | 'legalPlay' | 'claimLastTrick'> {
   const { role, view, you } = payload;
   if (role !== 'player' || view === null || you === null || view.status === 'finished') return {};
   const deal = view.deal;
@@ -242,8 +243,16 @@ function legalOf(payload: StreamPayload): Pick<TurnSummary, 'legalBids' | 'legal
     return { legalBids: flatCalls(bidCandidates(view)) };
   }
   if (deal.phase === 'play' && deal.playTurn === you.seat && deal.trump !== null) {
-    const lead = deal.trick !== null && deal.trick.plays.length > 0 ? deal.trick.plays[0]!.cards : null;
-    return { legalPlay: playHint(you.hand, deal.trump, lead), claimMax: longestRun(you.hand, deal.trump) };
+    const plays = deal.trick?.plays ?? [];
+    const lead = plays.length > 0 ? plays[0]!.cards : null;
+    const range = canWinTrickNow(you.hand, plays, deal.trump)
+      ? claimLastTrickRange(you.hand, plays, deal.trump)
+      : null;
+    return {
+      legalPlay: playHint(you.hand, deal.trump, lead),
+      // 这一墩赢不了就没有认赢可报（引擎会拒），别让模型白试一次
+      ...(range === null ? {} : { claimLastTrick: range })
+    };
   }
   return {};
 }
@@ -521,7 +530,7 @@ export const TOOLS: readonly ToolSpec[] = [
   {
     name: 'declare_win',
     description:
-      '认赢（轮到你出牌时）：亮出你全部手牌，宣称剩下的每一墩都归你，last_trick 报末轮张数（1..turn.claimMax，决定底牌倍数）。两名对手都在 30 秒内认输，本副立刻按「剩余全收」结算；有人不认就继续打 —— 而你的牌**仍然公开到换副**。',
+      '认赢（轮到你出牌时）：亮出你全部手牌，宣称剩下的每一墩都归你，last_trick 报末轮张数（取 turn.claimLastTrick 区间内，决定底牌倍数）。两名对手都在 30 秒内认输，本副立刻按「剩余全收」结算；有人不认就继续打 —— 而你的牌**仍然公开到换副**。',
     input: { ...codeField, last_trick: z.number().int().min(1), wait: WAIT_FIELD },
     run: (rt, args) => act(rt, args['code'], { type: 'claim', lastTrick: args['last_trick'] as number }, args['wait'])
   },
