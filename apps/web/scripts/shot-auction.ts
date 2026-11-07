@@ -418,6 +418,16 @@ const SHOTS: readonly Shot[] = [
     size: MOBILE_NARROW
   },
   {
+    file: '02c-auto-pass-armed',
+    label: '委托不叫：勾上「这一副剩下的都不叫」——页脚那行变金色、方框实心带勾，主按钮原样在上',
+    ...sceneFor(0, [{ points: 40, strain: 'H' }]),
+    // 此刻**不轮到我**（order[0] 刚叫过，轮到 order[1]），所以勾上之后不会有代按的定时器 ——
+    // 这一屏量的是「在等别人叫的时候就能委托」这个状态本身，画面是稳定的。
+    clicks: ['[data-auto-pass]'],
+    mode: 'panel',
+    size: MOBILE
+  },
+  {
     file: '03-highest-40s',
     label: '最高 40♠：40 行只亮 NT + 45 全行 + 行末「▶ 跳叫」',
     ...sceneFor(2, [{ points: 40, strain: 'H' }, { points: 40, strain: 'S' }]),

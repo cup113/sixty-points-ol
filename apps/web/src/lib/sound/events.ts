@@ -36,9 +36,15 @@ export interface SoundSnapshot {
   readonly tricksDone: number;
   /** 已结算的那一副的副号；未结算为 `null` */
   readonly settledDealNo: number | null;
+  /** 这一副是否已委托「不叫」（ADR-0029）—— 委托时叫牌阶段不响「该你了」 */
+  readonly autoPass: boolean;
 }
 
-export function soundSnapshot(view: PublicView | null, you: PlayerHand | null): SoundSnapshot {
+export function soundSnapshot(
+  view: PublicView | null,
+  you: PlayerHand | null,
+  autoPass = false
+): SoundSnapshot {
   const deal = view?.deal ?? null;
   const mySeat = you?.seat ?? null;
   return {
@@ -50,7 +56,8 @@ export function soundSnapshot(view: PublicView | null, you: PlayerHand | null): 
     playTurn: deal?.playTurn ?? null,
     trickPlays: deal?.trick?.plays.length ?? 0,
     tricksDone: deal?.trickHistory.length ?? 0,
-    settledDealNo: deal?.summary?.dealNo ?? null
+    settledDealNo: deal?.summary?.dealNo ?? null,
+    autoPass
   };
 }
 
@@ -59,10 +66,17 @@ export function soundSnapshot(view: PublicView | null, you: PlayerHand | null): 
  *
  * 埋底没有单独的轮次字段 —— 那一阶段就是庄家的活（见 CONTEXT.md 的 **埋底**），
  * 所以「我是庄家」即「轮到我」。
+ *
+ * **委托不叫时，叫牌阶段一律不算「该你了」**（ADR-0029）：你把这一副的叫牌交出去了，
+ * 「该你了」就会变成「被叫醒去看一个自己已经不会出手的机会」—— 而且那一声会紧跟着
+ * 一次自动的 pass，听感上像先催你一下、再替你按掉。埋底与出牌不受影响：那两处不代劳，
+ * 轮到你就是要你出手。
  */
 export function isMyTurn(snapshot: SoundSnapshot): boolean {
   if (snapshot.mySeat === null) return false;
-  if (snapshot.phase === 'auction') return snapshot.auctionTurn === snapshot.mySeat;
+  if (snapshot.phase === 'auction') {
+    return !snapshot.autoPass && snapshot.auctionTurn === snapshot.mySeat;
+  }
   if (snapshot.phase === 'bury') return snapshot.isDeclarer;
   if (snapshot.phase === 'play') return snapshot.playTurn === snapshot.mySeat;
   return false;

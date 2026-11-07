@@ -685,6 +685,20 @@ async function main(): Promise<void> {
   // 此刻最高叫品是 40♣（花色）⇒ 非跳叫档是 40、45 两档，第二档行末一枚「▶ 跳叫」；
   // 50 起属于跳叫，点开之前不出现在页面上（那张页面的 HTML 是未展开态）。
   const panelMine = bidPanelMarkup(secondBidder);
+  // 委托不叫（ADR-0029）：页脚那行复选，**排在「不叫」主按钮之后**（它是那个按钮的延伸）。
+  // SSR 出来的页面没有本机存储，所以初始态一定是未委托（`off`）。
+  assert(
+    panelMine.includes('data-auto-pass="off"'),
+    '叫牌面板里没有委托不叫的开关（缺 data-auto-pass="off"）：轮到我时提前撒手的那条路不见了'
+  );
+  assert(
+    panelMine.includes('这一副剩下的都不叫'),
+    '委托开关的文案没写清作用范围（应含「这一副」）：换副即作废这件事得让人看见'
+  );
+  assert(
+    panelMine.indexOf('data-pass-button') < panelMine.indexOf('data-auto-pass'),
+    '委托开关跑到了「不叫」主按钮之前：它是页脚，必须排在主按钮之后'
+  );
   for (const points of ['>40<', '>45<']) {
     assert(panelMine.includes(points), `候选档位缺 ${points}（最高 40♣ 时应摆 40、45 两档非跳叫）`);
   }

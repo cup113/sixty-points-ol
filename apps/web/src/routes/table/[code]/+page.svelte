@@ -321,10 +321,11 @@
    *
    * `prevSound` 刻意是**普通变量**（非 `$state`）：它只用来记住上一帧，写它不该引起任何重算。
    * 观战者没有 `you`，`isMyTurn` 恒为假，所以「该你了」永不触发；出牌 / 收墩 / 结算是公开事件，一样听得到。
+   * 第三个数是「这一副是否已委托不叫」（ADR-0029）：委托时叫牌阶段不响「该你了」。
    */
   let prevSound = soundSnapshot(null, null);
   $effect(() => {
-    const next = soundSnapshot(client.view, client.you);
+    const next = soundSnapshot(client.view, client.you, client.autoPass);
     for (const cue of soundEvents(prevSound, next)) {
       if (cue === 'turn') sound.buzz();
       void sound.cue(cue);

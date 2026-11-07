@@ -42,15 +42,43 @@ function tagAt(body: string, index: number): string {
   return body.slice(start, end + 1);
 }
 
-/** 「不叫」按钮的 class：在「不叫」文字之前找最近的 `<button` */
-function passButtonClass(body: string): string | null {
-  const text = body.indexOf('不叫');
-  if (text < 0) return null;
-  const start = body.lastIndexOf('<button', text);
-  if (start < 0) return null;
-  const end = body.indexOf('>', start);
-  if (end < 0) return null;
-  return classOf(body.slice(start, end + 1));
+/** 「不叫」按钮的文案。页脚那行委托开关（ADR-0029）也含这两个字，所以定位不能只按文字。 */
+const PASS_LABEL = '不叫';
+
+interface PassButton {
+  /** 在整个标记里的起始下标（用来判「页脚有没有排在滚动区之后」） */
+  readonly index: number;
+  /** 这个标签的 class 值（用来判 sticky / shrink-0 / 44px 命中区） */
+  readonly klass: string;
+}
+
+/**
+ * 找到那颗「不叫」按钮。两条路，按可靠性排序：
+ *
+ * 1. **`data-pass-button` 钩子**：面板自己声明「这颗是主按钮」，文案怎么改都不会走偏；
+ * 2. 退回**按整段文字**认：`<button>` 里去掉标签之后的文字**恰好**是「不叫」。
+ *
+ * 早先的写法是「在文本里找『不叫』二字、再往前找最近的那个 `<button`」——
+ * 页脚多了一行「这一副剩下的都不叫」（ADR-0029）之后，这条规则会把**页脚**当成按钮：
+ * 它没有 44px 命中区，于是守卫对着完全正确的源码报假红；而且这个误判只在「此刻不轮到我、
+ * 主按钮没渲染」的页面上出现 —— 正好是 ui-check 用 `requirePassButton: false` 跑的那一档。
+ * 认「这个元素说的是什么」比认「这两个字在前面还是后面」硬。
+ */
+function passButtonIn(markup: string): PassButton | null {
+  const buttons = [...markup.matchAll(/<button[^>]*>/g)];
+  for (const match of buttons) {
+    if (/\bdata-pass-button\b/.test(match[0])) {
+      return { index: match.index ?? 0, klass: classOf(match[0]) };
+    }
+  }
+  for (const match of buttons) {
+    const from = (match.index ?? 0) + match[0].length;
+    const end = markup.indexOf('</button>', from);
+    if (end < 0) continue;
+    const text = markup.slice(from, end).replace(/<[^>]*>/g, '').trim();
+    if (text === PASS_LABEL) return { index: match.index ?? 0, klass: classOf(match[0]) };
+  }
+  return null;
 }
 
 export function checkBidPanelReachability(markup: string, options: PanelCheckOptions = {}): PanelCheck {
@@ -111,25 +139,23 @@ export function checkBidPanelReachability(markup: string, options: PanelCheckOpt
     );
   }
 
-  const passIndex = body.indexOf('不叫');
-  if (passIndex >= 0 && passIndex < scrollIndex) {
+  const pass = passButtonIn(body);
+  if (pass !== null && pass.index < scrollIndex) {
     return fail('「不叫」排在历史滚动区之前：页脚必须排在滚动区之后，历史才不会从它下面穿过去');
   }
-
-  const buttonClass = passButtonClass(body);
-  if (buttonClass === null) {
+  if (pass === null) {
     if (options.requirePassButton === false) return { ok: true, reason: '' };
     return fail('面板里找不到「不叫」按钮：轮到自己时必须有一个可点的「不叫」');
   }
-  if (buttonClass.includes('sticky')) {
+  if (pass.klass.includes('sticky')) {
     return fail(
       '「不叫」是 sticky 的：它会浮在历史行上，把排在最后的那半行叫牌记录压掉 —— 页脚要在正常文档流里（容器内不许出现 sticky）'
     );
   }
-  if (!buttonClass.includes('shrink-0')) {
+  if (!pass.klass.includes('shrink-0')) {
     return fail('「不叫」不是 shrink-0：flex 列空间不够时它会被压缩，命中区随之变小');
   }
-  if (!buttonClass.includes('min-h-11')) {
+  if (!pass.klass.includes('min-h-11')) {
     return fail('「不叫」的命中区不足 44px（缺 min-h-11）');
   }
   return { ok: true, reason: '' };

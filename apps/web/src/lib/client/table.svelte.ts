@@ -1,5 +1,6 @@
 import { cardKey, type BidCall, type Card, type PublicView } from '@sixty/engine';
 import type { PlayerHand, Role, StreamPayload, TableView } from '$lib/shared';
+import { armedAfter, autoPassBeat, autoPassDelay, readArmedDealNo, writeArmedDealNo } from '$lib/auto-pass';
 import { saveCredential } from '$lib/identity';
 import { checkPlay } from '$lib/labels';
 import { shouldResetSelection, type SelectionContext } from '$lib/selection';
@@ -21,8 +22,18 @@ export class TableClient {
   connection = $state<ConnectionState>('connecting');
   /** 入座时这一副正在进行 ⇒ 我接下了别人的手牌（一次性提示，关掉即消） */
   inheritedNotice = $state(false);
+  /**
+   * 这一副是否已委托「不叫」（ADR-0029）。真值源是 `localStorage`（键里带副号），
+   * 这里只是它在界面上的镜像 —— 换副、或这一副的叫牌一结束，`#syncAutoPass()` 就会把它算回 false，
+   * 所以不需要另写清理代码。
+   */
+  autoPass = $state(false);
 
   #source: EventSource | null = null;
+  /** 一拍只排一次：排上了就等它响，别叠第二个定时器 */
+  #autoTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 已经代按过的**那一拍**（`副号:叫牌史长度`）：先记后发，发失败了再退回来重试 */
+  #autoBeat: string | null = null;
 
   constructor(code: string, initial: StreamPayload, inherited = false) {
     this.code = code;
@@ -35,6 +46,8 @@ export class TableClient {
     this.view = payload.view;
     this.you = payload.you;
     this.table = payload.table;
+    this.#syncAutoPass();
+    this.#pumpAutoPass();
   }
 
   connect(): void {
@@ -64,6 +77,79 @@ export class TableClient {
   disconnect(): void {
     this.#source?.close();
     this.#source = null;
+    this.#clearAutoTimer();
+  }
+
+  /* ---------------- 委托不叫（ADR-0029） ---------------- */
+
+  /**
+   * 委托开 / 关：只写本机存储，不发任何请求，所以点了立即生效、也不可能失败。
+   *
+   * 摆在叫牌阶段之外时直接忽略（界面上那个开关也只在叫牌阶段渲染）：
+   * 委托的作用范围就是「这一副的叫牌」，没有第二种用法。
+   */
+  setAutoPass(on: boolean): void {
+    const deal = this.view?.deal ?? null;
+    if (deal === null || deal.phase !== 'auction') return;
+    writeArmedDealNo(this.code, on ? deal.dealNo : null);
+    this.autoPass = on;
+    this.#pumpAutoPass();
+  }
+
+  /** 从本机存储把「这一副是否已委托」算回来（刷新、换副、叫牌结束、开新对局之后都靠它） */
+  #syncAutoPass(): void {
+    const stored = readArmedDealNo(this.code);
+    const next = armedAfter(this.view, stored);
+    if (next === null) {
+      // 叫牌结束就清账：台账因此永远只可能躺着一个**当下正在叫牌**的副号，
+      // 「开新对局把副号归零」也就不会让上一局的委托重新生效（见 auto-pass.ts 的 armedAfter）。
+      if (stored !== null) writeArmedDealNo(this.code, null);
+    } else if (stored !== next) {
+      writeArmedDealNo(this.code, next);
+    }
+    this.autoPass = next !== null;
+  }
+
+  /**
+   * 每次负载变化后重判一次：该代按就排一拍，不该就撤掉在途的那一拍。
+   *
+   * 没有轮询、没有常驻定时器：唯一的定时器是「这半拍」本身，而且只在真该出手时存在。
+   * 判据全在 `auto-pass.ts` 的 `autoPassBeat` 里（纯函数，逐帧可测）。
+   */
+  #pumpAutoPass(): void {
+    const beat = autoPassBeat(this.view, this.you, this.autoPass, this.#autoBeat);
+    if (beat === null) {
+      this.#clearAutoTimer();
+      return;
+    }
+    if (this.#autoTimer !== null) return;
+    this.#autoTimer = setTimeout(() => {
+      this.#autoTimer = null;
+      void this.#fireAutoPass();
+    }, autoPassDelay(Math.random));
+  }
+
+  #clearAutoTimer(): void {
+    if (this.#autoTimer === null) return;
+    clearTimeout(this.#autoTimer);
+    this.#autoTimer = null;
+  }
+
+  /**
+   * 定时器到点：**重新判一次**再出手（这半拍里可能已经有人出手、我撤了委托、换了副）。
+   *
+   * 记账键先写下去再发：同一拍绝不发第二次（重连补帧、无关广播引起的重判都不会）。
+   * 但发失败就把账退回来并再排一拍 —— 一次网络抖动不该让这一拍永远没人按（桌面会卡在那里等），
+   * 也不该等下一帧：这一拍之后可能再也没有别人出手，帧也就不再来。
+   */
+  async #fireAutoPass(): Promise<void> {
+    const beat = autoPassBeat(this.view, this.you, this.autoPass, this.#autoBeat);
+    if (beat === null) return;
+    this.#autoBeat = beat;
+    const sent = await this.bid('pass', { quiet: true });
+    if (sent || this.#autoBeat !== beat) return;
+    this.#autoBeat = null;
+    this.#pumpAutoPass();
   }
 
   selectedCards = $derived.by(() => {
@@ -94,7 +180,14 @@ export class TableClient {
     this.selected = [];
   }
 
-  async #request(path: string, init: RequestInit = {}): Promise<unknown> {
+  /**
+   * 所有动作请求的唯一出口。
+   *
+   * `quiet` = **失败不写页头横幅**：委托不叫（ADR-0029）由页面代发，那不是用户刚点的动作，
+   * 一句「还没轮到你」的红字只会让人困惑（同一条路径上，先到的请求已经生效，这张桌没坏）。
+   * 成功与失败的判据完全不变，只是不上屏。
+   */
+  async #request(path: string, init: RequestInit = {}, quiet = false): Promise<unknown> {
     this.busy = true;
     this.error = null;
     try {
@@ -110,24 +203,25 @@ export class TableClient {
       });
       const payload = (await response.json().catch(() => null)) as { message?: string } | null;
       if (!response.ok) {
-        this.error = payload?.message ?? `操作失败（${response.status}）`;
+        if (!quiet) this.error = payload?.message ?? `操作失败（${response.status}）`;
         return null;
       }
       this.selected = [];
       return payload;
     } catch (cause) {
-      this.error = cause instanceof Error ? cause.message : '网络错误';
+      if (!quiet) this.error = cause instanceof Error ? cause.message : '网络错误';
       return null;
     } finally {
       this.busy = false;
     }
   }
 
-  send(action: unknown): Promise<boolean> {
-    return this.#request(`/api/tables/${this.code}/action`, {
-      method: 'POST',
-      body: JSON.stringify({ action })
-    }).then((payload) => payload !== null);
+  send(action: unknown, options: { quiet?: boolean } = {}): Promise<boolean> {
+    return this.#request(
+      `/api/tables/${this.code}/action`,
+      { method: 'POST', body: JSON.stringify({ action }) },
+      options.quiet === true
+    ).then((payload) => payload !== null);
   }
 
   /**
@@ -223,8 +317,12 @@ export class TableClient {
     return payload !== null;
   }
 
-  bid(call: BidCall): Promise<boolean> {
-    return this.send({ type: 'bid', call });
+  /**
+   * 叫牌。`quiet` 只给「委托不叫」的代按用（ADR-0029）：同一个方法、
+   * 同一条服务器权威路径，区别只有失败时不往页头写红字。
+   */
+  bid(call: BidCall, options: { quiet?: boolean } = {}): Promise<boolean> {
+    return this.send({ type: 'bid', call }, options);
   }
 
   bury(): Promise<boolean> {

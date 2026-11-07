@@ -34,6 +34,12 @@
    */
   const emptyLayout: BidLayout = { tiers: [], trigger: 'none' };
   const layout = $derived(view === null ? emptyLayout : bidTiers(view, expanded));
+  /**
+   * 页脚那枚「这一副剩下的都不叫」（ADR-0029）：**叫牌阶段、且我在座位上**才渲染。
+   * 观战者没有座位也没有手牌，对它而言「轮到我不叫」不成立，所以整行不出现 ——
+   * 这也是「观战页面不许出现牌局按钮」那条既有的 ui-check 判据能继续成立的原因。
+   */
+  const canArm = $derived(deal !== null && deal.phase === 'auction' && client.you !== null);
 </script>
 
 <!-- 面板是 flex 列，里面**只有叫牌历史那一块**会滚（min-h-0 + flex-1 = 先被压缩、
@@ -127,13 +133,44 @@
   {/if}
 
   {#if myTurn}
+    <!-- `data-pass-button` 是**定位钩子**：页脚那行委托开关同样含「不叫」二字，
+         `panel-guard.ts` 靠这个钩子认「哪一颗才是主按钮」，而不是在文字里找最近的那个 <button>。 -->
     <button
       type="button"
+      data-pass-button="true"
       class="mt-2 flex min-h-11 w-full shrink-0 items-center justify-center rounded-lg border border-white/25 bg-white/5 px-4 py-2 text-sm font-bold text-ivory transition hover:bg-white/10 disabled:opacity-40"
       disabled={client.busy}
       onclick={() => void client.bid('pass')}
     >
       不叫
+    </button>
+  {/if}
+
+  <!-- 委托不叫（ADR-0029）：**排在「不叫」之后**，与它同列、低一级 —— 读作「这个按钮的延伸」，
+       而不是一枚不知道从哪来的标签。勾上之后由 `TableClient` 在轮到我时慢半拍代按；
+       状态只记在本机（`localStorage`，键里带副号），换副自动作废。 -->
+  {#if canArm}
+    <button
+      type="button"
+      data-auto-pass={client.autoPass ? 'on' : 'off'}
+      role="checkbox"
+      aria-checked={client.autoPass}
+      title="轮到你时替你按「不叫」，随机慢半拍；再点一下撤回，换副自动作废"
+      class={[
+        'mt-1.5 flex min-h-9 w-full shrink-0 items-center gap-2 rounded-lg px-0.5 text-left text-[12px] transition',
+        client.autoPass ? 'font-bold text-gold' : 'text-white/60 hover:text-white/80'
+      ]}
+      onclick={() => client.setAutoPass(!client.autoPass)}
+    >
+      <!-- 勾的占位恒在（未勾时透明）：勾上 / 未勾两态的方框与文字位置完全一致，不会跳一下 -->
+      <span
+        aria-hidden="true"
+        class={[
+          'grid h-4 w-4 shrink-0 place-items-center rounded-[5px] text-[10px] font-black leading-none',
+          client.autoPass ? 'bg-gold text-ink' : 'text-transparent ring-1 ring-white/30'
+        ]}>✓</span
+      >
+      这一副剩下的都不叫
     </button>
   {/if}
 </section>
