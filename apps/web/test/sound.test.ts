@@ -192,6 +192,7 @@ function snap(over: Partial<SoundSnapshot> = {}): SoundSnapshot {
     trickPlays: 0,
     tricksDone: 0,
     settledDealNo: null,
+    autoPass: false,
     ...over
   };
 }
@@ -295,6 +296,31 @@ test('「该你了」：观战者永远听不到（出牌 / 收墩 / 结算照�
   const before = snap({ mySeat: null, playTurn: 0, trickPlays: 1, tricksDone: 0 });
   const after = snap({ mySeat: null, playTurn: 0, trickPlays: 2, tricksDone: 1 });
   assert.deepEqual(soundEvents(before, after), ['card', 'trick']);
+});
+
+/**
+ * 委托不叫（ADR-0029）：你把这一副的叫牌交出去了，「该你了」就不该再响 ——
+ * 否则它会先催你一下、紧接着又被一次自动的 pass 按掉。
+ */
+test('委托不叫时，叫牌阶段的「该你了」不响；埋底与出牌照旧', () => {
+  const armedTurn = snap({ phase: 'auction', auctionTurn: 0, mySeat: 0, autoPass: true });
+  assert.equal(isMyTurn(armedTurn), false, '委托时仍判「该你了」：会为一次不会看的机会叫醒用户');
+  assert.deepEqual(soundEvents(null, armedTurn), [], '刷新后正轮到我且已委托：不该响');
+  assert.deepEqual(soundEvents(snap({ phase: 'auction', auctionTurn: 1, mySeat: 0 }), armedTurn), []);
+  // 撤销委托之后照旧响
+  assert.deepEqual(
+    soundEvents(snap({ phase: 'auction', auctionTurn: 1, mySeat: 0 }), snap({ phase: 'auction', auctionTurn: 0, mySeat: 0 })),
+    ['turn'],
+    '撤销委托后不响了：那三条通道的判据与委托无关，只有叫牌阶段的那一句被收窄'
+  );
+  // 埋底 / 出牌不代劳，委托不影响
+  assert.equal(isMyTurn(snap({ phase: 'bury', isDeclarer: true, autoPass: true })), true);
+  assert.equal(isMyTurn(snap({ phase: 'play', playTurn: 0, mySeat: 0, autoPass: true })), true);
+});
+
+test('快照带上委托位：`soundSnapshot` 的第三个参数就是它，缺省为「没委托」', () => {
+  assert.equal(soundSnapshot(view({}), hand()).autoPass, false, '缺省参数应当是「没委托」');
+  assert.equal(soundSnapshot(view({}), hand(), true).autoPass, true);
 });
 
 test('出牌落牌：同一副里当前墩的牌数增加就响一声（顺子一把多张仍只一声）', () => {

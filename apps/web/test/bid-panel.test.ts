@@ -362,3 +362,52 @@ test('观战者/非本家轮次的页面：没有「不叫」按钮也要能单�
     'requirePassButton:false 时应只看面板本身（ui-check 在没轮到的页面上用这一档）'
   );
 });
+
+/* ---------- 页脚那行委托开关（ADR-0029）与「不叫」按钮的定位 ---------- */
+
+/**
+ * 页脚那行开关的文案里也有「不叫」二字（「这一副剩下的都不叫」）。早先的定位规则是
+ * 「在文本里找这两个字、再往前找最近的 `<button`」—— 它会把**页脚**当成主按钮，
+ * 于是对着完全正确的源码报「命中区不足 44px」。下面三条把新判据钉住：
+ * 认「这个元素说的是什么」（整段文字恰好是「不叫」）或「它自己挂了钩子」。
+ */
+const PANEL_WITH_ORDER_FOOTER = `<section data-bid-panel="true" class="flex max-h-[56%] flex-col overflow-y-auto">
+  <div class="shrink-0">信息面</div>
+  <div class="mt-1 min-h-0 flex-1 overflow-y-auto">历史</div>
+  <button type="button" data-auto-pass="off" role="checkbox" class="mt-1.5 flex min-h-9 w-full shrink-0">这一副剩下的都不叫</button>
+</section>`;
+
+test('页脚那行「都不叫」不是「不叫」按钮：不当作命中区，缺主按钮就该说「找不到」', () => {
+  const result = checkBidPanelReachability(PANEL_WITH_ORDER_FOOTER);
+  assert.equal(result.ok, false, '没有主按钮却判为通过');
+  assert.match(
+    result.reason,
+    /找不到「不叫」按钮/,
+    `判据把页脚那行开关当成了主按钮（它没有 44px 命中区，于是正确的源码会被报假红）：${result.reason}`
+  );
+  // 不要求主按钮的那一档（ui-check 在「没轮到我」的页面上用）必须放行：页脚自己不是问题
+  assert.equal(
+    checkBidPanelReachability(PANEL_WITH_ORDER_FOOTER, { requirePassButton: false }).ok,
+    true,
+    '没轮到我的页面上页脚会被误判成主按钮'
+  );
+});
+
+test('钩子优先：挂了 data-pass-button 的按钮才是主按钮（文字可以不叫「不叫」）', () => {
+  const hooked = `<section data-bid-panel="true" class="flex max-h-[56%] flex-col overflow-y-auto">
+  <div class="mt-1 min-h-0 flex-1 overflow-y-auto">历史</div>
+  <button type="button" data-pass-button="true" class="sticky min-h-11 w-full shrink-0">过</button>
+</section>`;
+  const result = checkBidPanelReachability(hooked);
+  assert.equal(result.ok, false, '钩子挂着的按钮没有被当成主按钮');
+  assert.match(result.reason, /sticky/, '钩子优先：应当按它自己的 class 判 sticky');
+});
+
+test('面板源码里：主按钮挂 data-pass-button，且委托开关排在它之后', () => {
+  const hook = source.indexOf('data-pass-button');
+  const order = source.indexOf('data-auto-pass');
+  assert.ok(hook >= 0, '「不叫」按钮没有 data-pass-button 钩子：页脚文案里那两个字迟早把面板守卫带偏');
+  assert.ok(order >= 0, '面板里没有委托不叫的开关（data-auto-pass）');
+  assert.ok(hook < order, '委托开关排到了「不叫」主按钮之前：那是页脚，必须排在主按钮之后');
+});
+
