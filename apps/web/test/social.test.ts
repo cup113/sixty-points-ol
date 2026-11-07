@@ -85,9 +85,10 @@ test('短句长度：按码点算，恰好在边界上的放行、超一个拒�
 });
 
 test('暂离档位：六档、全是整数分钟；不在档位里的一律拒绝', () => {
-  assert.deepEqual([...AWAY_MINUTES], [5, 10, 15, 30, 45, 60]);
+  assert.deepEqual([...AWAY_MINUTES], [2, 5, 10, 15, 30, 45]);
   for (const minutes of AWAY_MINUTES) assert.equal(isAwayMinutes(minutes), true);
-  for (const bad of [4, 20, 61, 15.5, '15', null]) assert.equal(isAwayMinutes(bad), false);
+  // 1 分钟太短（按键的功夫就到了），60 分钟那一档已让位给 2 分钟：两者都必须被拒
+  for (const bad of [1, 4, 20, 60, 61, 15.5, '15', null]) assert.equal(isAwayMinutes(bad), false);
 });
 
 test('剩余时间文案：向上取整到分钟，到点返回 null', () => {
@@ -211,7 +212,7 @@ test('限速：同一个人 2 秒内第二条被 429 拒绝，别人不受影响
   assert.equal(seatOf(code, ids[0]!)?.announcement?.body, 'nice', '被拒的那条不该覆盖上一条');
 
   // 另一个人照常能发
-  assert.deepEqual(postAnnouncement(code, ids[1]!, { kind: 'emote', key: 'clap' }), { ok: true });
+  assert.deepEqual(postAnnouncement(code, ids[1]!, { kind: 'emote', key: 'think' }), { ok: true });
 });
 
 test('限速的窗口属于人：牌局动作删掉暂离之后，2 秒内仍然限速', () => {
@@ -270,7 +271,7 @@ test('删桌与删人都会带走限速台账（不留孤儿行）', () => {
   );
 
   const second = fixture();
-  assert.deepEqual(postAnnouncement(second.code, second.ids[1]!, { kind: 'emote', key: 'clap' }), {
+  assert.deepEqual(postAnnouncement(second.code, second.ids[1]!, { kind: 'emote', key: 'think' }), {
     ok: true
   });
   assert.equal(deleteUser(second.ids[1]!, second.ids[0]!).ok, true);

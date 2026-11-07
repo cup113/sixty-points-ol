@@ -6,14 +6,23 @@
  * 所以这里没有任何 store / 时间戳：服务端算「还剩多久」，组件拿它本地倒数。
  */
 
-/** 表情是**固定目录**，不是自由输入的 emoji：键写进数据库，字形只活在客户端 */
+/**
+ * 表情是**固定目录**，不是自由输入的 emoji：键写进数据库，字形只活在客户端。
+ *
+ * 选品只看一件事：**牌桌上真会按**。所以留下来的都是「下一步有话可说」的反应
+ * （好 / 笑 / 惨 / 牛 / 得意 / 谢谢 / 庆祝），外加一颗状态信号（想一想）。
+ * 被换掉的三颗各有硬理由：😮 惊讶没有下一步动作；👏 鼓掌只有赞赏一种场景，已被 🐮 覆盖；
+ * 😴 困了与「暂离」重复——真要离开按暂离，气泡会写「还剩 N 分」。
+ *
+ * 顺序即面板里的顺序（4 列 × 2 行）：越靠前越常用。
+ */
 export const EMOTES = [
   { key: 'nice', glyph: '👍', label: '好' },
-  { key: 'clap', glyph: '👏', label: '鼓掌' },
-  { key: 'laugh', glyph: '😂', label: '笑' },
-  { key: 'wow', glyph: '😮', label: '惊讶' },
+  { key: 'laugh', glyph: '😁', label: '笑' },
+  { key: 'cry', glyph: '😭', label: '惨' },
   { key: 'think', glyph: '🤔', label: '想一想' },
-  { key: 'tired', glyph: '😴', label: '困了' },
+  { key: 'bull', glyph: '🐮', label: '牛' },
+  { key: 'smug', glyph: '😏', label: '得意' },
   { key: 'thanks', glyph: '🙏', label: '谢谢' },
   { key: 'party', glyph: '🎉', label: '庆祝' }
 ] as const;
@@ -46,8 +55,14 @@ export const TEXT_TTL_MS = 10_000;
 /** 两条消息之间至少隔这么久（服务端判；客户端不预判，失败时那条错误自己会说） */
 export const ANNOUNCEMENT_RATE_LIMIT_MS = 2_000;
 
-/** 暂离档位：比第一版的 5/15/30 多三档，选时间不用靠猜 */
-export const AWAY_MINUTES = [5, 10, 15, 30, 45, 60] as const;
+/**
+ * 暂离档位：**六档，面板正好 3×2**（`SocialControl` 的 `grid-cols-3`）。
+ *
+ * 最短一档是 2 分钟：牌桌上最常说的那句是「马上回来」，而它原先只能选 5 分钟 ——
+ * 选了 5 分钟、2 分钟就坐回来，反而让另外两家白等三分钟。最长一档是 45 分钟：
+ * 三个人的一副牌等不了一个小时，60 分钟那一档从来没有人按过，位置让给 2 分钟。
+ */
+export const AWAY_MINUTES = [2, 5, 10, 15, 30, 45] as const;
 
 export type AwayMinutes = (typeof AWAY_MINUTES)[number];
 

@@ -17,6 +17,7 @@ import {
   labelSeatOf,
   projectionFor,
   resolveArrivalRole,
+  seatSidesOf,
   SPECTATOR_ANCHOR_SEAT,
   SPECTATOR_LABEL_SEAT
 } from '../src/lib/role.ts';
@@ -172,4 +173,23 @@ test('布局锚点与文案：观战者没有「你」，三个座位都显示�
     assert.equal(whoLabel(names, mySeat, seat), names[seat], `观战时座位 ${seat} 应显示玩家名`);
   }
   assert.equal(whoLabel(names, 1, 1), '你', '玩家本人仍然是「你」');
+});
+
+/**
+ * 左右两翼：**左＝上家、右＝下家**（屏幕上逆时针）。
+ *
+ * 这条判据的意义不在算得对不对（`+1` / `+2` 谁都会写），而在于它把「方向」写成了期望值：
+ * 第一版把下家放在左边，整张桌子看着像顺时针在转，与出牌顺序相反。改方向是**刻意**的，
+ * 所以这里写死期望，任何人再把它换回去都必须先改这条测试。
+ */
+test('左右两翼：下家在右手边、上家在左手边（屏幕逆时针）', () => {
+  for (const anchor of [0, 1, 2]) {
+    const { left, right } = seatSidesOf(anchor);
+    assert.equal(right, (anchor + 1) % 3, `锚点 ${anchor}：下家（+1）应在右手边`);
+    assert.equal(left, (anchor + 2) % 3, `锚点 ${anchor}：上家（+2）应在左手边`);
+    assert.notEqual(left, right, `锚点 ${anchor}：两翼不能是同一个座位`);
+    assert.ok(left !== anchor && right !== anchor, `锚点 ${anchor}：两翼不能是我自己`);
+  }
+  // 观战者的固定锚点也跟着翻：座位 1 在左、座位 0 在右、座位 2 是我
+  assert.deepEqual(seatSidesOf(SPECTATOR_ANCHOR_SEAT), { left: 1, right: 0 });
 });

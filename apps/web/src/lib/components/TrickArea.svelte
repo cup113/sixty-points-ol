@@ -2,6 +2,7 @@
   import type { PublicView } from '@sixty/engine';
   import { lastCompletedTrick, trickSideBadge, whoLabel } from '$lib/labels';
   import { spotBox } from '$lib/fan-layout';
+  import { seatSidesOf } from '$lib/role';
   import TrickCluster from './TrickCluster.svelte';
 
   let {
@@ -31,8 +32,8 @@
   const trickPoints = $derived(showingCurrent ? 0 : (previous?.points ?? 0));
   const declarerSeat = $derived(deal?.declarerSeat ?? null);
 
-  const leftSeat = $derived((seat + 1) % 3);
-  const rightSeat = $derived((seat + 2) % 3);
+  /** 两翼是谁：左＝上家、右＝下家（与顶行两张座位卡同源，见 `role.ts` 的 `seatSidesOf`） */
+  const sides = $derived(seatSidesOf(seat));
 
   /**
    * 三家出牌点：**每点一个宽度预算的盒子**，位置上互相不可能相交（ADR-0020 及修订）。
@@ -61,7 +62,7 @@
     return counts.length === 0 ? 1 : Math.max(...counts);
   });
   const spot = $derived(spotBox(wingCount));
-  const isWing = (target: number): boolean => target === leftSeat || target === rightSeat;
+  const isWing = (target: number): boolean => target === sides.left || target === sides.right;
 
   function spotClass(target: number): string {
     return isWing(target) ? 'absolute top-0' : 'absolute inset-x-0 bottom-0';
@@ -70,7 +71,7 @@
   /** 两翼的位置写成内联样式（宽度是个算出来的百分比，Tailwind 的 `w-[38%]` 表达不了） */
   function spotStyle(target: number): string | null {
     if (!isWing(target)) return null;
-    const side = target === leftSeat ? 'left' : 'right';
+    const side = target === sides.left ? 'left' : 'right';
     return `${side}:${spot.insetPct}%;width:${spot.widthPct}%;top:0`;
   }
 </script>

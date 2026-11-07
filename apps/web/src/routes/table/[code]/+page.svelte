@@ -2,7 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import { cardKey, START_LEVEL, type Level } from '@sixty/engine';
   import { TableClient } from '$lib/client/table.svelte';
-  import { anchorSeatOf, labelSeatOf } from '$lib/role';
+  import { anchorSeatOf, labelSeatOf, seatSidesOf } from '$lib/role';
   import { fetchReplays, type ReplayResult } from '$lib/replays';
   import type { DrawerTabKey, ReportMode } from '$lib/drawer-tabs';
   import { SoundBoard } from '$lib/sound/board.svelte';
@@ -142,8 +142,8 @@
   const anchor = $derived(anchorSeatOf(you?.seat ?? null));
   const label = $derived(labelSeatOf(you?.seat ?? null));
 
-  const leftSeat = $derived((anchor + 1) % 3);
-  const rightSeat = $derived((anchor + 2) % 3);
+  /** 顶行两张对手卡：左＝上家、右＝下家（出处只有 `role.ts` 的 `seatSidesOf`） */
+  const sides = $derived(seatSidesOf(anchor));
 
   const selectable = $derived(
     you !== null &&
@@ -455,9 +455,11 @@
          逃不出它。整行抬到内容槽（叫牌面板）之上，气泡才不会被面板盖住 —— 代价是气泡会压住
          一点叫牌记录，这是 ADR-0028 接受的。 -->
     <div data-felt-row="seats" class="relative z-10 flex items-start justify-between gap-2">
-      <!-- 左＝下家、右＝上家；观战者没有「我」，两张卡都显示玩家名。
+      <!-- 左＝上家、右＝下家：屏幕上逆时针（你 → 右 → 左上 → 你 就是出牌顺序）；
+           两翼是谁由 `seatSidesOf` 一处给出，与出牌区的两点同源。
+           观战者没有「我」，两张卡都显示玩家名。
            这两张是**纯展示**：卡片上的「+ 机器人 / 请离」已撤到抽屉的「牌桌」页（ADR-0020）。 -->
-      {#each [leftSeat, rightSeat] as seat, index (seat)}
+      {#each [sides.left, sides.right] as seat, index (seat)}
         <SeatCard
           name={seatAt(seat)?.name ?? null}
           level={levelAt(seat)}

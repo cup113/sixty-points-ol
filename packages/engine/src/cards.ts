@@ -2,7 +2,7 @@
 export type Suit = 'C' | 'D' | 'H' | 'S';
 /** 叫牌花色（将牌）：四门 + 无主 */
 export type Strain = Suit | 'NT';
-/** 座位号 0/1/2，顺时针 */
+/** 座位号 0/1/2，按座位号递增出牌（界面上逆时针：下家在右手边） */
 export type Seat = 0 | 1 | 2;
 export type JokerColor = 'small' | 'big';
 /** 牌面点数：2..14，J=11 Q=12 K=13 A=14 */

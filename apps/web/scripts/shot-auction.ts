@@ -2198,7 +2198,7 @@ async function setupTable(
   }
   await act(code, seats[0]!.credential, { type: 'deal' });
 
-  // 叫牌顺序：发牌人起顺时针 —— 从视图里取，首副发牌人是随机的
+  // 叫牌顺序：发牌人起按座位号递增 —— 从视图里取，首副发牌人是随机的
   const declarerSeat = (await viewOf(code, seats[0]!.credential)).view.deal?.dealerSeat ?? 0;
   const order = [0, 1, 2].map((step) => seats[(declarerSeat + step) % 3]!);
   for (let i = 0; i < bids.length; i += 1) {

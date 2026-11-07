@@ -74,6 +74,8 @@ const actionTray = read('../src/lib/components/ActionTray.svelte');
 const actionClock = read('../src/lib/components/ActionClock.svelte');
 const kittyReveal = read('../src/lib/components/KittyReveal.svelte');
 const trickArea = read('../src/lib/components/TrickArea.svelte');
+/** 座位左右两翼的唯一出处（`seatSidesOf`）：牌桌页与出牌区都读它，见 seatSidesCheck */
+const roleSource = read('../src/lib/role.ts');
 const handFan = read('../src/lib/components/HandFan.svelte');
 const dealSummary = read('../src/lib/components/DealSummary.svelte');
 const historyList = read('../src/lib/components/HistoryList.svelte');
@@ -2366,6 +2368,92 @@ const style = \`left:\${spot.insetPct}%;width:\${spot.widthPct}%\`;`
     ),
     null,
     '这条守卫对合规的最小片段也报错（过宽）'
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 座位两翼：左＝上家、右＝下家（屏幕逆时针）
+// ---------------------------------------------------------------------------
+
+/**
+ * 顶行两张对手卡**是谁**，只能有**一个出处**（`role.ts` 的 `seatSidesOf`）。
+ *
+ * 为什么值得一条守卫：牌桌页（座位行）与出牌区（三点的两翼）各自要用一次这个映射，
+ * 而它们第一版是**各算一份**的（`(anchor + 1) % 3` 与 `(seat + 1) % 3`）。只改一处的话
+ * 编译、单测、类型检查全绿，坏法只在屏幕上——某一家出的牌落到**对面**那张座位卡下方。
+ * 几何判据（`shot-auction.ts` ⑨/⑰）也看不见它：两翼本来就对称，左右互换算不出差别。
+ *
+ * 方向本身也是判据：座位号按出牌顺序递增，屏幕上是**逆时针**（下家在右手边）。
+ * 第一版是顺时针（下家在左），那让整张桌子看着与出牌方向相反。
+ */
+function seatSidesCheck(
+  pageSource: string,
+  trickAreaSource: string,
+  roleSourceText: string
+): string | null {
+  const role = code(roleSourceText);
+  if (!role.includes('export function seatSidesOf')) {
+    return 'role.ts 里没有座位两翼的唯一出处（seatSidesOf）';
+  }
+  if (!/left:\s*\(anchor \+ 2\) % 3/.test(role) || !/right:\s*\(anchor \+ 1\) % 3/.test(role)) {
+    return '两翼方向不对：应为左＝上家（anchor + 2）、右＝下家（anchor + 1），屏幕才与出牌顺序同向（逆时针）';
+  }
+  for (const [name, source] of [
+    ['牌桌页', pageSource],
+    ['出牌区', trickAreaSource]
+  ] as const) {
+    const src = code(source);
+    if (!src.includes('seatSidesOf(')) {
+      return `${name}自己算左右两翼（缺 seatSidesOf）：两处各算一份，改一处忘了另一处，某家出的牌就落在对面`;
+    }
+    if (/\(\s*\w+\s*\+\s*[12]\s*\)\s*%\s*3/.test(src)) {
+      return `${name}里又出现了自己写的 (x + 1|2) % 3 座位算术：两处会各说各的`;
+    }
+  }
+  return null;
+}
+
+test('座位两翼只有一个出处（seatSidesOf），且方向是逆时针：左＝上家、右＝下家', () => {
+  const problem = seatSidesCheck(page, trickArea, roleSource);
+  assert.equal(problem, null, problem ?? '');
+});
+
+test('反证：方向换回顺时针 / 某一处自己算两翼 / 出现手写的 %3，都必须被判出来', () => {
+  assert.match(
+    seatSidesCheck(
+      page,
+      trickArea,
+      roleSource.replace(
+        'left: (anchor + 2) % 3, right: (anchor + 1) % 3',
+        'left: (anchor + 1) % 3, right: (anchor + 2) % 3'
+      )
+    ) ?? '',
+    /逆时针/,
+    '方向换回顺时针没有被判出来'
+  );
+  assert.match(
+    seatSidesCheck(
+      page,
+      trickArea.replace(
+        'const sides = $derived(seatSidesOf(seat));',
+        'const leftSeat = $derived((seat + 1) % 3);'
+      ),
+      roleSource
+    ) ?? '',
+    /出牌区/,
+    '出牌区自己算两翼没有被判出来'
+  );
+  assert.match(
+    seatSidesCheck(
+      page.replace(
+        '{#each [sides.left, sides.right] as seat, index (seat)}',
+        '{#each [(anchor + 1) % 3, (anchor + 2) % 3] as seat, index (seat)}'
+      ),
+      trickArea,
+      roleSource
+    ) ?? '',
+    /牌桌页/,
+    '牌桌页自己算两翼没有被判出来'
   );
 });
 
