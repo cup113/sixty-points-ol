@@ -2012,7 +2012,8 @@ test('反证：入口点不动 / 表头乱序 / 按钮跑出回溯格 / 默认�
  * 为什么需要守卫：改动前 `summary !== null` **就**弹窗，而结算弹窗是 `fixed inset-0 z-50`
  * —— 一帧之内盖住毡面。末墩三家出的什么、庄家埋了什么，玩家根本来不及看，而这两样恰好
  * 是这一副最该看清的（末墩决定底牌倍数、底牌决定保底还是抠底）。所以这条守卫的**核心**
- * 是第 ① 条：弹窗只能由**第三拍**驱动。
+ * 是第 ① 条：弹窗只能由**第三拍**驱动；而第 ①b 条守的是它的第二半：「开态」本身不许
+ * 跨副活着（否则第二副起三拍会在**一帧之内**被一个已经开着的弹窗整个吃掉）。
  *
  * 另外三条各有一次具体的坏法：
  * - ② 定时器不清理 ⇒ 换副/离桌之后它们还会叫醒一次（把新一副的状态推起来）；
@@ -2043,6 +2044,21 @@ function scoredPacingCheck(
   }
   if (/\b(2000|3200|5200)\b/.test(page)) {
     return '页面里出现了裸的时长数字（2000 / 3200 / 5200）：时长只许由 labels.ts 的常量给出';
+  }
+  // ①b 弹窗的开态必须**钉在副号上**。`{#if open && summary !== null}` 挡得住「这一副还没有
+  //     summary」，挡不住「**上一副**留下的开态」：普通布尔在弹窗里按过「下一副」之后仍然是
+  //     true（那颗按钮是主路径，按完弹窗并不会被关掉），于是下一副一收墩，弹窗立刻重新可见 ——
+  //     三拍一帧都没走，看到的就是「最后一轮出完直接弹窗」。而且这个坏法**从第二副起**才有：
+  //     时间轴（shot）与出货 HTML（ui-check）两条判据每次都是一张新页面、开态从 false 起，
+  //     所以都抓不到它，只有这一条源码守卫能钉住形状。
+  if (!page.includes('summaryOpenFor === (summary?.dealNo ?? null)')) {
+    return (
+      '结算弹窗的开态没有钉在副号上（缺 `summaryOpenFor === (summary?.dealNo ?? null)`）：' +
+      '一句「开着」会跨副活着 —— 在弹窗里按过「下一副」之后，下一副收墩就直接弹窗，三拍被整个吃掉'
+    );
+  }
+  if (!/summaryOpenFor = summary\.dealNo;/.test(page)) {
+    return '第三拍没有把开态记成这一副的副号（缺 `summaryOpenFor = summary.dealNo;`）：开态无处收敛';
   }
   // ② 叫醒时钟：状态只由本地时钟一处给出，而且它敢停、也会停
   const wakeStart = page.indexOf('$effect(() => {\n    void pacingTick;');
@@ -2200,6 +2216,11 @@ test('反证：一收墩就弹 / 锁只上一处 / 亮底牌层截获点击 / �
     scoredPacingCheck(`${p}\nconst dur = 2000;`, b, m, r) ?? '',
     /裸的时长/,
     '把时长写成裸数字没有被判出来'
+  );
+  assert.match(
+    scoredPacingCheck(p.replace('summaryOpenFor === (summary?.dealNo ?? null)', 'summaryOpen'), b, m, r) ?? '',
+    /副号/,
+    '弹窗开态跨副存活（在弹窗里按过「下一副」之后，下一副收墩就直接弹窗）没有被判出来'
   );
   assert.match(
     scoredPacingCheck(p, b, m, r + '\n<button type="button">跳过</button>') ?? '',

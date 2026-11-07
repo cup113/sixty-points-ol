@@ -72,7 +72,19 @@
    * 之后全靠缓存。SSE 不碰它（重演是静态存档，没有「随帧更新」这回事）。
    */
   let replays = $state<Record<number, ReplayResult>>({});
-  let summaryOpen = $state(false);
+  /**
+   * 结算弹窗**开在哪一副上**（`null` = 没开）—— 不是一句「开着」。
+   *
+   * 为什么不能是普通布尔（这一版最初就是 `summaryOpen: boolean`）：那个布尔会**跨副活着**。
+   * 玩家在弹窗里按「下一副」（弹窗里那颗就是主路径，按完弹窗并不会被关掉）之后，新一副的
+   * `summary` 先是 null、弹窗被 `{#if open && summary !== null}` 藏起来 —— 而 `summary`
+   * 一回来（这一副收墩），它就**立刻**重新可见：三拍一帧都没走，末墩与底牌直接被盖住，
+   * 看过去就是「最后一轮出完直接弹窗」。而且这个坏法**从第二副起**才有：首副的开态还是
+   * 初值 false，刷新一下又「好了」，所以时间轴与出货 HTML 两条判据都抓不到它
+   * （它们每次都是一张新页面，开态从 false 起）。
+   * 记住副号之后，开态在换副那一刻自然失效：弹窗只由**第三拍**或玩家的明确一点打开。
+   */
+  let summaryOpenFor = $state<number | null>(null);
   /**
    * 「上一轮」回看（`TrickReview`）：纯手动状态，默认关着 —— 与抽屉、结算弹窗同一条纪律
    * （SSE 每帧都不碰它）。入口是状态条上那枚「上一轮」，只在收过墩之后才出现。
@@ -101,6 +113,8 @@
   const view = $derived(client.view);
   const deal = $derived(view?.deal ?? null);
   const summary = $derived(deal?.summary ?? null);
+  /** 这一副的结算弹窗现在开着吗 = 开态钉在**这一副**上（见 `summaryOpenFor`） */
+  const summaryOpen = $derived(summaryOpenFor !== null && summaryOpenFor === (summary?.dealNo ?? null));
   const trump = $derived(deal?.trump ?? null);
   /**
    * 叫牌阶段的主牌预示：三家级别的点数。
@@ -243,11 +257,13 @@
   $effect(() => {
     const no = summary?.dealNo ?? null;
     if (no === null) {
-      // 这一副不结算了（下一副已发牌、全 pass 重发、回大厅）⇒ 三拍作废，别留下残留的提前态
+      // 这一副不结算了（下一副已发牌、全 pass 重发、回大厅）⇒ 三拍作废，别留下残留的提前态：
+      // 提前到的那一拍与「弹窗开着」都只属于刚刚过去的这一副
       if (scoredDeal !== -1) {
         scoredDeal = -1;
         scoredAt = 0;
         manualStep = null;
+        summaryOpenFor = null;
       }
       return;
     }
@@ -282,7 +298,9 @@
   $effect(() => {
     if (summary !== null && scoredStep === 'summary' && summary.dealNo !== openedFor) {
       openedFor = summary.dealNo;
-      summaryOpen = true;
+      // 开态记的是**这一副的副号**，不是一句「开着」：下一副收墩时那个布尔若还在，
+      // 弹窗会绕过三拍立刻盖住毡面（见 `summaryOpenFor`）
+      summaryOpenFor = summary.dealNo;
     }
   });
 
@@ -530,7 +548,7 @@
     <ActionBar
       {client}
       {summaryOpen}
-      onToggleSummary={() => (summaryOpen = !summaryOpen)}
+      onToggleSummary={() => (summaryOpenFor = summaryOpen ? null : (summary?.dealNo ?? null))}
       pacingStep={scoredStep}
       {nextDealReady}
       onSkipPacing={() => (manualStep = nextStep(scoredStep))}
@@ -574,7 +592,7 @@
   <DealSummary
     {client}
     open={summaryOpen}
-    onClose={() => (summaryOpen = false)}
+    onClose={() => (summaryOpenFor = null)}
     {replays}
     {nextDealReady}
     onOpenReplay={openReplay}
