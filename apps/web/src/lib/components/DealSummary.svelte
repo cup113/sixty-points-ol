@@ -3,6 +3,7 @@
   import { SPECTATOR_LABEL_SEAT } from '$lib/role';
   import { levelRows, strainGlyph, whoLabel } from '$lib/labels';
   import type { ReplayResult } from '$lib/replays';
+  import EndgameCard from './EndgameCard.svelte';
   import LevelTable from './LevelTable.svelte';
   import ReplayPanel from './ReplayPanel.svelte';
   import ScoreEquation from './ScoreEquation.svelte';
@@ -14,7 +15,8 @@
     onClose,
     replays = {},
     onOpenReplay,
-    nextDealReady = true
+    nextDealReady = true,
+    onRequestNewGame
   }: {
     client: TableClient;
     open?: boolean;
@@ -30,6 +32,14 @@
      * 而别人可能还在看末墩，那一副的亮底牌就被切走了。
      */
     nextDealReady?: boolean;
+    /**
+     * 终局时的「开新对局」交给页面去问（二次确认挂在页面级）。
+     *
+     * 为什么不在这里直接 `client.newGame()`：开新对局会**重置三家级别、清空本场战报与重演**，
+     * 而它是这一屏唯一的主按钮、就在「看看桌面」旁边 —— 一次误触就把整场的账抹掉。
+     * 确认弹窗必须是页面级的 `fixed` 层（这张卡自己有 `overflow-y-auto`，`fixed` 会被它困住）。
+     */
+    onRequestNewGame?: () => void;
   } = $props();
 
   const view = $derived(client.view);
@@ -49,7 +59,7 @@
     data-deal-summary="true"
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
   >
-    <!-- 高度上限与自己的滚动区：结算内容高度不定（底牌牌面、级别表、对局结束块），
+    <!-- 高度上限与自己的滚动区：结算内容高度不定（底牌牌面、级别表、终局卡），
          没有上限时短屏上排在最后的「下一副 / 开新对局」会落到视口外，且无处可滚。 -->
     <div
       class="max-h-[92dvh] w-[24rem] max-w-[94vw] overflow-y-auto overscroll-contain rounded-2xl bg-felt-800 p-4 ring-1 ring-gold/30 sm:p-5"
@@ -101,37 +111,37 @@
         note={summary.claim ? '认赢结束的副没有重演（剩下的牌没有逐张归属）' : undefined}
       />
 
-      {#if finished && view.result}
-        <div class="mt-3 rounded-lg border border-gold/50 bg-black/30 p-3">
-          <h3 class="mb-1 text-sm font-semibold text-gold">
-            对局结束 · 冠军 {who(view.result.ranking[0]!)}
-          </h3>
-          <ol class="space-y-0.5 text-xs text-white/80">
-            {#each view.result.ranking as seat, index (seat)}
-              <li>第 {index + 1} 名：{who(seat)}（总进度 {view.result.progress[seat]}）</li>
-            {/each}
-          </ol>
-        </div>
+      <!-- 终局：整场的名次、差距与结束原因。它是**本副结算的最后一块**，
+           不是另一张弹窗 —— 弹窗仍只说这一副（那一副的算式/结论/升级表在上面）。
+
+           名次读引擎的 result.places（并列共享），内容全在 `endgameStandings` 一处算出，
+           与引擎的结束条件只有一份真相；这一块因此只有渲染，没有判断。 -->
+      {#if finished}
+        <EndgameCard {view} mySeat={mySeat} {names} />
       {/if}
 
       <div class="mt-4 flex items-center justify-end gap-2">
         <div class="flex gap-2">
+          <!-- 次操作退成纯文字：无描边、无底色 —— 与主按钮差的是重量，不是边框。 -->
           <button
             type="button"
-            class="rounded-lg border border-white/20 px-4 py-1.5 text-xs text-white/70 hover:bg-white/10"
+            class="rounded-md px-2 py-1.5 text-xs text-white/55 hover:bg-white/10 hover:text-white"
             onclick={() => onClose?.()}
           >
             看看桌面
           </button>
           {#if spectating}
-            <span class="self-center text-xs text-white/45">观战中 · 下一副由在座玩家开</span>
+            <span class="self-center text-xs text-white/45"
+              >{finished ? '观战中 · 由在座玩家开新对局' : '观战中 · 下一副由在座玩家开'}</span
+            >
           {:else if finished}
+            <!-- 两级门槛：三拍的锁（全桌节奏）+ 确认（它会清掉级别、战报与重演）。 -->
             <button
               type="button"
               class="rounded-lg bg-gold px-5 py-1.5 text-xs font-bold text-ink hover:brightness-110 disabled:opacity-40"
               disabled={client.busy || !nextDealReady}
               title={nextDealReady ? '开新对局' : '让末墩与底牌先亮完'}
-              onclick={() => void client.newGame()}
+              onclick={() => onRequestNewGame?.()}
             >
               开新对局
             </button>

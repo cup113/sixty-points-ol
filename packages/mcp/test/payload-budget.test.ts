@@ -8,8 +8,12 @@
  *   - 每回合多探 3 次 `check_play` → 2.85 倍，多探 17 次 → 16.2 倍（探测才是最大的出血点）；
  *   - 紧凑投影（ADR-0011）：一副实收 **35,636**、累计 **401,156**、结算单帧约 **2,760**；
  *   - **行动投影（ADR-0019，现状）**：一副实收 **18,687**、累计 **308,764**、结算单帧 **1,368**；
- *     整局实收 **139,207**、整局累计 **11,333,093**，而整局最大单帧只有 **1,393** ——
+ *     整局实收 **199,780**（10 副）、整局累计 **22,923,912**，而整局最大单帧只有 **1,468** ——
  *     跨副不再累积（战报与旧墩都不再每帧重发），这是这一版最要紧的形状。
+ *
+ * 整局那几个数**随「一场几副」变**：2026-11 结束条件从「两人 2(+2)」改成「一人 2(+3)」，
+ * 一场变长（这具假服务器 10 副收工，旧的整局数字因此重测）。所以调用数与实收按**每副**判定，
+ * 只有累计读入（二次增长）留绝对上界。
  *
  * 这里模拟的就是「每回合一次调用」的那条路：动作自带等待（`wait` 默认 true），
  * 注入的 sleep 让另外两个座位往前走 —— 于是每一回合恰好只有一份局面被投喂。
@@ -55,10 +59,22 @@ const CALLS_LIMIT = 22;
 const GROWTH_LIMIT = 1_500;
 /** 整局里最大的一份负载（实测 1,406）：它曾随副数线性上涨（4,402），现在必须基本不动 */
 const GAME_MESSAGE_LIMIT = 1_500;
-/** 一整局的实收（实测 139,207） */
-const GAME_DELIVERED_LIMIT = 150_000;
-/** 一整局的累计读入：它是二次的（每个请求重发全文），这条卡住的是**回合数** */
-const GAME_CUMULATIVE_LIMIT = 12_000_000;
+/** 一整局的实收上界按「副」折算（实测 199,780 / 10 副 ≈ 19,978 每副）：跨副不累积，所以它只随副数涨 */
+const GAME_DELIVERED_PER_DEAL_LIMIT = 21_000;
+/**
+ * 一整局的调用数上界按「副」折算（实测 219 / 10 副 = 21.9 每副）。
+ *
+ * 每副的调用数是**结构常数**：17 墩各一次（另外两家人家在 inject 的 sleep 里走，
+ * 不占模型的往返）+ 叫牌三次 + 埋底 + 发牌 ≈ 22。所以它不随「一场几副」变 ——
+ * 一场变长只让**副数**变多，这一条的判定基准因此是「每副」，而不是一个整局的绝对数
+ * （绝对数会随规则改一次就红一次，那证明不了「每回合只有一次调用」）。
+ */
+const GAME_CALLS_PER_DEAL_LIMIT = 24;
+/**
+ * 一整局的累计读入：它是**二次**的（每个请求都重发全文），所以天生与「一场几副」绑死，
+ * 只能给绝对上界 —— 实测 22,923,912（10 副）。规则改一场的长度时这一条必须重算。
+ */
+const GAME_CUMULATIVE_LIMIT = 25_000_000;
 
 async function schemaSize(): Promise<number> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -103,6 +119,8 @@ interface DealBudget {
   readonly endState: number;
   readonly maxMessage: number;
   readonly schema: number;
+  /** 实际打完了几副（`deals = 0` 时就是整局的副数）—— 整局的预算按它折算 */
+  readonly deals: number;
   readonly last: TableState;
 }
 
@@ -189,6 +207,7 @@ async function measureDeals(schema: number, deals: number): Promise<DealBudget> 
     endState: messages[messages.length - 1]!,
     maxMessage: Math.max(...messages),
     schema,
+    deals: scored,
     last: state
   };
 }
@@ -276,9 +295,11 @@ test('跨副不再累积：第二副只多一次发牌调用，单帧大小基�
 });
 
 test('一整局（打到结束）也不失控：调用数、最大负载、整局实收', () => {
+  assert.ok(FULL_GAME.deals >= 1, '整局至少打完一副');
   assert.ok(
-    FULL_GAME.calls <= 200,
-    `一整局用了 ${FULL_GAME.calls} 次调用：每回合仍应当只有一次（探测会把这个数字翻好几倍）`
+    FULL_GAME.calls <= GAME_CALLS_PER_DEAL_LIMIT * FULL_GAME.deals,
+    `一整局用了 ${FULL_GAME.calls} 次调用（${FULL_GAME.deals} 副，` +
+      `每副 ${(FULL_GAME.calls / FULL_GAME.deals).toFixed(1)}）：每回合仍应当只有一次（探测会把这个数字翻好几倍）`
   );
   assert.ok(
     FULL_GAME.maxMessage <= GAME_MESSAGE_LIMIT,
@@ -286,8 +307,9 @@ test('一整局（打到结束）也不失控：调用数、最大负载、整�
       '它曾经随副数涨到 4,402（战报与旧墩每帧重发），行动投影下必须基本不动'
   );
   assert.ok(
-    FULL_GAME.delivered <= GAME_DELIVERED_LIMIT,
-    `一整局实收 ${FULL_GAME.delivered} 字符，超过 ${GAME_DELIVERED_LIMIT}`
+    FULL_GAME.delivered <= GAME_DELIVERED_PER_DEAL_LIMIT * FULL_GAME.deals,
+    `一整局实收 ${FULL_GAME.delivered} 字符（${FULL_GAME.deals} 副），超过` +
+      `「每副 ${GAME_DELIVERED_PER_DEAL_LIMIT}」的预算`
   );
   assert.ok(
     FULL_GAME.cumulative <= GAME_CUMULATIVE_LIMIT,

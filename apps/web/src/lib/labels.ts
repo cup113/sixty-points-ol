@@ -18,6 +18,7 @@ import {
   type Card,
   type CompletedTrick,
   type DealSummary,
+  type FinishReason,
   type Level,
   type PublicView,
   type Seat,
@@ -491,6 +492,79 @@ export function levelProgression(history: readonly DealSummary[]): ProgressionRo
     rows.push({ dealNo: deal.dealNo, levels: [...levels], changed });
   }
   return rows;
+}
+
+/* ---------- 对局结束（终局卡） ---------- */
+
+/** 终局卡的一行 */
+export interface EndgameRow {
+  readonly seat: Seat;
+  /** 1 起的名次；并列者同名次（引擎的 `result.places`） */
+  readonly place: number;
+  /** 与别人并列在这个名次上 */
+  readonly tied: boolean;
+  readonly level: Level;
+  /** 与榜首差多少级（榜首那一行为 0） */
+  readonly lag: number;
+  /** 名次 1 = 冠军。并列冠军时不止一个 */
+  readonly champion: boolean;
+}
+
+export interface EndgameStandings {
+  /** 结束原因那一句：`有人冲到 2(+3)` */
+  readonly reasonText: string;
+  /** 打完几副（`history.length`；`dealNo` 含全 pass 作废重发的那些，不能拿来当「打完几副」） */
+  readonly dealCount: number;
+  /** 按名次排好的三家 */
+  readonly rows: readonly EndgameRow[];
+  readonly champions: readonly Seat[];
+}
+
+/**
+ * 结束原因 → 那句人话。
+ *
+ * `Record` 的键类型取自引擎的 `FinishReason['kind']`，所以规则一改、这里不补文案就编译不过；
+ * 界面因此**不必自己拿 `progress` 去比阈值**（那等于把结束条件写了第二遍，两处会各自过期）。
+ */
+const FINISH_TEXT: Record<FinishReason['kind'], string> = { oneAtThree: '有人冲到 2(+3)' };
+
+/**
+ * 终局卡的全部内容：名次、与榜首的差、冠军、结束原因。
+ *
+ * **名次只认引擎的 `result.places`。** `result.ranking` 是按进度排的**座位序**，并列会被
+ * 稳定排序成先后 —— 拿它的下标当名次，`[40, 38, 38]` 就会读成「第 1 / 第 2 / 第 3 名」，
+ * 而两名闲家总是同拍升级，二三名并列恰恰是常态（`places` 给的是 `[1, 2, 2]`）。
+ *
+ * 没有 `result`（对局还没结束）时返回 `null`，调用方据此不渲染这一块。
+ */
+export function endgameStandings(view: PublicView): EndgameStandings | null {
+  const result = view.result;
+  if (result === null) return null;
+  const top = Math.max(...result.progress);
+  const placeOf = (seat: number): number => result.places[seat] ?? 0;
+  const champions = SEATS.filter((seat) => placeOf(seat) === 1);
+  const rows = result.ranking.map((seat): EndgameRow => {
+    const place = placeOf(seat);
+    return {
+      seat,
+      place,
+      tied: SEATS.filter((s) => placeOf(s) === place).length > 1,
+      level: view.levels[seat] ?? START_LEVEL,
+      lag: top - (result.progress[seat] ?? top),
+      champion: place === 1
+    };
+  });
+  return {
+    reasonText: FINISH_TEXT[result.reason.kind],
+    dealCount: view.history.length,
+    rows,
+    champions
+  };
+}
+
+/** 名次那一格的写法：`1` / `2=`（并列）/ `3` */
+export function placeLabel(row: { readonly place: number; readonly tied: boolean }): string {
+  return `${row.place}${row.tied ? '=' : ''}`;
 }
 
 /**

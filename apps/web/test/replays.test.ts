@@ -156,7 +156,16 @@ test('newGame 清空重演（dealNo 重新计数）', () => {
   assert.ok(replaysOf(f.tableId).length === 1, '前置：已有一条重演');
 
   // 直接把 games 行改成一个「已结束」状态（newGame 的唯一门槛），避免真打完整场
-  const finished: GameState = { ...createGame(0), status: 'finished', result: { progress: [0, 0, 0], ranking: [0, 1, 2] } };
+  const finished: GameState = {
+    ...createGame(0),
+    status: 'finished',
+    result: {
+      progress: [0, 0, 0],
+      ranking: [0, 1, 2],
+      places: [1, 1, 1],
+      reason: { kind: 'oneAtThree', seats: [0] }
+    }
+  };
   db.prepare(
     `INSERT INTO games (table_id, state, updated_at) VALUES (?, ?, ?)
      ON CONFLICT(table_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`

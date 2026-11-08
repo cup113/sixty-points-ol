@@ -17,6 +17,7 @@
   import InviteCode from '$lib/components/InviteCode.svelte';
   import LeaveConfirm from '$lib/components/LeaveConfirm.svelte';
   import LobbyPanel from '$lib/components/LobbyPanel.svelte';
+  import NewGameConfirm from '$lib/components/NewGameConfirm.svelte';
   import SeatCard from '$lib/components/SeatCard.svelte';
   import SocialControl from '$lib/components/SocialControl.svelte';
   import SoundControl from '$lib/components/SoundControl.svelte';
@@ -91,6 +92,12 @@
    */
   let reviewOpen = $state(false);
   let leaveOpen = $state(false);
+  /**
+   * 「开新对局」的二次确认（页面级）。它会重置三家级别、清空本场战报与重演，
+   * 而入口是终局卡上唯一的主按钮 —— 所以要问一句。弹窗必须挂在页面级：
+   * 结算卡自己有 `overflow-y-auto`，`fixed` 在里面不覆盖全屏（与 `LeaveConfirm` 同一条纪律）。
+   */
+  let newGameOpen = $state(false);
   /**
    * 要请离的机器人座位（null = 弹窗关着）。
    * 入口在抽屉「牌桌」页那一行（ADR-0020），而弹窗**必须挂在页面级** —— 抽屉有 `transform`，
@@ -302,6 +309,14 @@
       // 弹窗会绕过三拍立刻盖住毡面（见 `summaryOpenFor`）
       summaryOpenFor = summary.dealNo;
     }
+  });
+
+  /**
+   * 确认弹窗只在「对局已结束」时成立：别人先开了新局、或这一帧已经回到进行中，
+   * 它就自己收起来 —— 一个挂在旧状态上的 `fixed` 层会挡住下一场的第一副。
+   */
+  $effect(() => {
+    if (newGameOpen && view?.status !== 'finished') newGameOpen = false;
   });
 
   /**
@@ -599,9 +614,16 @@
     {replays}
     {nextDealReady}
     onOpenReplay={openReplay}
+    onRequestNewGame={() => (newGameOpen = true)}
   />
 {/if}
 <LeaveConfirm {client} open={leaveOpen} onClose={() => (leaveOpen = false)} />
+<NewGameConfirm
+  {client}
+  open={newGameOpen}
+  dealCount={view?.history.length ?? 0}
+  onClose={() => (newGameOpen = false)}
+/>
 <BotRemoveConfirm
   {client}
   seat={botRemoveSeat}

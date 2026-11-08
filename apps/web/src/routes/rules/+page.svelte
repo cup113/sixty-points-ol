@@ -715,9 +715,12 @@
 
       <p class={subhead}>什么时候结束</p>
       <p>
-        如果想要打得长一点（约 20 局），任意<b class="text-ivory">两位玩家</b>达到 <b class="text-gold">2(+2)</b>，或者任意<b
-          class="text-ivory">一位玩家</b
-        >冲到 <b class="text-gold">2(+3)</b>，对局结束，总进度最高的那位是冠军。当然，也可以协商任何时候结束。
+        任意<b class="text-ivory">一位玩家</b>冲到 <b class="text-gold">2(+3)</b>，对局结束，总进度最高的那位是冠军。
+        一场通常在三十副上下（机器人对局的实测中位数是 31 副）。当然，也可以协商任何时候结束。
+      </p>
+      <p>
+        <b class="text-ivory">同进度并列</b>：两名闲家总是同拍升级，所以二三名常常是并列的 ——
+        那是同一个名次，不是谁比谁高半格。
       </p>
     </div>
   </section>

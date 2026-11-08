@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   dispatch,
+  FINISH_ONE_AT,
   levelFromProgress,
   levelLabel,
   levelProgress,
@@ -151,8 +152,25 @@ describe('结算：抠底打输', () => {
   });
 });
 
+/** 座位 0 冲到 2(+3) 的那一副（结算即刻结束整场） */
+function finishedByOneAtThree(): GameState {
+  const state = rigPlayDeal(
+    [[c('C', 5), c('C', 10)], [c('C', 3), c('C', 4)], [c('D', 3), c('D', 4)]],
+    KITTY_25,
+    { levels: [{ rank: 14, cycle: 2 }, { rank: 2, cycle: 0 }, { rank: 2, cycle: 0 }] }
+  );
+  return playRule(state, [
+    [0, [c('C', 5)]],
+    [1, [c('C', 3)]],
+    [2, [c('D', 3)]],
+    [0, [c('C', 10)]],
+    [1, [c('C', 4)]],
+    [2, [c('D', 4)]]
+  ]);
+}
+
 describe('结束条件与冠军', () => {
-  it('两家同时达到 2(+2) 即结束', () => {
+  it('两人达到 2(+2) 不再结束：只认一人冲到 2(+3)', () => {
     const state = rigPlayDeal(
       [[c('C', 2), c('C', 3)], [c('H', 2), c('H', 3)], [c('D', 2), c('D', 3)]],
       KITTY_25,
@@ -163,17 +181,31 @@ describe('结束条件与冠军', () => {
       [1, [c('H', 2), c('H', 3)]],
       [2, [c('D', 2), c('D', 3)]]
     ]);
-    assert.equal(after.status, 'finished');
-    assert.deepEqual(after.result!.progress, [1, 35, 35]);
-    assert.equal(after.result!.ranking[2], 0);
-    assert.ok(levelProgress(after.levels[1]!) >= levelProgress({ rank: 2, cycle: 2 }));
+    // 这一副把两名闲家一起推过了 2(+2)（进度 27）—— 但门槛已经不在那里了
+    for (const seat of [1, 2] as const) {
+      const progress = levelProgress(after.levels[seat]!);
+      assert.ok(progress >= 27, `座位 ${seat} 应已过 2(+2)：${progress}`);
+      assert.ok(progress < FINISH_ONE_AT, `座位 ${seat} 还没到 2(+3)：${progress}`);
+    }
+    assert.equal(after.status, 'playing', '两人到 2(+2) 不该结束整场');
+    assert.equal(after.result, null);
   });
 
-  it('一家达到 2(+3) 立即结束', () => {
+  it('一家达到 2(+3) 立即结束：二三名并列共享名次（不是第 2 / 第 3）', () => {
+    const after = finishedByOneAtThree();
+    assert.equal(after.status, 'finished');
+    assert.equal(after.result!.progress[0], 40);
+    assert.equal(after.result!.ranking[0], 0);
+    // 两名闲家同为 1 分：排名里它们是先后的两个下标，名次里它们是同一个 2=
+    assert.deepEqual(after.result!.places, [1, 2, 2]);
+    assert.deepEqual(after.result!.reason, { kind: 'oneAtThree', seats: [0] });
+  });
+
+  it('两名闲家同拍跨过 2(+3)：并列冠军，两人都记进结束原因', () => {
     const state = rigPlayDeal(
       [[c('C', 5), c('C', 10)], [c('C', 3), c('C', 4)], [c('D', 3), c('D', 4)]],
       KITTY_25,
-      { levels: [{ rank: 14, cycle: 2 }, { rank: 2, cycle: 0 }, { rank: 2, cycle: 0 }] }
+      { points: 90, levels: [{ rank: 2, cycle: 0 }, { rank: 13, cycle: 2 }, { rank: 13, cycle: 2 }] }
     );
     const after = playRule(state, [
       [0, [c('C', 5)]],
@@ -184,21 +216,17 @@ describe('结束条件与冠军', () => {
       [2, [c('D', 4)]]
     ]);
     assert.equal(after.status, 'finished');
-    assert.equal(after.result!.progress[0], 40);
-    assert.equal(after.result!.ranking[0], 0);
+    const progress = after.result!.progress;
+    assert.ok(
+      progress[1]! >= FINISH_ONE_AT && progress[2]! >= FINISH_ONE_AT,
+      `两名闲家应同拍跨线：${progress.join(' / ')}`
+    );
+    assert.deepEqual(after.result!.places, [3, 1, 1], '两个冠军共享名次 1');
+    assert.deepEqual(after.result!.reason.seats, [1, 2]);
   });
 
   it('结束后可开新对局：级别重置、发牌人轮转', () => {
-    const state = rigPlayDeal(
-      [[c('C', 2), c('C', 3)], [c('H', 2), c('H', 3)], [c('D', 2), c('D', 3)]],
-      KITTY_25,
-      { levels: [{ rank: 2, cycle: 0 }, { rank: 14, cycle: 1 }, { rank: 14, cycle: 1 }] }
-    );
-    const finished = playRule(state, [
-      [0, [c('C', 2), c('C', 3)]],
-      [1, [c('H', 2), c('H', 3)]],
-      [2, [c('D', 2), c('D', 3)]]
-    ]);
+    const finished = finishedByOneAtThree();
     assert.equal(finished.status, 'finished');
     const res = dispatch(finished, { type: 'newGame' }, rng);
     assert.ok(res.ok);

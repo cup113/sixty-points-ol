@@ -20,6 +20,7 @@ import {
   type DealSummary,
   type Level,
   type PersonalView,
+  type Seat,
   type Strain
 } from '@sixty/engine';
 
@@ -36,6 +37,7 @@ import {
   changedLevelRows,
   clockFace,
   contractText,
+  endgameStandings,
   followSuitCards,
   formatElapsed,
   highestCall,
@@ -44,6 +46,7 @@ import {
   kittySign,
   lastCall,
   lastCompletedTrick,
+  placeLabel,
   levelProgression,
   levelRows,
   laterStep,
@@ -800,8 +803,7 @@ test('levelProgression：逐副累积，没动的座位沿用上一副的级别'
   assert.deepEqual(rows[3]!.changed, [false, false, false]);
 });
 
-test('levelProgression：跨 A 的「+过次」原样带进后面的行', () => {
-  const rows = levelProgression([
+test('levelProgression：跨 A 的「+过次」原样带进后面的行', () => {  const rows = levelProgression([
     summaryOf({
       dealNo: 1,
       made: true,
@@ -821,5 +823,101 @@ test('levelProgression：跨 A 的「+过次」原样带进后面的行', () => 
   assert.deepEqual(rows[1]!.levels[0], { rank: 14, cycle: 0 });
   assert.deepEqual(rows[2]!.levels[0], { rank: 3, cycle: 1 }, '过 A 之后是 3(+1)，不是 15(+0)');
   assert.deepEqual(rows[3]!.levels[0], { rank: 3, cycle: 1 }, '这一副没动庄家，徽标要照旧带着 +1');
+});
+
+/* ---------- 终局卡：名次 / 相差 / 结束原因 ---------- */
+
+/** 已结束的视图：`endgameStandings` 只读 result / levels / history，其余字段填最小可用值 */
+function finishedView(opts: {
+  progress: readonly number[];
+  ranking: readonly Seat[];
+  places: readonly number[];
+  levels: readonly Level[];
+  history?: number;
+  dealNo?: number;
+}): PersonalView {
+  return {
+    ...viewWithAuction([]),
+    status: 'finished',
+    dealNo: opts.dealNo ?? 1,
+    levels: [...opts.levels],
+    progress: [...opts.progress],
+    result: {
+      progress: [...opts.progress],
+      ranking: [...opts.ranking],
+      places: [...opts.places],
+      reason: { kind: 'oneAtThree', seats: [] }
+    },
+    history: Array.from({ length: opts.history ?? 0 }, () => summaryOf({}))
+  };
+}
+
+test('endgameStandings：名次取 places —— 二三名并列写 2=，不是第 2 / 第 3 名', () => {
+  const standing = endgameStandings(
+    finishedView({
+      progress: [40, 38, 38],
+      // ranking 是座位序：两名闲家同为 38 时它只能排出先后，拿它的下标当名次就编出一个假顺序
+      ranking: [0, 1, 2],
+      places: [1, 2, 2],
+      levels: [
+        { rank: 2, cycle: 3 },
+        { rank: 13, cycle: 2 },
+        { rank: 13, cycle: 2 }
+      ]
+    })
+  )!;
+  assert.equal(standing.reasonText, '有人冲到 2(+3)');
+  assert.deepEqual(standing.champions, [0]);
+  assert.deepEqual(
+    standing.rows.map((row) => [row.seat, row.place, row.tied, row.lag, row.champion]),
+    [
+      [0, 1, false, 0, true],
+      [1, 2, true, 2, false],
+      [2, 2, true, 2, false]
+    ]
+  );
+  assert.deepEqual(standing.rows.map(placeLabel), ['1', '2=', '2=']);
+});
+
+test('endgameStandings：两名闲家同拍跨线时并列冠军（两行都挂冠军、名次都写 1=）', () => {
+  const standing = endgameStandings(
+    finishedView({
+      progress: [1, 43, 43],
+      ranking: [1, 2, 0],
+      places: [3, 1, 1],
+      levels: [
+        { rank: 2, cycle: 0 },
+        { rank: 5, cycle: 3 },
+        { rank: 5, cycle: 3 }
+      ]
+    })
+  )!;
+  assert.deepEqual(standing.champions, [1, 2]);
+  assert.deepEqual(standing.rows.map(placeLabel), ['1=', '1=', '3']);
+  assert.deepEqual(
+    standing.rows.map((row) => row.champion),
+    [true, true, false]
+  );
+  // 榜尾与榜首差 42 级：这个数读的是 result.progress，不是级别对象
+  assert.equal(standing.rows[2]!.lag, 42);
+});
+
+test('endgameStandings：对局没结束时返回 null；「打完几副」取 history.length 而不是 dealNo', () => {
+  assert.equal(endgameStandings(viewWithAuction([])), null, '没有 result 就不该有终局卡');
+
+  const view = finishedView({
+    progress: [40, 1, 1],
+    ranking: [0, 1, 2],
+    places: [1, 2, 2],
+    levels: [
+      { rank: 2, cycle: 3 },
+      { rank: 2, cycle: 0 },
+      { rank: 2, cycle: 0 }
+    ],
+    history: 17,
+    // dealNo 还数着全 pass 作废重发的那些，于是它比「打完几副」大
+    dealNo: 19
+  });
+  assert.equal(endgameStandings(view)!.dealCount, 17);
 });
 

@@ -28,7 +28,6 @@
 
   const view = $derived(client.view);
   const deal = $derived(view?.deal ?? null);
-  const finished = $derived(view?.status === 'finished');
   const phase = $derived(deal?.phase ?? null);
   /** 观战者：mySeat = -1 让下面所有「你」的判断自动不成立，不需要另写一套分支 */
   const spectating = $derived(client.you === null);
@@ -72,10 +71,14 @@
   });
 
   /**
-   * 只剩两类按钮：结算阶段的「结算详情 / 下一副 / 开新对局」。
+   * 只剩两类按钮：结算阶段的「结算详情」与「下一副」。
    * 出牌与埋底的动作控件住在 `ActionTray` 里，而**托盘就渲染在这一行**（问号右边那一格）——
    * 它不是第二处落点，是同一个组件、同一行。两者不会同时出现：轮到谁动时这句 `status`
    * 恰好是 null（见上），托盘才出现。
+   *
+   * 「开新对局」**只住在结算弹窗里**：整场结束以后，这一行只留「结算详情」（它没有再发牌的
+   * 意思），主按钮是终局卡上那一枚，并且要先过页面级的二次确认。同一行摆两枚「开新对局」
+   * 只会让误触多一个入口，而它清掉的是整场的账。
    */
   const gold =
     'rounded-lg bg-gold px-4 py-1.5 text-xs font-bold text-ink transition enabled:hover:brightness-110 disabled:opacity-30';
@@ -143,34 +146,21 @@
     >
       {summaryOpen ? '收起结算' : '结算详情'}
     </button>
-    <!-- 发牌与开新对局只属于在座玩家；观战者看完结算即可。
-         两者都受**三拍的锁**约束（`nextDealReady`）：跳过是本地的一拍一步，
-         而换副是全桌的 —— 没有这把锁，跳得快的人在 ~0 秒就能把别人正在看的末墩与底牌切走。
-         锁着时 `title` 说自己为什么锁着（按钮本身是灰的，不解释就成了「坏了」）。 -->
+    <!-- 发牌只属于在座玩家；观战者看完结算即可。它受**三拍的锁**约束（`nextDealReady`）：
+         跳过是本地的一拍一步，而换副是全桌的 —— 没有这把锁，跳得快的人在 ~0 秒就能把别人
+         正在看的末墩与底牌切走。锁着时 `title` 说自己为什么锁着（按钮是灰的，不解释就成了「坏了」）。
+         整场结束后这里**不再有按钮**（开新对局住在终局卡里，见上）。 -->
     {#if !spectating}
-      {#if finished}
-        <button
-          type="button"
-          class={gold}
-          data-next-deal="true"
-          disabled={client.busy || !nextDealReady}
-          title={nextDealReady ? '开新对局（级别重置）' : '让末墩与底牌先亮完'}
-          onclick={() => void client.newGame()}
-        >
-          开新对局（级别重置）
-        </button>
-      {:else}
-        <button
-          type="button"
-          class={gold}
-          data-next-deal="true"
-          disabled={client.busy || !nextDealReady}
-          title={nextDealReady ? '下一副' : '让末墩与底牌先亮完'}
-          onclick={() => void client.deal()}
-        >
-          下一副
-        </button>
-      {/if}
+      <button
+        type="button"
+        class={gold}
+        data-next-deal="true"
+        disabled={client.busy || !nextDealReady}
+        title={nextDealReady ? '下一副' : '让末墩与底牌先亮完'}
+        onclick={() => void client.deal()}
+      >
+        下一副
+      </button>
     {/if}
   {/if}
 </div>

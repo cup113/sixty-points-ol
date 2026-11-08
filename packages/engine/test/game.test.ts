@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { cardsPoints, type Seat } from '../src/cards.ts';
 import {
   CARDS_PER_SEAT,
+  FINISH_ONE_AT,
   KITTY_SIZE,
   createGame,
   dealWith,
@@ -70,8 +71,8 @@ describe('随机整局不变量', () => {
       const progress = state.levels.map(levelProgress);
       assert.deepEqual(state.result!.progress, progress, `seed=${seed} 结果进度与级别一致`);
       assert.ok(
-        progress.filter((p) => p >= 27).length >= 2 || progress.filter((p) => p >= 40).length >= 1,
-        `seed=${seed} 结束条件成立`
+        progress.some((p) => p >= FINISH_ONE_AT),
+        `seed=${seed} 结束条件成立（有人到 2(+3)）`
       );
 
       const ranking = state.result!.ranking;
@@ -82,6 +83,17 @@ describe('随机整局不变量', () => {
           `seed=${seed} 排名按总进度降序`
         );
       }
+
+      // 名次：并列共享、「比我高的有几个 + 1」。ranking 只是排序，不许拿它的下标当名次
+      const places = state.result!.places;
+      for (const seat of [0, 1, 2] as const) {
+        const expected = 1 + progress.filter((p) => p > progress[seat]!).length;
+        assert.equal(places[seat], expected, `seed=${seed} 座位 ${seat} 的名次与进度一致`);
+      }
+      assert.ok(
+        places.filter((place) => place === 1).length >= 1,
+        `seed=${seed} 至少有一个冠军`
+      );
     }
   });
 

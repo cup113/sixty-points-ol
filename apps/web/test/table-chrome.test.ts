@@ -78,6 +78,9 @@ const trickArea = read('../src/lib/components/TrickArea.svelte');
 const roleSource = read('../src/lib/role.ts');
 const handFan = read('../src/lib/components/HandFan.svelte');
 const dealSummary = read('../src/lib/components/DealSummary.svelte');
+/** 整场结束那一块（名次 / 结束原因 / 开新对局）：与结算弹窗同屏，但只有一份实现 */
+const endgameCard = read('../src/lib/components/EndgameCard.svelte');
+const newGameConfirm = read('../src/lib/components/NewGameConfirm.svelte');
 const historyList = read('../src/lib/components/HistoryList.svelte');
 const scoreEquation = read('../src/lib/components/ScoreEquation.svelte');
 const verdictBadge = read('../src/lib/components/VerdictBadge.svelte');
@@ -1237,6 +1240,15 @@ function settlePanelCheck(source: string): string | null {
   if (!src.includes('levelRows(summary, view.levels)')) {
     return '升级表没有走 levelRows：三家不会都出现（没升级的那家会整行消失）';
   }
+  if (!src.includes('<EndgameCard')) {
+    return '结算弹窗里没有终局卡（EndgameCard）：整场结束那一块会出现第二份实现';
+  }
+  if (src.includes('result.ranking')) {
+    return '结算弹窗又拿 result.ranking 当名次：那是座位序，并列会被读成第 2 / 第 3 名（名次读 places）';
+  }
+  if (src.includes('client.newGame(')) {
+    return '结算弹窗自己调了 client.newGame()：开新对局会清掉级别与战报，必须走页面级的二次确认';
+  }
   if (src.includes('保底') || src.includes('抠底')) {
     return '结算弹窗又写回了保底/抠底那句说明：符号的红/绿已经说明了加还是扣';
   }
@@ -1244,6 +1256,63 @@ function settlePanelCheck(source: string): string | null {
   const card = cardAt < 0 ? '' : tagOf(src, cardAt);
   if (!card.includes('max-h-') || !card.includes('overflow-y-auto')) {
     return '结算卡片没有高度上限与自己的滚动区（max-h-* + overflow-y-auto）：短屏上底部的「下一副」会落到视口外';
+  }
+  return null;
+}
+
+/**
+ * 终局卡（`EndgameCard`）：本副结算弹窗最下面那一块，说的是**整场**。
+ *
+ * 两条判据都在「只有一份真相」上：
+ * ① 名次 / 相差 / 结束原因 / 副数只许由 `labels.ts` 的 `endgameStandings` 算 ——
+ *    卡里自己取 `result.ranking[i]` 就是把并列读成先后（那正是这一版要修的缺陷：
+ *    `ranking` 是座位序，`[40,38,38]` 会读成「第 1 / 第 2 / 第 3 名」）；
+ * ② 级别复用座位卡那枚 `LevelBadge`，不写 `levelLabel` 文本 —— 同一屏上两种级别读法会打架。
+ */
+function endgameCardCheck(source: string): string | null {
+  const src = code(source);
+  if (!src.includes('endgameStandings(')) {
+    return '终局卡没有走 endgameStandings：名次/相差/结束原因会各算各的';
+  }
+  for (const own of ['result.ranking[', 'result.places[', 'result.progress[']) {
+    if (src.includes(own)) {
+      return `终局卡里又自己取了 ${own}：这些只该由 labels.ts 的 endgameStandings 算`;
+    }
+  }
+  if (!src.includes('placeLabel(')) {
+    return '终局卡没有用 placeLabel：并列那一格（`2=`）会各写各的';
+  }
+  if (!src.includes('<LevelBadge')) {
+    return '终局卡的级别没有复用 LevelBadge：与座位卡、升级表的读法会分家';
+  }
+  if (src.includes('levelLabel(')) {
+    return '终局卡用了 levelLabel 文本：级别要复用 LevelBadge 那枚徽标';
+  }
+  return null;
+}
+
+/**
+ * 「开新对局」的入口与确认（`NewGameConfirm`）。
+ *
+ * 它清掉的是**整场的账**（级别回 2(+0)、本场战报与重演清空），所以三条边界：
+ * ① 主按钮在终局卡里，**操作条那一行不再有第二枚**（多一个入口只是多一次误触）；
+ * ② 确认是**页面级**的 `fixed` 层 —— 挂在卡里会被 `max-h-[92dvh] overflow-y-auto` 困住；
+ * ③ 真正调 `client.newGame()` 的只有那枚确认（结算卡不许自己调，见 `settlePanelCheck`）。
+ */
+function newGameConfirmCheck(pageSource: string, barSource: string, confirmSource: string): string | null {
+  const p = code(pageSource);
+  const bar = code(barSource);
+  const confirm = code(confirmSource);
+  if (bar.includes('开新对局')) {
+    return '操作条那一行还有一枚「开新对局」：它住在终局卡里，两个入口只是两次误触的机会';
+  }
+  if (!p.includes('<NewGameConfirm')) return '页面没有挂 NewGameConfirm：确认弹窗不存在';
+  if (!p.includes('onRequestNewGame')) return '页面没有把「请求开新对局」接给结算弹窗：主按钮点了没反应';
+  if (!/fixed inset-0 z-50/.test(confirm)) {
+    return 'NewGameConfirm 不是页面级的 fixed inset-0 z-50 层：挂在滚动容器里会不覆盖全屏';
+  }
+  if (!confirm.includes('client.newGame(')) {
+    return 'NewGameConfirm 没有真的调用 client.newGame()：确认是个空壳';
   }
   return null;
 }
@@ -1439,6 +1508,64 @@ test('结算弹窗：三块共用组件 + 卡片高度上限', () => {
   assert.equal(problem, null, problem ?? '');
 });
 
+test('终局卡：名次与结束原因只走 endgameStandings，级别复用 LevelBadge', () => {
+  const problem = endgameCardCheck(endgameCard);
+  assert.equal(problem, null, problem ?? '');
+});
+
+test('反证：终局卡自己取名次、不用 placeLabel、级别写文本，都必须被判出来', () => {
+  assert.match(
+    endgameCardCheck(endgameCard.replace('endgameStandings(view)', 'view.result')) ?? '',
+    /endgameStandings/,
+    '不走 endgameStandings 被判为合规'
+  );
+  assert.match(
+    endgameCardCheck(
+      endgameCard.replace('{row.lag}', '{view.result.progress[row.seat]}')
+    ) ?? '',
+    /result\.progress\[/,
+    '终局卡自己取 result.progress 被判为合规'
+  );
+  assert.match(
+    endgameCardCheck(endgameCard.replace('{placeLabel(row)}', '{row.place}')) ?? '',
+    /placeLabel/,
+    '不用 placeLabel（并列那一格写不出 2=）被判为合规'
+  );
+  assert.match(
+    endgameCardCheck(
+      endgameCard.replace(
+        '<LevelBadge level={row.level} />',
+        '<span>{levelLabel(row.level)}</span>'
+      )
+    ) ?? '',
+    /LevelBadge|levelLabel/,
+    '级别写成文本被判为合规'
+  );
+});
+
+test('开新对局：入口只在终局卡里，确认是页面级的 fixed 层，且真的调 newGame', () => {
+  const problem = newGameConfirmCheck(page, actionBar, newGameConfirm);
+  assert.equal(problem, null, problem ?? '');
+});
+
+test('反证：操作条留着第二枚开新对局、确认挂失、确认层不是 fixed，都必须被判出来', () => {
+  assert.match(
+    newGameConfirmCheck(page, `${actionBar}\n<button type="button">开新对局</button>`, newGameConfirm) ?? '',
+    /操作条/,
+    '操作条里第二枚「开新对局」被判为合规'
+  );
+  assert.match(
+    newGameConfirmCheck(page.replace('<NewGameConfirm', '<div data-x'), actionBar, newGameConfirm) ?? '',
+    /NewGameConfirm/,
+    '页面没挂确认弹窗被判为合规'
+  );
+  assert.match(
+    newGameConfirmCheck(page, actionBar, newGameConfirm.replace('fixed inset-0 z-50', 'absolute inset-0')) ?? '',
+    /fixed/,
+    '确认层不是页面级 fixed 被判为合规'
+  );
+});
+
 test('反证：弹窗里又写一份算式、不是三家都出、没有滚动区、保底说明回潮，都必须被判出来', () => {
   assert.match(
     settlePanelCheck(
@@ -1461,6 +1588,21 @@ test('反证：弹窗里又写一份算式、不是三家都出、没有滚动�
     settlePanelCheck(dealSummary + '\n<p>抠底 · 末轮被闲家赢走，底分 ×{summary.multiplier} 扣除</p>') ?? '',
     /保底|抠底/,
     '保底/抠底那句说明回潮被判为合规'
+  );
+  assert.match(
+    settlePanelCheck(dealSummary.replace('<EndgameCard', '<section')) ?? '',
+    /EndgameCard/,
+    '终局卡从弹窗里消失（整场结果无处可看）被判为合规'
+  );
+  assert.match(
+    settlePanelCheck(`${dealSummary}\n<p>{view.result.ranking[0]}</p>`) ?? '',
+    /result\.ranking/,
+    '弹窗拿 result.ranking 当名次（并列被读成第 2 / 第 3 名）被判为合规'
+  );
+  assert.match(
+    settlePanelCheck(`${dealSummary}\n<script>void client.newGame();</script>`) ?? '',
+    /newGame/,
+    '弹窗自己调 client.newGame()（绕过二次确认）被判为合规'
   );
 });
 

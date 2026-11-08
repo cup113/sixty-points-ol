@@ -31,8 +31,14 @@ export interface Level {
 
 export const START_LEVEL: Level = { rank: 2, cycle: 0 };
 export const LEVELS_PER_CYCLE = 13;
-/** 结束阈值：2(+2) 与 2(+3) 的总进度 */
-export const FINISH_TWO_AT = LEVELS_PER_CYCLE * 2 + 1;
+/**
+ * 结束阈值：2(+3) 的总进度（40）。
+ *
+ * 曾经还有一条「两人达 2(+2)」（27，`FINISH_TWO_AT`）—— 已删：一场的长度只由**第一个**
+ * 冲过 2(+3) 的人决定，而不是等第二个人也跟着上来。于是并列**冠军**基本只剩一种情形：
+ * 两名闲家同拍跨线（他们总是同拍升级）；但二三名并列很常见，所以名次仍要
+ * `GameResult.places` 那份「并列共享」的名次，不能用排序下标充当名次。
+ */
 export const FINISH_ONE_AT = LEVELS_PER_CYCLE * 3 + 1;
 
 export function levelProgress(l: Level): number {
@@ -128,9 +134,29 @@ export interface DealSummary {
   readonly claim: { readonly seat: Seat; readonly lastTrick: number; readonly cards: number } | null;
 }
 
+/**
+ * 结束的原因。**规则只有一条**，所以 `kind` 眼下只取一个值 —— 留着它是因为
+ * 界面要说的那句话（「有人冲到 2(+3)」）必须来自引擎，而不是界面自己拿 `progress`
+ * 去比阈值（那就是把结束条件写了第二遍）。日后加回别的门槛时，这里只多一个分支、
+ * `labels.ts` 的文案表会跟着报编译错。
+ */
+export interface FinishReason {
+  readonly kind: 'oneAtThree';
+  /** 跨过线的那几个座位：两名闲家同拍跨线时是两个 */
+  readonly seats: readonly Seat[];
+}
+
 export interface GameResult {
   readonly progress: readonly number[];
+  /** 排序后的座位序（按进度降序）。**它不是名次** —— 并列会在这里被稳定排序成先后 */
   readonly ranking: readonly Seat[];
+  /**
+   * 名次，每座位一个、从 1 起：**并列共享**，下一名次跳号。
+   * 例：进度 `[40, 38, 38]` → `[1, 2, 2]`（两名闲家同拍升级，二三名并列是常态）。
+   * 界面据此渲染「1 / 2= / 2=」，并据此判断谁是冠军（`places[seat] === 1`）。
+   */
+  readonly places: readonly number[];
+  readonly reason: FinishReason;
 }
 
 export type DealPhase = 'auction' | 'bury' | 'play' | 'scored';
@@ -557,12 +583,14 @@ function scoreDeal(state: GameState, deal: DealState, events: EngineEvent[]): vo
   events.push({ type: 'dealScored', summary });
 
   const progress = state.levels.map(levelProgress);
-  const atTwo = progress.filter((p) => p >= FINISH_TWO_AT).length;
-  const atThree = progress.filter((p) => p >= FINISH_ONE_AT).length;
-  if (atTwo >= 2 || atThree >= 1) {
+  const finishers = SEATS.filter((seat) => progress[seat]! >= FINISH_ONE_AT);
+  if (finishers.length > 0) {
     const ranking = [...SEATS].sort((a, b) => progress[b]! - progress[a]!);
+    // 名次不能靠 ranking 的下标：并列会被稳定排序成先后（`[40,38,38]` 会读成「第 2 名 / 第 3 名」）。
+    // 「比我进度高的人有几个」就是名次的定义，并列者自然同名次。
+    const places = SEATS.map((seat) => 1 + SEATS.filter((s) => progress[s]! > progress[seat]!).length);
     state.status = 'finished';
-    state.result = { progress, ranking };
+    state.result = { progress, ranking, places, reason: { kind: 'oneAtThree', seats: finishers } };
     events.push({ type: 'gameFinished', result: state.result });
   }
 }
