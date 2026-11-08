@@ -34,7 +34,7 @@
   <section data-endgame-card="true" class="mt-3 rounded-lg border border-gold/50 bg-black/30 p-3">
     <h3 class="text-sm font-semibold text-gold">对局结束</h3>
     <p class="mt-0.5 text-[11px] text-white/45">
-      {standing.reasonText} · 打完 {standing.dealCount} 副
+      {#if standing.reasonText}{standing.reasonText} · {/if}打完 {standing.dealCount} 副
     </p>
 
     <!-- 名次 / 名字 / 级别徽标 / 一句结论：四列定宽（名次 1rem、结论 3.5rem），

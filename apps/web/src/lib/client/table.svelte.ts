@@ -1,6 +1,14 @@
 import { cardKey, type BidCall, type Card, type PublicView } from '@sixty/engine';
 import type { PlayerHand, Role, StreamPayload, TableView } from '$lib/shared';
-import { armedAfter, autoPassBeat, autoPassDelay, readArmedDealNo, writeArmedDealNo } from '$lib/auto-pass';
+import {
+  armedAfter,
+  AUTO_PASS_TRIES,
+  autoPassBeat,
+  autoPassDelay,
+  autoPassRetryDelay,
+  readArmedDealNo,
+  writeArmedDealNo
+} from '$lib/auto-pass';
 import { saveCredential } from '$lib/identity';
 import { checkPlay } from '$lib/labels';
 import { shouldResetSelection, type SelectionContext } from '$lib/selection';
@@ -34,6 +42,11 @@ export class TableClient {
   #autoTimer: ReturnType<typeof setTimeout> | null = null;
   /** 已经代按过的**那一拍**（`副号:叫牌史长度`）：先记后发，发失败了再退回来重试 */
   #autoBeat: string | null = null;
+  /**
+   * 这一拍已经连败几拍。**只在失败时涨**，成功或收到新帧就归零（见 `#fireAutoPass` / `#apply`）：
+   * 预算用完就停手 —— 否则断网时它会永远每秒重发一次（`AUTO_PASS_TRIES` 那里写着为什么）。
+   */
+  #autoTries = 0;
 
   constructor(code: string, initial: StreamPayload, inherited = false) {
     this.code = code;
@@ -46,6 +59,8 @@ export class TableClient {
     this.view = payload.view;
     this.you = payload.you;
     this.table = payload.table;
+    // 收到新帧 = 这条链路又通了，重试预算归零（断网期间烧完的那五个不该带进来）
+    this.#autoTries = 0;
     this.#syncAutoPass();
     this.#pumpAutoPass();
   }
@@ -123,10 +138,17 @@ export class TableClient {
       return;
     }
     if (this.#autoTimer !== null) return;
+    // 预算烧完：不再自己重排，等下一帧（重连补帧）把预算清零后重来。
+    // 少了这一句，断网时的代按就是一条**每秒一次**的循环（代价写在 `AUTO_PASS_TRIES` 那里）。
+    if (this.#autoTries >= AUTO_PASS_TRIES) {
+      this.error = '委托不叫没发出去（网络？）—— 轮到你时请手动点「不叫」';
+      this.#clearAutoTimer();
+      return;
+    }
     this.#autoTimer = setTimeout(() => {
       this.#autoTimer = null;
       void this.#fireAutoPass();
-    }, autoPassDelay(Math.random));
+    }, autoPassDelay(Math.random) + autoPassRetryDelay(this.#autoTries));
   }
 
   #clearAutoTimer(): void {
@@ -141,14 +163,23 @@ export class TableClient {
    * 记账键先写下去再发：同一拍绝不发第二次（重连补帧、无关广播引起的重判都不会）。
    * 但发失败就把账退回来并再排一拍 —— 一次网络抖动不该让这一拍永远没人按（桌面会卡在那里等），
    * 也不该等下一帧：这一拍之后可能再也没有别人出手，帧也就不再来。
+   *
+   * 重试**有退避、有预算**（`autoPassRetryDelay` / `AUTO_PASS_TRIES`）：没有它们的话，
+   * 「失败就立刻再排一拍」在断网时是一条每秒一次的循环 —— `busy` 每秒翻一次、页头横幅每秒被抹一次，
+   * 而「一次抖动」与「网真断了」这两件事根本分不开。
    */
   async #fireAutoPass(): Promise<void> {
     const beat = autoPassBeat(this.view, this.you, this.autoPass, this.#autoBeat);
     if (beat === null) return;
     this.#autoBeat = beat;
     const sent = await this.bid('pass', { quiet: true });
-    if (sent || this.#autoBeat !== beat) return;
+    if (this.#autoBeat !== beat) return;
+    if (sent) {
+      this.#autoTries = 0;
+      return;
+    }
     this.#autoBeat = null;
+    this.#autoTries += 1;
     this.#pumpAutoPass();
   }
 
@@ -183,13 +214,22 @@ export class TableClient {
   /**
    * 所有动作请求的唯一出口。
    *
-   * `quiet` = **失败不写页头横幅**：委托不叫（ADR-0029）由页面代发，那不是用户刚点的动作，
-   * 一句「还没轮到你」的红字只会让人困惑（同一条路径上，先到的请求已经生效，这张桌没坏）。
-   * 成功与失败的判据完全不变，只是不上屏。
+   * `quiet` = **不是用户刚点的动作**：委托不叫（ADR-0029）由页面代发。
+   * 这类请求不许碰界面的两个状态位：
+   * - **不置 `busy`**：它会让手动「不叫」、托盘、页头那几枚按钮跟着灰一下。
+   *   代按重试时每分钟灰好几次，看起来就像界面在抽风（它甚至可能把人的手动出口挡在后面）。
+   * - **不清/不写 `error`**：`error = null` 是「我刚点了一个动作，旧的红字过期了」这条语义，
+   *   一条每分钟重发几次的后台请求没有资格替用户抹掉页头的横幅。
+   *
+   * 成功与失败的判据完全不变，只是不上屏。去重由 `#autoBeat` 那把记账键负责，不靠 `busy`。
    */
   async #request(path: string, init: RequestInit = {}, quiet = false): Promise<unknown> {
-    this.busy = true;
-    this.error = null;
+    /** 这次请求是否替用户「持有」界面的那两个状态位 */
+    const owned = !quiet;
+    if (owned) {
+      this.busy = true;
+      this.error = null;
+    }
     try {
       const response = await fetch(path, {
         ...init,
@@ -203,16 +243,16 @@ export class TableClient {
       });
       const payload = (await response.json().catch(() => null)) as { message?: string } | null;
       if (!response.ok) {
-        if (!quiet) this.error = payload?.message ?? `操作失败（${response.status}）`;
+        if (owned) this.error = payload?.message ?? `操作失败（${response.status}）`;
         return null;
       }
       this.selected = [];
       return payload;
     } catch (cause) {
-      if (!quiet) this.error = cause instanceof Error ? cause.message : '网络错误';
+      if (owned) this.error = cause instanceof Error ? cause.message : '网络错误';
       return null;
     } finally {
-      this.busy = false;
+      if (owned) this.busy = false;
     }
   }
 

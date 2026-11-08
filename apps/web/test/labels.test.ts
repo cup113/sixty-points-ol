@@ -447,7 +447,8 @@ test('反证：三拍必须真的分得开（塌成两拍 / 拍序颠倒都要�
   assert.ok(SCORED_KITTY_MS >= SCORED_HOLD_MS, '亮底牌比看清末墩还短：那一拍读不完 3 张牌');
 });
 
-test('trickSideBadge：只说这 N 分归庄方还是闲方', () => {  // 庄家座位 2 赢了这一墩 → 庄；其余两个座位都是闲家一方 → 闲
+test('trickSideBadge：只说这 N 分归庄方还是闲方', () => {
+  // 庄家座位 2 赢了这一墩 → 庄；其余两个座位都是闲家一方 → 闲
   assert.equal(trickSideBadge(2, 2, 20), '庄 +20 分');
   assert.equal(trickSideBadge(2, 0, 5), '闲 +5 分');
   assert.equal(trickSideBadge(2, 1, 0), '闲 +0 分', '0 分的墩也要如实报（不写成「赢墩 +0」）');
@@ -803,7 +804,8 @@ test('levelProgression：逐副累积，没动的座位沿用上一副的级别'
   assert.deepEqual(rows[3]!.changed, [false, false, false]);
 });
 
-test('levelProgression：跨 A 的「+过次」原样带进后面的行', () => {  const rows = levelProgression([
+test('levelProgression：跨 A 的「+过次」原样带进后面的行', () => {
+  const rows = levelProgression([
     summaryOf({
       dealNo: 1,
       made: true,
@@ -919,5 +921,30 @@ test('endgameStandings：对局没结束时返回 null；「打完几副」取 h
     dealNo: 19
   });
   assert.equal(endgameStandings(view)!.dealCount, 17);
+});
+
+test('endgameStandings：升级前落库的 result（没有 places / reason）不抛错，名次按同一公式补算', () => {
+  // 这不是假想的形状：`games.state` 是整份 JSON 落库，部署又明说「容器重建不丢牌局」——
+  // 升级**之前**打完的一张桌，升级后照样会被读回来。终局卡在渲染期求值，
+  // 一抛错就把整张结算弹窗（连同唯一那枚「开新对局」）一起带走。
+  const view = finishedView({
+    progress: [40, 38, 38],
+    ranking: [0, 1, 2],
+    places: [1, 2, 2],
+    levels: [
+      { rank: 2, cycle: 3 },
+      { rank: 13, cycle: 2 },
+      { rank: 13, cycle: 2 }
+    ]
+  });
+  // 抹掉这一版才加的两个字段，模拟旧行
+  const stored = view.result as unknown as { places?: unknown; reason?: unknown };
+  delete stored.places;
+  delete stored.reason;
+
+  const standing = endgameStandings(view)!;
+  assert.deepEqual(standing.rows.map(placeLabel), ['1', '2=', '2='], '旧档案的名次要按同一公式补算');
+  assert.deepEqual(standing.champions, [0]);
+  assert.equal(standing.reasonText, null, '旧那一场是按旧规则结束的 —— 原因说不准，就不编一句');
 });
 

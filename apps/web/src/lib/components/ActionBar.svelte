@@ -28,6 +28,8 @@
 
   const view = $derived(client.view);
   const deal = $derived(view?.deal ?? null);
+  /** 整场已结束：这一行只剩「结算详情」，发牌按钮必须收掉（引擎会回「对局已结束」） */
+  const finished = $derived(view?.status === 'finished');
   const phase = $derived(deal?.phase ?? null);
   /** 观战者：mySeat = -1 让下面所有「你」的判断自动不成立，不需要另写一套分支 */
   const spectating = $derived(client.you === null);
@@ -150,7 +152,7 @@
          跳过是本地的一拍一步，而换副是全桌的 —— 没有这把锁，跳得快的人在 ~0 秒就能把别人
          正在看的末墩与底牌切走。锁着时 `title` 说自己为什么锁着（按钮是灰的，不解释就成了「坏了」）。
          整场结束后这里**不再有按钮**（开新对局住在终局卡里，见上）。 -->
-    {#if !spectating}
+    {#if !spectating && !finished}
       <button
         type="button"
         class={gold}

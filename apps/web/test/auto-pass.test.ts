@@ -15,13 +15,16 @@ import test from 'node:test';
 
 import type { PublicView } from '@sixty/engine';
 import {
+  AUTO_PASS_BACKOFF_MAX_MS,
   AUTO_PASS_KEY_PREFIX,
+  AUTO_PASS_TRIES,
   MAX_DELAY_MS,
   MIN_DELAY_MS,
   armedAfter,
   autoPassBeat,
   autoPassDelay,
   autoPassKey,
+  autoPassRetryDelay,
   beatKey,
   isArmedFor,
   readArmedDealNo,
@@ -153,6 +156,31 @@ test('反证：若延迟实现漏了夹取，脏值那条断言确实会红', ()
   assert.ok(Number.isNaN(leaked), '这条反证本身失效了：naive 实现应当放出 NaN');
 });
 
+test('重试退避：500 → 1000 → 2000 → 4000 后封顶，脏值按第一次算', () => {
+  assert.deepEqual(
+    [0, 1, 2, 3, 4, 9].map(autoPassRetryDelay),
+    [500, 1000, 2000, AUTO_PASS_BACKOFF_MAX_MS, AUTO_PASS_BACKOFF_MAX_MS, AUTO_PASS_BACKOFF_MAX_MS],
+    '退避必须翻倍到封顶为止：不翻倍就等于没退避，不封顶就会退到几分钟一次'
+  );
+  for (const dirty of [Number.NaN, Number.NEGATIVE_INFINITY, -3, 0.7]) {
+    const delay = autoPassRetryDelay(dirty);
+    assert.ok(
+      Number.isInteger(delay) && delay >= MIN_DELAY_MS && delay <= AUTO_PASS_BACKOFF_MAX_MS,
+      `tries = ${String(dirty)} 时退避成了 ${delay}：脏值必须夹到第一次那一档`
+    );
+  }
+});
+
+test('重试预算是个小数字：烧完要停手，别把「网断了」当成「每次都要再试一下」', () => {
+  assert.ok(AUTO_PASS_TRIES >= 2 && AUTO_PASS_TRIES <= 10, `预算 ${AUTO_PASS_TRIES} 次不合理`);
+  // 预算内的总等待：抖一下就恢复的情况要在一两拍内发出，断网时要很快停下
+  const total = Array.from({ length: AUTO_PASS_TRIES }, (_, i) => MAX_DELAY_MS + autoPassRetryDelay(i)).reduce(
+    (sum, ms) => sum + ms,
+    0
+  );
+  assert.ok(total <= 60_000, `预算内的总等待 ${total}ms 超过一分钟，等于一直重试`);
+});
+
 /* ---------------- 记账键 ---------------- */
 
 test('记账键 = 副号:叫牌史长度（同一副里的第二次出手是另一拍）', () => {
@@ -242,6 +270,14 @@ function schedulerProblems(source: string): string[] {
     problems.push('代按没有走 quiet 发送：失败会把「还没轮到你」写成页头红字');
   }
   if (!source.includes('clearTimeout(')) problems.push('在途定时器没有撤：换副/撤销之后还会发出一次');
+  // 重试的退避与预算：少了任何一条，断网时的代按就是一条每秒一次的重发循环
+  // （busy 每秒翻一次、手动「不叫」跟着灰、页头横幅每秒被抹），也是「一抖」与「真断了」分不开的原因。
+  if (!source.includes('autoPassRetryDelay(')) {
+    problems.push('重试没有退避（缺 autoPassRetryDelay）：断网时它会一秒重发一次');
+  }
+  if (!source.includes('AUTO_PASS_TRIES')) {
+    problems.push('重试没有预算上限（缺 AUTO_PASS_TRIES）：断网时它会一直重发下去');
+  }
   return problems;
 }
 
@@ -264,6 +300,16 @@ test('反证：判据搬进客户端 / 代按不静默 / 不撤定时器，都�
     schedulerProblems(`${clientSource}\nconst t = deal.auctionTurn === 0;`).join('；'),
     /轮次/,
     '客户端自己判轮次没有被判出来'
+  );
+  assert.match(
+    schedulerProblems(clientSource.replaceAll('autoPassRetryDelay(', 'autoPassRetryDelayX(')).join('；'),
+    /退避/,
+    '重试的退避被摘掉没有被判出来'
+  );
+  assert.match(
+    schedulerProblems(clientSource.replaceAll('AUTO_PASS_TRIES', 'RETRY_BUDGET_X')).join('；'),
+    /预算上限/,
+    '重试的预算上限被摘掉没有被判出来'
   );
 });
 

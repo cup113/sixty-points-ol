@@ -42,6 +42,30 @@ export function autoPassDelay(rng: () => number): number {
 }
 
 /**
+ * 代按的**重试预算**：发失败这么多次就停下，等下一帧再说。
+ *
+ * 为什么必须有一个上限：代按失败之后**不会再来下一帧**（SSE 已断，或服务端不可达），
+ * 而这一拍之后可能再也没有别人出手 —— 于是「发失败就立刻再排一拍」就是一条**每秒重发一次**的
+ * 循环：每轮都把 `busy` 翻一次（手动「不叫」跟着每秒灰一下），页头刚写上的横幅也每秒被抹一次。
+ */
+export const AUTO_PASS_TRIES = 5;
+
+/** 退避的上限（毫秒）：预算烧完之前最久等这么久 */
+export const AUTO_PASS_BACKOFF_MAX_MS = 4_000;
+
+/**
+ * 第 `tries` 次重试要多等多久（`tries` 从 0 起）：500 / 1000 / 2000 / 4000，之后封顶。
+ *
+ * 退避把「网络抖一下」与「网真断了」分成两件事：前者一两拍就成，后者很快把预算烧完并停下来，
+ * 期间发出的请求是五次而不是「一直每秒一次」。
+ * 脏值按 0 处理（与 `autoPassDelay` 同一条纪律：宁可早一拍，也不许 `NaN` 变成「立刻触发」）。
+ */
+export function autoPassRetryDelay(tries: number): number {
+  const step = Number.isFinite(tries) ? Math.max(0, Math.floor(tries)) : 0;
+  return Math.min(AUTO_PASS_BACKOFF_MAX_MS, MIN_DELAY_MS * 2 ** Math.min(step, 3));
+}
+
+/**
  * 记账键：哪一副、叫牌的第几次出手。
  *
  * 为什么带 `auctionLength`：叫牌严格按座位轮转，同一个人在**同一副**里会不止一次出手

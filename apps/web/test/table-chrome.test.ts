@@ -1288,6 +1288,17 @@ function endgameCardCheck(source: string): string | null {
   if (src.includes('levelLabel(')) {
     return '终局卡用了 levelLabel 文本：级别要复用 LevelBadge 那枚徽标';
   }
+  // 行版面只有这一层判据够得到：终局卡住在结算弹窗里，SSR 与 shot 脚本都推不到「一场打完」。
+  // 契约是「名字那一格弹性可收缩、其余三格不收缩」：宽屏不溢出，360px 上只把名字省略。
+  if (!src.includes('min-w-0 flex-1 truncate')) {
+    return '终局卡的名字那一格不是 min-w-0 + flex-1 + truncate：360px 上四列会把行撑出卡片';
+  }
+  if (!src.includes("'w-4 shrink-0")) {
+    return '终局卡的名次那一格没有 shrink-0：窄屏上它会被压成一个数字的宽度';
+  }
+  if (!src.includes('flex w-14 shrink-0')) {
+    return '终局卡末尾那一格（冠军 / 差 N 级）没有定宽 + shrink-0：三行的徽标会各偏一点';
+  }
   return null;
 }
 
@@ -1540,6 +1551,11 @@ test('反证：终局卡自己取名次、不用 placeLabel、级别写文本，
     ) ?? '',
     /LevelBadge|levelLabel/,
     '级别写成文本被判为合规'
+  );
+  assert.match(
+    endgameCardCheck(endgameCard.replace('min-w-0 flex-1 truncate', 'flex-1')) ?? '',
+    /truncate|min-w-0/,
+    '名字那一格去掉 min-w-0 / truncate（窄屏上四列撑出卡片）被判为合规'
   );
 });
 
@@ -2268,7 +2284,13 @@ function scoredPacingCheck(
   }
   // ④ 锁必须在**两处**都上：操作条那一行 + 结算弹窗
   if (!bar.includes('!nextDealReady')) {
-    return '操作条那一行的「下一副 / 开新对局」没有上锁：跳过就能提前换副（切开别人的亮底牌）';
+    return '操作条那一行的「下一副」没有上锁：跳过就能提前换副（切开别人的亮底牌）';
+  }
+  // ⑤ 整场结束之后「下一副」必须收掉：那一帧它唯一的回答是引擎的「对局已结束」（一条红字），
+  //    而「开新对局」住在终局卡里、有自己的二次确认。少这一支就是一颗只会报错的按钮。
+  const nextAt = bar.indexOf('data-next-deal');
+  if (nextAt < 0 || !/finished/.test(bar.slice(Math.max(0, nextAt - 400), nextAt))) {
+    return '操作条那一行的「下一副」没有按「对局已结束」收掉：结束后点它只会换来一句「对局已结束」';
   }
   if (!modal.includes('!nextDealReady')) {
     return '结算弹窗里的「下一副 / 开新对局」没有上锁：弹窗那条路成了后门';
@@ -2320,6 +2342,11 @@ test('反证：一收墩就弹 / 锁只上一处 / 亮底牌层截获点击 / �
     scoredPacingCheck(p, b, m.replaceAll('!nextDealReady', 'false'), r) ?? '',
     /弹窗/,
     '结算弹窗里的锁被摘掉没有被判出来'
+  );
+  assert.match(
+    scoredPacingCheck(p, b.replace('!spectating && !finished', '!spectating'), m, r) ?? '',
+    /收掉/,
+    '整场结束后操作条仍留着「下一副」（一颗只会报「对局已结束」的按钮）没有被判出来'
   );
   assert.match(
     scoredPacingCheck(p, b, m, r.replace('pointer-events-none', '')) ?? '',

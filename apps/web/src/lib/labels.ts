@@ -511,8 +511,11 @@ export interface EndgameRow {
 }
 
 export interface EndgameStandings {
-  /** 结束原因那一句：`有人冲到 2(+3)` */
-  readonly reasonText: string;
+  /**
+   * 结束原因那一句：`有人冲到 2(+3)`。`null` = **旧库里没有这一项**
+   * （`reason` 是这一版才加的字段，见 `endgameStandings` 的兼容段）。
+   */
+  readonly reasonText: string | null;
   /** 打完几副（`history.length`；`dealNo` 含全 pass 作废重发的那些，不能拿来当「打完几副」） */
   readonly dealCount: number;
   /** 按名次排好的三家 */
@@ -529,33 +532,63 @@ export interface EndgameStandings {
 const FINISH_TEXT: Record<FinishReason['kind'], string> = { oneAtThree: '有人冲到 2(+3)' };
 
 /**
+ * 落库里那份 `result` 的读法：`places` / `reason` 是**后加的字段**，老行里没有。
+ *
+ * 这不是假想的：`games.state` 就是 `JSON.stringify` 出来的整份状态，而部署里明写着
+ * 「容器重建不丢牌局」（`Dockerfile` 的 `VOLUME /data`）—— 升级前打完的一张桌，
+ * 升级后照样会被读回来。它们缺了不许炸：终局卡在渲染期求值，一抛错就把整张结算弹窗
+ * （连同**唯一**那枚「开新对局」）一起带走，那张桌会卡在「打完了但开不了新局」。
+ */
+interface StoredResult {
+  readonly progress: readonly number[];
+  readonly ranking: readonly Seat[];
+  readonly places?: readonly number[];
+  readonly reason?: FinishReason;
+}
+
+/**
+ * 名次 = 1 + 「进度比我高的人有几个」。与引擎 `scoreDeal` 里那条公式是**同一句**
+ * （并列共享、下一名次跳号），这里只在旧档案缺 `places` 时补算。
+ */
+function placesFromProgress(progress: readonly number[]): number[] {
+  const at = (seat: number): number => progress[seat] ?? 0;
+  return SEATS.map((seat) => 1 + SEATS.filter((s) => at(s) > at(seat)).length);
+}
+
+/**
  * 终局卡的全部内容：名次、与榜首的差、冠军、结束原因。
  *
  * **名次只认引擎的 `result.places`。** `result.ranking` 是按进度排的**座位序**，并列会被
  * 稳定排序成先后 —— 拿它的下标当名次，`[40, 38, 38]` 就会读成「第 1 / 第 2 / 第 3 名」，
  * 而两名闲家总是同拍升级，二三名并列恰恰是常态（`places` 给的是 `[1, 2, 2]`）。
  *
+ * 旧档案（没有 `places` / `reason`）不会抛错：名次按同一条公式补算，原因留 `null`
+ * （那一场是按**旧规则**结束的，原因说不准，就不编一句）。见 `StoredResult`。
+ *
  * 没有 `result`（对局还没结束）时返回 `null`，调用方据此不渲染这一块。
  */
 export function endgameStandings(view: PublicView): EndgameStandings | null {
   const result = view.result;
   if (result === null) return null;
-  const top = Math.max(...result.progress);
-  const placeOf = (seat: number): number => result.places[seat] ?? 0;
+  const stored = result as StoredResult;
+  const progress = stored.progress;
+  const places = stored.places ?? placesFromProgress(progress);
+  const top = Math.max(...progress);
+  const placeOf = (seat: number): number => places[seat] ?? 0;
   const champions = SEATS.filter((seat) => placeOf(seat) === 1);
-  const rows = result.ranking.map((seat): EndgameRow => {
+  const rows = stored.ranking.map((seat): EndgameRow => {
     const place = placeOf(seat);
     return {
       seat,
       place,
       tied: SEATS.filter((s) => placeOf(s) === place).length > 1,
       level: view.levels[seat] ?? START_LEVEL,
-      lag: top - (result.progress[seat] ?? top),
+      lag: top - (progress[seat] ?? top),
       champion: place === 1
     };
   });
   return {
-    reasonText: FINISH_TEXT[result.reason.kind],
+    reasonText: stored.reason === undefined ? null : FINISH_TEXT[stored.reason.kind],
     dealCount: view.history.length,
     rows,
     champions
