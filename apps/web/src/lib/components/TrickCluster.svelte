@@ -7,7 +7,9 @@
     cards,
     trump = null,
     caption = null,
-    badge = null
+    badge = null,
+    leading = false,
+    trailing = false
   }: {
     cards: readonly Card[];
     trump?: TrumpModel | null;
@@ -15,6 +17,10 @@
     caption?: string | null;
     /** 牌堆下方的金色徽标（如「庄 +20 分」：这墩分归哪一方） */
     badge?: string | null;
+    /** 这一簇**现在最大**（两家出完之后才有意义）：名字转金 —— 牌面一点不动 */
+    leading?: boolean;
+    /** 这一簇已经被压过去了：整簇淡一档，好让眼睛直接找到现在最大的那一簇 */
+    trailing?: boolean;
   } = $props();
 
   /**
@@ -47,10 +53,21 @@
 
 <!-- 一家的出牌堆：桌面与 /rules 教程共用，别在教程里重画一份。
      `--step` 是相邻两张牌左边缘的间距 → 负边距 = step - 牌宽（与手牌扇面同一套算法）。
-     放不下时由 `computeClusterStep` 一路收到放得下，所以两簇不会相撞（见 TrickArea）。 -->
-<div bind:this={rootEl} bind:clientWidth={budget}>
+     放不下时由 `computeClusterStep` 一路收到放得下，所以两簇不会相撞（见 TrickArea）。
+
+     **现在最大**（`leading` / `trailing`，见 CONTEXT.md）：两家出完之后，最大的那一簇名字转金，
+     其余几簇整簇淡一档（0.6）—— 只是帮眼睛找，不新加徽标、不改牌面的尺寸与位置。
+     淡的那一层落在**根节点**上，不落在 `.cluster` 上：那个盒子带着 `drop-in` 入场动画，
+     而动画的 `both` 填充会一直把 `opacity` 钉在 1，普通规则压不过它（实测量到 opacity 仍是 1）。 -->
+<div
+  bind:this={rootEl}
+  bind:clientWidth={budget}
+  class="trick-cluster"
+  data-trailing={trailing}
+  data-leading={leading}
+>
   {#if caption}
-    <p class="mb-1 text-center text-[10px] text-white/45">{caption}</p>
+    <p class="mb-1 text-center text-[10px] {leading ? 'text-gold/80' : 'text-white/45'}">{caption}</p>
   {/if}
   <div
     class="cluster drop-in"

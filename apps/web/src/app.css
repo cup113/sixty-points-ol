@@ -255,6 +255,34 @@ button:disabled {
   cursor: pointer;
 }
 
+/* 这一墩里已经被压过去的那一簇（「现在最大」的另一半，见 TrickCluster）：**整簇**淡一档。
+   0.6 是「看得清但不再是主角」那一档，与 `.card.muted`（0.45，回收站式的「这张不管了」）有意不同档。
+   两条实现上的讲究：① 落在根节点上而不是 `.cluster` 上 —— 后者带着 `drop-in` 入场动画，
+   而动画的 `both` 填充会一直把 `opacity` 钉在 1，普通规则压不过它（实测：规则在、opacity 仍是 1）；
+   ② 写成属性选择器而不是 Tailwind 的 `opacity-60` —— 那个类要从模板字符串里拼出来，
+   产物里不一定扫得到（实测也没扫到）。 */
+.trick-cluster[data-trailing='true'] {
+  opacity: 0.6;
+}
+
+/* 点不动的牌（ADR-0030）：光标换成禁止符号，悬停也不上浮 —— 上浮是「点了会出」的承诺，
+   对凑不成合法一手的牌做这个承诺，等于骗一次点击。牌面本身**不调暗**：
+   「该跟哪一门」已经由蓝框说了，再暗一层就是第二套语言。
+
+   `:not([data-selected='true'])` 不是修饰，是这个选择器的**全部意义**：必出牌正是
+   「既已选中、又点不动」的那一族（`pickableCards` 不把必出的牌放进可点集），
+   少了它，这条以 (0,5,0) 压过 `.card[data-selected='true']` 的 (0,4,0)，
+   鼠标移到刚替你选中的那几张上，`transform: none` 会把牌当场放回底部 26px、移开又弹起来。 */
+.fan.selectable .card[data-locked='true'] {
+  cursor: not-allowed;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .fan.selectable .card[data-locked='true']:not([data-selected='true']):hover {
+    transform: none;
+  }
+}
+
 /* 桌面鼠标：悬停上浮，作为「这张可点/将要出」的预览 */
 @media (hover: hover) and (pointer: fine) {
   .fan.selectable .card:hover {
@@ -421,6 +449,7 @@ button:disabled {
   .drop-in,
   .claim-card,
   .shake,
+  .card[data-refused='true'],
   .pts-pop {
     animation: none;
   }
@@ -455,6 +484,12 @@ button:disabled {
 }
 
 .shake {
+  animation: shake 0.16s 2;
+}
+
+/* 被拒绝的那一下（点了一张凑不出合法一手的牌）：只是抖一下，选择不变。
+   与 `.shake` 同一段关键帧 —— 牌桌上的「不行」只有一个动效，别长出第二种。 */
+.card[data-refused='true'] {
   animation: shake 0.16s 2;
 }
 

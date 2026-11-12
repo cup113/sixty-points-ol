@@ -13,6 +13,8 @@
     marked = [],
     /** 需要标金虚线描边的牌（引导局 = 教练点名要出的那几张） */
     hinted = [],
+    /** 现在点得动的牌（引擎的 `pickableCards`）；null / 不传 = 不设限 */
+    pickable = null,
     selectable = false,
     onToggle
   }: {
@@ -22,6 +24,7 @@
     selected?: readonly string[];
     marked?: readonly string[];
     hinted?: readonly string[];
+    pickable?: ReadonlySet<string> | null;
     selectable?: boolean;
     onToggle?: (card: Card) => void;
   } = $props();
@@ -29,6 +32,31 @@
   let containerWidth = $state(0);
   let cardWidth = $state(0);
   let fanEl = $state<HTMLDivElement | null>(null);
+
+  /**
+   * 刚被拒绝的那一张（ADR-0030）：点不动的牌**不改变选择**，但抖一下再说「不行」——
+   * 静默无视在触屏上就是「界面坏了」。抖动是本地的、300ms 后自己清掉。
+   */
+  let refused = $state<string | null>(null);
+  let refuseTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function refuse(card: Card): void {
+    refused = cardKey(card);
+    if (refuseTimer !== null) clearTimeout(refuseTimer);
+    refuseTimer = setTimeout(() => {
+      refused = null;
+      refuseTimer = null;
+    }, 320);
+  }
+
+  function toggle(card: Card): void {
+    const key = cardKey(card);
+    if (pickable !== null && !pickable.has(key)) {
+      refuse(card);
+      return;
+    }
+    onToggle?.(card);
+  }
 
   const count = $derived(hand.length);
 
@@ -65,15 +93,18 @@
       style={measured ? `--step:${layout.step}px` : null}
     >
       {#each row as card (cardKey(card))}
+        {@const key = cardKey(card)}
         <CardView
           {card}
           {trump}
           {candidateRanks}
           size="lg"
-          selected={selected.includes(cardKey(card))}
-          marked={marked.includes(cardKey(card))}
-          hinted={hinted.includes(cardKey(card))}
-          onclick={selectable ? () => onToggle?.(card) : undefined}
+          selected={selected.includes(key)}
+          marked={marked.includes(key)}
+          hinted={hinted.includes(key)}
+          locked={selectable && pickable !== null && !pickable.has(key)}
+          refused={refused === key}
+          onclick={selectable ? () => toggle(card) : undefined}
         />
       {/each}
     </div>

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { PublicView } from '@sixty/engine';
-  import { lastCompletedTrick, trickSideBadge, whoLabel } from '$lib/labels';
+  import { lastCompletedTrick, trickLeader, trickSideBadge, whoLabel } from '$lib/labels';
   import { spotBox } from '$lib/fan-layout';
   import { seatSidesOf } from '$lib/role';
   import TrickCluster from './TrickCluster.svelte';
@@ -31,6 +31,15 @@
   const winnerSeat = $derived(showingCurrent ? null : (previous?.winnerSeat ?? null));
   const trickPoints = $derived(showingCurrent ? 0 : (previous?.points ?? 0));
   const declarerSeat = $derived(deal?.declarerSeat ?? null);
+
+  /**
+   * 这一墩**现在最大**的那一家（两家出完牌之后才有）：只在看**当前墩**时算 ——
+   * 已收掉的墩由赢墩徽标说话，两者不并存（见 `labels.ts` 的 `trickLeader`）。
+   *
+   * 为什么标：第二家出完之后，第三家可能要想十几秒；那段时间桌面上摆着两簇牌，
+   * 牌手得自己在大脑里比大小（跳过级牌、认顺子、看是不是杀牌）。
+   */
+  const leadingSeat = $derived(showingCurrent ? trickLeader(plays, trump) : null);
 
   /** 两翼是谁：左＝上家、右＝下家（与顶行两张座位卡同源，见 `role.ts` 的 `seatSidesOf`） */
   const sides = $derived(seatSidesOf(seat));
@@ -80,6 +89,9 @@
      上一墩的金色徽标只报「这 N 分归庄方还是闲方」（`trickSideBadge`）——
      赢家是谁由牌堆上方那行玩家名说，徽标再重复一遍名字只是把字号浪费在已知信息上。
 
+     当前墩上那份「谁现在最大」用的是**同一个位置**（那行玩家名）：名字转金、其余几簇淡一档。
+     它不新加徽标、不挪牌 —— 第二家出完之后第三家往往要想十几秒，这十几秒里桌面得自己说话。
+
      `inset-0`：**整格归牌**。早先这里留 `top-11` 让开内容槽顶部那条阶段状态条，
      而状态条已经搬到毡面顶端那条常驻**信息须**上（ADR-0020 修订），于是这一让位不再需要 ——
      牌区因此拿回 44px（手机短屏上就是 5 张顺子那一墩拿得回的余量）。 -->
@@ -98,6 +110,8 @@
         {trump}
         caption={whoLabel(names, mySeat, play.seat)}
         badge={winnerSeat === play.seat ? trickSideBadge(declarerSeat, play.seat, trickPoints) : null}
+        leading={leadingSeat === play.seat}
+        trailing={leadingSeat !== null && leadingSeat !== play.seat}
       />
     </div>
   {/each}

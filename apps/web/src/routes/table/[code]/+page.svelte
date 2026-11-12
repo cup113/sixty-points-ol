@@ -152,41 +152,33 @@
   /** 顶行两张对手卡：左＝上家、右＝下家（出处只有 `role.ts` 的 `seatSidesOf`） */
   const sides = $derived(seatSidesOf(anchor));
 
-  const selectable = $derived(
-    you !== null &&
-      view !== null &&
-      deal !== null &&
-      ((deal.phase === 'play' && deal.playTurn === you.seat) ||
-        (deal.phase === 'bury' && you.isDeclarer))
-  );
-
   /**
-   * **拟选**（ADR-0021）：在座玩家在出牌阶段随时可以点牌，不必等到轮到自己。
+   * 两个「什么时候」的布尔**只从客户端读**，页面不再自己算一遍：
    *
-   * 为什么值得改：轮到别人时手牌是完全冻结的，玩家最自然的动作（「我先看看要出哪两张」）
-   * 会被无声地忽略 —— 出牌是个需要提前想的事，临到出手那一刻才开始点是现实里的常态。
+   * - `selectable` = `client.myMove`：**这一手归我动**（打牌轮到我 / 埋底轮到庄家）。
+   *   它有三个消费者 —— 动作托盘出不出现（`ActionTray`）、手牌能不能点（这里）、
+   *   必出牌要不要自动选中（`TableClient` 的 `#forced`）。三处各写一遍就会各自过期：
+   *   早先 `#forced` 只看「本墩已有领出」，于是别人领出的那十几秒里、以及我刚出完牌之后，
+   *   该跟那一门的牌一边带蓝框、一边被自动选中并上浮，而那一刻**托盘并不在** ——
+   *   选择态没有任何能作用于它的控件（实测复现，见 ADR-0030 的修订）。
+   * - `planning` = `client.planning`：**拟选的窗口**（ADR-0021）—— 本墩已有领出、而我还没出手。
+   *   蓝框（该跟哪一门）与「点得动」（`pickable`）都只在这个窗口里成立；出过手之后旧领出
+   *   不再约束我，再标就是一条过期的提示。
    *
-   * 条件与本墩已有领出 **同一个**（`deal.trick.plays.length > 0`），所以：
-   * - 领出者的那一张还没落地时，任何人在手上都没有「该跟的那一门」，标记自然为空；
-   * - 一旦有人领出，三家（在座者）都立刻看得到「该跟哪一门」的蓝框 —— 这正是要提前想的事。
-   *
-   * 合法性不在这一层判：轮到你时托盘会用引擎的 `checkPlay` 说明这组牌为什么不行（`playError`），
-   * 拟选期间不做提前校验（那会在选到一半时就开始报错）。
+   * 值得提前想的那件事没变：轮到别人时你照样能点牌（「我先看看要出哪两张」），
+   * 合法性也仍然提前判（`client.pickable` 由引擎现算，凑不出合法一手的牌点了没反应，
+   * 托盘那句 `playError` 退成兜底 —— 只剩「换了领出、旧选择还挂着」这一种情形）。
    */
-  const planning = $derived(
-    you !== null &&
-      deal !== null &&
-      deal.phase === 'play' &&
-      deal.trick !== null &&
-      deal.trick.plays.length > 0
-  );
+  const selectable = $derived(client.myMove);
+  const planning = $derived(client.planning);
 
   /**
    * 手牌蓝框标记（`data-marked`）：两个阶段各有一个「这几张现在最要紧」的集合。
    *
    * - **埋底（庄家）**：拿上来的底牌 —— `you.originalKitty` 是权威来源；
    * - **出牌（有人领出之后）**：领出那一门的全部手牌 —— 跟牌必须先跟同门，缺门时自然为空。
-   *   拟选把这一份从「正轮到我的那个人」放宽到「在座的每个人」：能提前想的正是这件事。
+   *   拟选把这一份从「正轮到我的那个人」放宽到「**本墩还欠一手的**每个在座玩家」：
+   *   能提前想的正是这件事（出过手之后窗口就关了，旧领出不再标）。
    *
    * 其余阶段、其余人（含观战者）一律空集。
    */
@@ -576,7 +568,8 @@
   <!-- 观战者没有手牌：手牌区整块消失，牌桌更大。
        `selectable` 只在「这一手归你动」时为真（托盘也在那时才出现），
        而 `planning` 让**没轮到的在座玩家**也能点牌（拟选，见 ADR-0021）——
-       HandFan 的 `selectable` 同时决定光标与点击，两者都按这个或的关系给。 -->
+       HandFan 的 `selectable` 同时决定光标与点击，两者都按这个或的关系给。
+       `pickable` 再叠一层「哪几张点得动」（ADR-0030）：出牌阶段由引擎现算，埋底阶段是 null。 -->
   {#if you !== null}
     <HandFan
       hand={you.hand}
@@ -584,6 +577,7 @@
       {candidateRanks}
       selected={client.selected}
       marked={markedKeys}
+      pickable={client.pickable}
       selectable={selectable || planning}
       onToggle={(card) => client.toggle(card)}
     />

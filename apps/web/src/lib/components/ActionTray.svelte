@@ -6,22 +6,20 @@
   const view = $derived(client.view);
   const deal = $derived(view?.deal ?? null);
   const selectedCount = $derived(client.selected.length);
-  const me = $derived(client.you);
 
   /**
    * 只有「这一手归你动」时才存在：打牌轮到你、或埋底轮到庄家。
-   * 观战者两样都不成立（`me` 为 null），不必再写一套分支。
+   * 观战者两样都不成立（`you` 为 null），不必再写一套分支。
+   *
+   * 判据**只读** `client.myMove` —— 它是「我的回合」的唯一定义，必出牌的自动选中读的是同一个
+   * 布尔（见 `TableClient`）。这里自己再算一遍，就会出现「牌已经替你选中了、托盘却不在」
+   * 那种半边状态（ADR-0030 的修订记的正是这次回归）。
    *
    * 它出现的那一刻，操作条上那句状态**一定**是 null（`ActionBar` 的 `status` 在
    * 「叫牌轮到我 / 我埋底 / 我出牌」三种情况下都返回 null）—— 所以这一格是**换内容**，
    * 不是叠内容：问号右边要么是别人在动的状态句，要么是这一套动作控件，不会同时出现两样。
    */
-  const visible = $derived(
-    deal !== null &&
-      me !== null &&
-      ((deal.phase === 'play' && deal.playTurn === me.seat) ||
-        (deal.phase === 'bury' && me.isDeclarer))
-  );
+  const visible = $derived(client.myMove);
 
   /**
    * 三个 class 常量都带 `whitespace-nowrap`：窄屏上「出 牌」「清 空」「确认埋底」被压缩时，

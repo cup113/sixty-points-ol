@@ -1,4 +1,11 @@
-import { cardKey, type BidCall, type Card, type PublicView } from '@sixty/engine';
+import {
+  cardKey,
+  forcedPlay,
+  pickableCards,
+  type BidCall,
+  type Card,
+  type PublicView
+} from '@sixty/engine';
 import type { PlayerHand, Role, StreamPayload, TableView } from '$lib/shared';
 import {
   armedAfter,
@@ -24,7 +31,12 @@ export class TableClient {
   /** 玩家独有的一份信息；观战者为 null */
   you = $state<PlayerHand | null>(null);
   table = $state<TableView | null>(null);
-  selected = $state<string[]>([]);
+  /**
+   * **玩家自己点的**那几张（`cardKey` 数组）；`null` = 还没点过，此刻用引擎算的**必出牌**
+   * （ADR-0030）。两个状态分开存是刻意的：自动选中只该在「玩家没有表态」时生效 ——
+   * 一旦他自己点了一张，那就是他的选择，不该被下一帧按必出牌覆盖掉。
+   */
+  #custom = $state<string[] | null>(null);
   busy = $state(false);
   error = $state<string | null>(null);
   connection = $state<ConnectionState>('connecting');
@@ -54,11 +66,19 @@ export class TableClient {
     this.#apply(initial);
   }
 
-  #apply(payload: StreamPayload): void {
+  /**
+   * 吃一帧负载。`resetSelection` = 这一帧让**玩家自己的选择**失去意义了（换副、补位、我刚出手，
+   * 判据在 `selection.ts`）—— 那时把 `#custom` 抹回 `null`，选中态于是落回引擎的必出牌。
+   *
+   * 清空与自动选中**写在一起**是有意的：分开两处时，「刚清掉旧牌、又该自动选中新牌」这条
+   * 先后关系就靠在两个文件里各写一遍，迟早会有一个调用方只做一半。
+   */
+  #apply(payload: StreamPayload, resetSelection = false): void {
     this.role = payload.role;
     this.view = payload.view;
     this.you = payload.you;
     this.table = payload.table;
+    if (resetSelection) this.#custom = null;
     // 收到新帧 = 这条链路又通了，重试预算归零（断网期间烧完的那五个不该带进来）
     this.#autoTries = 0;
     this.#syncAutoPass();
@@ -74,9 +94,7 @@ export class TableClient {
     source.onmessage = (event) => {
       const payload = JSON.parse(event.data) as StreamPayload;
       // 只有让选择失去意义的帧才清空：无关连接引起的广播不该刷掉正在选的牌（见 selection.ts）
-      const reset = shouldResetSelection(this.#snapshot(), payload);
-      this.#apply(payload);
-      if (reset) this.selected = [];
+      this.#apply(payload, shouldResetSelection(this.#snapshot(), payload));
       this.connection = 'live';
     };
     source.onerror = () => {
@@ -183,9 +201,90 @@ export class TableClient {
     this.#pumpAutoPass();
   }
 
+  /** 本墩领出的那几张（轮到我领出、或还没人出牌时为 null）—— 三条判据共用这一个入口 */
+  #lead = $derived.by((): readonly Card[] | null => {
+    const trick = this.view?.deal?.trick ?? null;
+    return trick !== null && trick.plays.length > 0 ? trick.plays[0]!.cards : null;
+  });
+
+  /** 我的牌是否**已经落在这一墩里**了（出过手之后，本墩的领出与我无关） */
+  #playedThisTrick = $derived.by((): boolean => {
+    const trick = this.view?.deal?.trick ?? null;
+    const me = this.you;
+    if (trick === null || me === null) return false;
+    return trick.plays.some((play) => play.seat === me.seat);
+  });
+
+  /**
+   * 这一手**归我动**（打牌轮到我 / 埋底轮到庄家）—— 「我的回合」的**唯一定义**。
+   *
+   * 动作托盘出不出现（`ActionTray`）、手牌能不能点（`+page.svelte`）、必出牌要不要自动选中
+   * （`#forced`）都读它。**三处各写一遍时它们会各自过期**：早先 `#forced` 只看
+   * 「本墩已有领出」，于是别人领出的那十几秒里、以及我自己刚出完牌之后，
+   * 该跟那一门的牌一边带蓝框（拟选，ADR-0021）、一边被自动选中并上浮 ——
+   * 而那一刻**托盘根本不在**（它只在我这一手归我动时出现），
+   * 上浮的选择态没有任何能作用于它的控件，看起来就是「系统替我出了牌」。
+   */
+  myMove = $derived.by((): boolean => {
+    const deal = this.view?.deal ?? null;
+    const me = this.you;
+    if (deal === null || me === null) return false;
+    if (deal.phase === 'play') return deal.playTurn === me.seat;
+    if (deal.phase === 'bury') return me.isDeclarer;
+    return false;
+  });
+
+  /**
+   * **拟选的窗口**（ADR-0021）：本墩已有领出、而我还**没出手**。
+   *
+   * 「该跟哪一门」（蓝框）与「哪几张凑得出合法的一手」（`pickable`）都只在这个窗口里成立 ——
+   * 我出过手之后旧领出不再约束我，再标就是一条过期的提示（同一株根因的另一半，见 `myMove`）。
+   */
+  planning = $derived.by((): boolean => {
+    const deal = this.view?.deal ?? null;
+    if (deal === null || this.you === null || deal.phase !== 'play') return false;
+    const trick = deal.trick;
+    if (trick === null || trick.plays.length === 0) return false;
+    return !this.#playedThisTrick;
+  });
+
+  /**
+   * 这一手**必出**的那几张（引擎算，`forcedPlay`，ADR-0030）；没有就是空数组。
+   *
+   * 只在**归我动的那一刻**才算：领出恒为空（出什么、出几张全由玩家定），
+   * 而拟选期间不算 —— 那时没有托盘，「已选 N 张」这句话无处可说，上浮只能被读成别的东西。
+   */
+  #forced = $derived.by((): string[] => {
+    const deal = this.view?.deal ?? null;
+    const me = this.you;
+    const lead = this.#lead;
+    if (deal === null || me === null || deal.trump === null || lead === null) return [];
+    if (deal.phase !== 'play' || !this.myMove) return [];
+    return forcedPlay(me.hand, deal.trump, lead).map(cardKey);
+  });
+
+  /** 选中态：玩家自己点的那几张，否则就是必出牌（自动选中，少点几下） */
+  get selected(): readonly string[] {
+    return this.#custom ?? this.#forced;
+  }
+
+  /**
+   * 现在**点得动**的手牌（引擎的 `pickableCards`）：点不动的牌不响应，也不上浮。
+   *
+   * 只在拟选窗口里有值（`planning`）；其余时刻是 `null` = 不设限 ——
+   * 埋底（20 张里挑 3 张）与领出（任意单张都合法）本来就没有「点了也不成」这回事。
+   */
+  pickable = $derived.by((): ReadonlySet<string> | null => {
+    const deal = this.view?.deal ?? null;
+    const me = this.you;
+    if (deal === null || me === null || deal.trump === null || !this.planning) return null;
+    return pickableCards(me.hand, deal.trump, this.#lead, this.selectedCards);
+  });
+
   selectedCards = $derived.by(() => {
     const hand = this.you?.hand ?? [];
-    return hand.filter((card) => this.selected.includes(cardKey(card)));
+    const chosen = this.selected;
+    return hand.filter((card) => chosen.includes(cardKey(card)));
   });
 
   playError = $derived.by(() => {
@@ -196,19 +295,26 @@ export class TableClient {
     if (deal.playTurn !== you.seat) return null;
     const cards = this.selectedCards;
     if (cards.length === 0) return null;
-    const lead = deal.trick && deal.trick.plays.length > 0 ? deal.trick.plays[0]!.cards : null;
-    return checkPlay({ hand: you.hand, trump: deal.trump, lead }, cards);
+    return checkPlay({ hand: you.hand, trump: deal.trump, lead: this.#lead }, cards);
   });
 
+  /**
+   * 点一张牌。**点不动的牌不响应**（不合法的那一下被拦在这里，而不是等到按出牌时再报错）。
+   *
+   * 第一次点就写进 `#custom` —— 从这一刻起选中态归玩家，必出牌不再自动接管。
+   */
   toggle(card: Card): void {
     const key = cardKey(card);
-    this.selected = this.selected.includes(key)
-      ? this.selected.filter((k) => k !== key)
-      : [...this.selected, key];
+    if (this.pickable !== null && !this.pickable.has(key)) return;
+    const current = this.selected;
+    this.#custom = current.includes(key)
+      ? current.filter((k) => k !== key)
+      : [...current, key];
   }
 
+  /** 清空 = 玩家表态「一张都不选」：落回 `[]` 而不是 `null`，否则必出牌会立刻把它填回来 */
   clearSelection(): void {
-    this.selected = [];
+    this.#custom = [];
   }
 
   /**
@@ -246,7 +352,7 @@ export class TableClient {
         if (owned) this.error = payload?.message ?? `操作失败（${response.status}）`;
         return null;
       }
-      this.selected = [];
+      this.#custom = null;
       return payload;
     } catch (cause) {
       if (owned) this.error = cause instanceof Error ? cause.message : '网络错误';

@@ -18,6 +18,10 @@
     marked = false,
     /** 金色虚线描边：引导局里「教练点名要出的这几张」（与选中的金条、底牌的蓝框都不同形） */
     hinted = false,
+    /** 现在点不动（引擎说加了它凑不出合法的一手）：光标改成禁止符号，点了抖一下 */
+    locked = false,
+    /** 刚刚被拒绝（抖 300ms 的瞬时态，由 `HandFan` 管） */
+    refused = false,
     onclick
   }: {
     card: Card;
@@ -28,6 +32,8 @@
     muted?: boolean;
     marked?: boolean;
     hinted?: boolean;
+    locked?: boolean;
+    refused?: boolean;
     onclick?: () => void;
   } = $props();
 
@@ -61,6 +67,8 @@
   data-selected={selected}
   data-marked={marked}
   data-hinted={hinted}
+  data-locked={locked}
+  data-refused={refused}
   disabled={onclick === undefined}
   aria-label={face.aria}
   onclick={() => onclick?.()}

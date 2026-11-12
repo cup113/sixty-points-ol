@@ -12,6 +12,7 @@ import {
   START_LEVEL,
   STRAINS,
   SUIT_LABEL,
+  trickWinner,
   type Bid,
   type BidCall,
   type BidOption,
@@ -23,6 +24,7 @@ import {
   type PublicView,
   type Seat,
   type Strain,
+  type TrickPlay,
   type TrumpModel
 } from '@sixty/engine';
 
@@ -351,6 +353,20 @@ export function trickSideBadge(
   points: number
 ): string {
   return `${winnerSeat === declarerSeat ? '庄' : '闲'} +${points} 分`;
+}
+
+/**
+ * 「这一墩**现在**谁最大」—— 两家出完牌之后才知道，所以 `plays.length < 2` 时返回 `null`。
+ *
+ * 为什么值得标：出牌是三个人轮流来，第二家出完之后第三家可能要想十几秒 —— 那十几秒里桌面上
+ * 摆着两簇牌，牌手得自己在脑子里比大小（还要跳过级牌、认顺子）。标出来省掉这一步。
+ *
+ * 与赢墩徽标 `trickSideBadge` **不会同时出现**：这一条只对**还没收墩**的那一墩成立，
+ * 而那枚徽标只说**已经收掉**的墩（大头都在 `TrickArea` 的 `showingCurrent` 上）。
+ */
+export function trickLeader(plays: readonly TrickPlay[], trump: TrumpModel | null): Seat | null {
+  if (trump === null || plays.length < 2) return null;
+  return trickWinner(plays, trump);
 }
 
 /**

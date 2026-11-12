@@ -2,10 +2,10 @@
   import { untrack } from 'svelte';
   import { invalidateAll, goto } from '$app/navigation';
   import { clearCredential, saveCredential, savedCredential } from '$lib/identity';
-  import { parseInvite } from '$lib/invite';
   import { copyText } from '$lib/clipboard';
   import { GITEE_ERROR_MESSAGES } from '$lib/gitee-errors';
   import GiteeMark from '$lib/components/GiteeMark.svelte';
+  import JoinTableDialog from '$lib/components/JoinTableDialog.svelte';
   import LogoutConfirm from '$lib/components/LogoutConfirm.svelte';
   import type { PageProps } from './$types';
 
@@ -14,9 +14,9 @@
   /**
    * 链接带来的邀请码：只在挂载时取一次。
    *
-   * 它是**唯一的跳转真相** —— 提示文案与 claim() 之后的跳转都读这一个值，
-   * 入座框（joinCode）只属于「加入」按钮。曾经跳转读 `data.join` 而输入框另存一份，
-   * 屏幕上宣告的目的地会随一个无关输入变化（也触发了 state_referenced_locally 警告）。
+   * 它是**唯一的跳转真相** —— 提示文案、加入弹窗的预填与 claim() 之后的跳转都读这一个值。
+   * 曾经跳转读 `data.join` 而输入框另存一份，屏幕上宣告的目的地会随一个无关输入变化
+   * （也触发了 state_referenced_locally 警告）。
    */
   const invited = untrack(() => data.join);
 
@@ -25,12 +25,15 @@
   /** 身份卡的两个 tab。默认「新建账户」：SSR 首屏渲染的就是它，无 JS 也能注册进来。 */
   let identityTab = $state<'new' | 'import'>('new');
   /**
-   * 牌桌卡的两个 tab：新建 / 加入。
-   * 从邀请链接过来的默认停在「加入已有牌桌」—— 否则 banner 让人「在下面的入座框里填」，
-   * 而那个框正躲在另一个 tab 后面。
+   * 牌桌入口只剩**两枚按钮**（新建 / 加入），于是不再有「牌桌 tab」这个状态：
+   * 新建是直接动作，加入开弹窗（`JoinTableDialog`）。
+   *
+   * 从邀请链接过来的默认**把弹窗打开**并预填那个码 —— 早先的写法是默认停在「加入」那个 tab，
+   * 因为 banner 让人「在下面的入座框里填」，而那个框正躲在另一个 tab 后面。
    */
-  let tableTab = $state<'create' | 'join'>(untrack(() => (invited !== null ? 'join' : 'create')));
-  let joinCode = $state(untrack(() => data.join ?? ''));
+  let joinOpen = $state(untrack(() => invited !== null && data.me !== null));
+  /** 加入弹窗里的那一句错误（与页面横幅分开：它要说在输入框旁边，不是页顶） */
+  let joinError = $state<string | null>(null);
   let busy = $state(false);
   let message = $state<string | null>(null);
   let renameOpen = $state(false);
@@ -60,11 +63,6 @@
   );
   /** 我在座的桌（登出弹层用）：role 由 loader 按 seats 现算 */
   const seatedTables = $derived(data.myTables.filter((table) => table.role === 'player'));
-
-  /** 输入即归一化：粘贴完整邀请链接时立刻换成 6 位邀请码，否则原样保留 */
-  function normalizeJoinInput(raw: string): string {
-    return parseInvite(raw) ?? raw;
-  }
 
   // 浏览器里若有本地凭据但服务端没认出来（换浏览器/清了 cookie），自动申领一次
   $effect(() => {
@@ -198,20 +196,18 @@
     }
   }
 
-  async function joinTable(): Promise<void> {
-    // 接受裸码，也接受直接粘贴的邀请链接
-    const code = parseInvite(joinCode);
-    if (code === null) {
-      message = '没识别出邀请码：可以直接粘贴邀请链接';
-      return;
-    }
+  /**
+   * 加入一张已有的桌。`code` 由 `JoinTableDialog` 解析给出（裸码与整条邀请链接都收），
+   * 所以这里不再有「认不出邀请码」那条分支 —— 认不出时按钮是灰的，错误说在输入框下面。
+   */
+  async function joinTable(code: string): Promise<void> {
     busy = true;
-    message = null;
+    joinError = null;
     try {
       const response = await fetch(`/api/tables/${code}/join`, { method: 'POST' });
       const payload = (await response.json().catch(() => null)) as { message?: string } | null;
       if (!response.ok) {
-        message = payload?.message ?? '加入失败';
+        joinError = payload?.message ?? '加入失败';
         return;
       }
       await goto(`/table/${code}`);
@@ -271,11 +267,12 @@
     </p>
   {/if}
 
-  <!-- 走到这里说明是被邀请链接带过来的：不管接下来是注册还是导入凭据，都先说清去向 -->
-  {#if invited !== null}
+  <!-- 走到这里说明是被邀请链接带过来的、而且**还没有身份**：先说清去向。
+       已经有身份的话这条横幅不出现 —— 那时「加入牌桌」的弹窗已经开着并预填了这个码，
+       再写一句「身份一到位就回桌」只是重复（见 `joinOpen` 的初值）。 -->
+  {#if invited !== null && data.me === null}
     <p class="rounded-xl bg-gold/15 px-3 py-2 text-xs text-gold ring-1 ring-gold/30">
-      身份一到位就会自动回到牌桌 <b class="font-mono tracking-widest">{invited}</b>（注册或导入凭据都会）。<br />
-      想换一张桌，请在下面的入座框里填另一张桌的邀请码再点「加入」。
+      身份一到位就会自动回到牌桌 <b class="font-mono tracking-widest">{invited}</b>（注册或导入凭据都会）。
     </p>
   {/if}
 
@@ -435,69 +432,21 @@
       {/if}
     </section>
 
-    <!-- 牌桌：新建 / 加入 做成同一套 tab（金色只给选中的那一个 tab） -->
+    <!-- 牌桌：**两枚按钮**，不做 tab。
+         早先是「新建 / 加入」两个 tab，每个 tab 里再放一枚金色主按钮 —— 同一屏两处强调色
+         （选中的 tab 是金的，里面的主操作也是金的），而且要为「加入」那个输入框单开一页。
+         现在：新建是直接动作（金色），加入开一个弹窗（`JoinTableDialog`，普通色）——
+         金色只剩「你要按的那一个」。 -->
     <section class={card}>
       <h2 class={cardTitle}>牌桌</h2>
 
-      <div class="mt-3 flex gap-1 rounded-xl bg-black/40 p-1" role="tablist" aria-label="牌桌">
-        <button
-          type="button"
-          role="tab"
-          id="table-tab-create"
-          aria-selected={tableTab === 'create'}
-          aria-controls="table-panel-create"
-          class={tabButton(tableTab === 'create')}
-          onclick={() => (tableTab = 'create')}
-        >
+      <div class="mt-3 grid grid-cols-2 gap-2">
+        <button type="button" class={`${primary} w-full`} disabled={busy} onclick={() => void createTable()}>
           新建牌桌
         </button>
-        <button
-          type="button"
-          role="tab"
-          id="table-tab-join"
-          aria-selected={tableTab === 'join'}
-          aria-controls="table-panel-join"
-          class={tabButton(tableTab === 'join')}
-          onclick={() => (tableTab = 'join')}
-        >
-          加入已有牌桌
+        <button type="button" class={`${ghost} w-full`} disabled={busy} onclick={() => (joinOpen = true)}>
+          加入牌桌
         </button>
-      </div>
-
-      <div
-        id="table-panel-create"
-        role="tabpanel"
-        aria-labelledby="table-tab-create"
-        class="mt-3"
-        hidden={tableTab !== 'create'}
-      >
-        <button type="button" class={`${primary} w-full`} disabled={busy} onclick={() => void createTable()}>
-          创建牌桌
-        </button>
-      </div>
-
-      <div
-        id="table-panel-join"
-        role="tabpanel"
-        aria-labelledby="table-tab-join"
-        class="mt-3"
-        hidden={tableTab !== 'join'}
-      >
-        <form
-          class="flex gap-2"
-          onsubmit={(event) => {
-            event.preventDefault();
-            void joinTable();
-          }}
-        >
-          <input
-            class={[input, 'font-mono uppercase tracking-widest']}
-            placeholder="邀请码或邀请链接"
-            value={joinCode}
-            oninput={(event) => (joinCode = normalizeJoinInput(event.currentTarget.value))}
-          />
-          <button type="submit" class={ghost} disabled={busy || joinCode.trim().length === 0}>加入</button>
-        </form>
       </div>
 
       {#if data.myTables.length > 0}
@@ -547,6 +496,20 @@
     </div>
   </div>
 </main>
+
+<!-- 加入牌桌的弹窗：挂在页面级（`fixed inset-0`），与登出确认同一套形状。
+     预填 `invited`：从邀请链接被带过来、又有身份时，打开就是那张桌的码，按一下「加入」即可 -->
+<JoinTableDialog
+  open={joinOpen}
+  initial={invited ?? ''}
+  {busy}
+  error={joinError}
+  onJoin={(code) => void joinTable(code)}
+  onClose={() => {
+    joinOpen = false;
+    joinError = null;
+  }}
+/>
 
 <!-- 登出确认：挂在页面级（不是身份卡里的一块）—— 它是 `fixed inset-0` 的弹窗，
      与 LeaveConfirm / BotRemoveConfirm 同一套形状，盖住整页而不是把内容推下去 -->

@@ -13,6 +13,14 @@ data/
 !.env.example
 vite.config.ts.timestamp-*
 .deploy-check/
+# 工具副产物（不是项目内容，`git add -A` 不该把它们收进来）：
+# `.apk-check/` 是打包装机自检的落点（里面那个 apk 有 3 MB 级）、`.playwright-mcp/` 是浏览器
+# 工具的日志与页面快照、`.hindsight/` 是回顾笔记。目录都放仓库根，且**永远不当作源码**。
+.apk-check/
+.playwright-mcp/
+.hindsight/
+# Android 安装包本体：与下面的 keystore 同一条理由 —— 二进制一旦进了历史就再也去不掉
+*.apk
 # 引导局候选：guide:extract 的中间产物（挑中的挪成 docs/guide/<slug>.json），不进仓库
 docs/guide/candidates/
 # Android 安装包（apps/mobile）：签名材料绝不进仓库。
